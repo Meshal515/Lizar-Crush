@@ -17196,7 +17196,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const fxl = editorMode ? null : prismSmokeFor(o);
     const dtl = fxl ? (fxl.dt || 0) : 0;
     if(fxl && reversal && (fxl.revAt == null || time - fxl.revAt > .2)) fxl.revAt = time;
-    const revAge = fxl && fxl.revAt != null ? time - fxl.revAt : 9;
+    const revAge = fxl && fxl.revAt != null ? Math.max(0, time - fxl.revAt) : 9;
     const dying = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
     let passK = 0, passT = 0;
     if(fxl){
@@ -19635,6 +19635,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function prismFxBeginFrame(o){
     const st = prismSmokeFor(o);
     const dt = time - st.clock;
+    // The clock went back (restart / replay): forget every remembered moment, or ages turn negative.
+    if(dt < 0) for(const k in st) if(k.endsWith("At")) st[k] = null;
     st.clock = time;
     st.dt = dt > 0 ? Math.min(dt, .1) : 0;
     return st.dt;
