@@ -18722,15 +18722,35 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
     }
 
-    // Prism core body: dark prism with a hot molten eye.
-    ctx.save();
-    ctx.translate(p.x, p.y);
+    // Prism core body: dark prism with a hot molten eye. Always solid and visible.
     const pulse = .5 + .5*Math.sin(time*9 + c.phase);
     const live = tl.beams.some(b => b.active);
-    // Recoil kick for a moment after each beam fires.
-    let kick = 0;
-    for(const b of tl.beams){const since = tl.t - b.start; if(since >= 0 && since < .16) kick = Math.max(kick, 1 - since/.16);}
-    const r = (17 + (live ? 3*pulse : 0) + kick*4 - charging*1.5)*s;
+    // Recoil: every beam shoves the core back against its firing direction, then it settles.
+    let kick = 0, recoilX = 0, recoilY = 0;
+    for(const b of tl.beams){
+      const since = tl.t - b.start;
+      if(since >= 0 && since < .32){
+        const k = Math.pow(1 - since/.32, 2);
+        kick = Math.max(kick, k);
+        recoilX -= Math.cos(b.angle)*10*s*k;
+        recoilY -= Math.sin(b.angle)*10*s*k;
+      }
+    }
+    // Strain shake while beams are pouring out of it.
+    const strain = editorMode ? 0 : (live ? .55 : 0) + kick*1.4;
+    const shakeX = (prismHash(crackleFrame*3.1 + c.phase) - .5)*3.2*s*strain;
+    const shakeY = (prismHash(crackleFrame*5.7 + c.phase + 9) - .5)*3.2*s*strain;
+    ctx.save();
+    ctx.translate(p.x + recoilX + shakeX, p.y + recoilY + shakeY);
+    const r = (17 + (live ? 2*pulse : 0) + kick*3 - charging*1.5)*s;
+    // Heavy mount plate: does not spin, so the trap always reads as a solid object.
+    ctx.fillStyle = "rgba(0,0,0,.16)";
+    roundRect(ctx, -r*1.05 + 2*s, -r*1.05 + 3*s, r*2.1, r*2.1, r*.42); ctx.fill();
+    ctx.fillStyle = main;
+    roundRect(ctx, -r*1.05, -r*1.05, r*2.1, r*2.1, r*.42); ctx.fill();
+    ctx.strokeStyle = live || kick > 0 ? hot.orange : rgbaHex(accent, .35);
+    ctx.lineWidth = Math.max(1.2, 1.8*s);
+    roundRect(ctx, -r*.86, -r*.86, r*1.72, r*1.72, r*.32); ctx.stroke();
     // Charging facets close in around the core before firing.
     if(!editorMode && (charging > 0 || kick > 0)){
       const k = Math.max(charging, kick);
@@ -18746,16 +18766,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
     }
     ctx.rotate((time*.45 + c.phase*.05) % (Math.PI*2));
-    ctx.globalAlpha = live ? .12 + .08*pulse : .06;
-    ctx.fillStyle = hot.orange;
-    ctx.beginPath();ctx.arc(0,0,r*1.45,0,Math.PI*2);ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = live ? hot.dark : trapIdle();
+    ctx.fillStyle = hot.dark;
     ctx.beginPath();
-    ctx.moveTo(0,-r*1.1); ctx.lineTo(r*1.05,0); ctx.lineTo(0,r*1.1); ctx.lineTo(-r*1.05,0); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = live ? hot.orange : accent;
-    ctx.lineWidth = Math.max(1.6,2.6*s);
-    ctx.globalAlpha = live ? .96 : .58;
+    ctx.moveTo(0,-r*.95); ctx.lineTo(r*.92,0); ctx.lineTo(0,r*.95); ctx.lineTo(-r*.92,0); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = hot.orange;
+    ctx.lineWidth = Math.max(1.6,2.4*s);
+    ctx.globalAlpha = live || kick > 0 ? 1 : .85;
     ctx.stroke();
     ctx.globalAlpha = 1;
     const coreGrad = ctx.createRadialGradient(0,0,Math.max(1,r*.08),0,0,Math.max(2,r*.62));
