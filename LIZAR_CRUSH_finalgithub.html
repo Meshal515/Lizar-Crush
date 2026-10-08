@@ -17396,8 +17396,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
     // Blade.
     ctx.translate(head.x, head.y);
-    ctx.fillStyle = "rgba(0,0,0,.14)";
-    ctx.beginPath();ctx.arc(1.6*s, 2.6*s, sawR*1.12, 0, Math.PI*2);ctx.fill();
     ctx.rotate(time*7.2*dir + saw.ang);
     const teeth = 12, step = Math.PI*2/teeth;
     ctx.fillStyle = main;
@@ -18530,6 +18528,21 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // charred rim, a white-hot core and crackling plasma. Visual only.
     const prismHash = n => {const x = Math.sin(n*127.1 + 311.7)*43758.5453; return x - Math.floor(x);};
     const crackleFrame = Math.floor(time*26);
+    const beamVisualRadius = Math.max(2, c.beamThickness*.42*s*1.2);
+    // Beams are drawn from the barrel muzzle, not from the turret centre (world units).
+    const MUZZLE_WORLD = 19*2.5;
+    const trimFromMuzzle = (segs) => {
+      let left = MUZZLE_WORLD;
+      const out = [];
+      for(const seg of segs){
+        if(left <= 0){out.push(seg); continue;}
+        if(seg.len <= left){left -= seg.len; continue;}
+        const k = left/seg.len;
+        out.push({...seg, a:{x:seg.a.x + (seg.b.x - seg.a.x)*k, y:seg.a.y + (seg.b.y - seg.a.y)*k}, len:seg.len - left});
+        left = 0;
+      }
+      return out;
+    };
     if(!editorMode) prismFxBeginFrame(o);
     const drawThermalBeam = (a, b, width, alpha, seed=0) => {
       if(alpha <= .01) return;
@@ -18544,7 +18557,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const nx = -dy/len, ny = dx/len;
       const w = Math.max(2, width*pa.s);
       const wob = 1 + .07*Math.sin(time*43 + seed*2.3) + .05*Math.sin(time*71 + seed);
-      const hw = w*.78*wob;
+      // Visible core matches the real hit radius (beamThickness*.42), a touch wider for the glow edge.
+      const hw = Math.max(2, width*.42*pa.s*1.2)*wob;
       ctx.save();
       ctx.lineCap = "butt";
       // Tight outer heat.
@@ -18596,7 +18610,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // Travelling tip: a jagged plasma drill pointed along the beam, never a round blob.
     const drawThermalHead = (pt, angle, r, alpha, seed=0) => {
       const hp = worldToScreen(pt.x, pt.y);
-      const rr = Math.max(7, r*1.45*hp.s);
+      const rr = Math.max(6, r*1.05*hp.s);
       ctx.save();
       ctx.translate(hp.x, hp.y);
       ctx.rotate(angle);
@@ -18763,7 +18777,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
     // Active sequential thermal traveling beams.
     for(const b of tl.beams){
-      const visibleSegs = prismPulseSegmentsToLength(b.path, b.visible);
+      const visibleSegs = trimFromMuzzle(prismPulseSegmentsToLength(b.path, b.visible));
       if(!visibleSegs.length) continue;
       const alpha = editorMode ? Math.max(.20, b.alpha*.58) : b.alpha;
       // Fire burst: the beam slams out fat and settles; on shutdown it thins as it retracts.
@@ -18854,6 +18868,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const shakeY = (prismHash(crackleFrame*5.7 + c.phase + 9) - .5)*3.4*s*strain;
     const cx0 = p.x + recoilX + shakeX, cy0 = p.y + recoilY + shakeY;
     const R = 19*s;
+    const MUZ = R*2.5;
     const octa = (rad) => {
       ctx.beginPath();
       for(let i=0;i<8;i++){
@@ -18866,53 +18881,70 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
     ctx.save();
     ctx.translate(cx0, cy0);
-    // Ground shadow.
-    ctx.save();
-    ctx.translate(2*s, 4*s);
-    ctx.fillStyle = "rgba(0,0,0,.18)";
-    octa(R*1.08);ctx.fill();
-    ctx.restore();
-
-    // Barrels under the body.
-    for(const b of tl.beams){
-      const heat = editorMode ? 0 : pointHeat(b, 0)[0];
-      const back = (barrelKick[b.index] || 0)*R*.38;
-      const x0 = R*.6 - back, x1 = R*1.95 - back, bw = R*.36;
-      ctx.save();
-      ctx.rotate(b.angle);
-      ctx.fillStyle = main;
-      roundRect(ctx, x0, -bw/2, x1 - x0, bw, bw*.22);ctx.fill();
-      // Cooling fins.
-      ctx.fillStyle = rgbaHex(accent, .22);
-      for(let f=0;f<3;f++) ctx.fillRect(x0 + (x1 - x0)*(.18 + f*.16), -bw/2, 1.4*s, bw);
-      // Barrel glows from the muzzle back as it heats.
-      if(heat > .02){
-        const hg = ctx.createLinearGradient(x0, 0, x1, 0);
-        hg.addColorStop(0, "rgba(255,47,23,0)");
-        hg.addColorStop(.55, `rgba(255,47,23,${.45*heat})`);
-        hg.addColorStop(1, `rgba(255,170,40,${.95*heat})`);
-        ctx.fillStyle = hg;
-        roundRect(ctx, x0, -bw/2, x1 - x0, bw, bw*.22);ctx.fill();
-      }
-      // Muzzle collar and bore.
-      ctx.fillStyle = heat > .25 ? hot.yellow : rgbaHex(accent, .55);
-      ctx.fillRect(x1 - bw*.32, -bw*.56, bw*.2, bw*1.12);
-      ctx.fillStyle = heat > .05 ? hot.white : "rgba(0,0,0,.55)";
-      ctx.beginPath();ctx.arc(x1, 0, bw*.2, 0, Math.PI*2);ctx.fill();
-      ctx.restore();
-    }
-
-    // Armoured body.
+    // Fixed armoured base (no drop shadow: the game has none).
     ctx.fillStyle = main;
-    octa(R);ctx.fill();
-    ctx.strokeStyle = rgbaHex(accent, .28);
-    ctx.lineWidth = Math.max(1, 1.4*s);
-    octa(R*.78);ctx.stroke();
-    ctx.fillStyle = rgbaHex(accent, .55);
+    octa(R*.92);ctx.fill();
+    ctx.fillStyle = rgbaHex(accent, .5);
     for(let i=0;i<4;i++){
       const a = Math.PI/4 + i*Math.PI/2;
-      ctx.beginPath();ctx.arc(Math.cos(a)*R*.66, Math.sin(a)*R*.66, Math.max(1, 1.6*s), 0, Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(Math.cos(a)*R*.7, Math.sin(a)*R*.7, Math.max(1, 1.5*s), 0, Math.PI*2);ctx.fill();
     }
+    // Turret head: one rigid piece that faces the middle of the fan, so the barrels always sit
+    // in order on it whatever angle the trap is set to.
+    let sumC = 0, sumS = 0;
+    for(const b of tl.beams){sumC += Math.cos(b.angle); sumS += Math.sin(b.angle);}
+    const headAng = Math.atan2(sumS, sumC);
+    let fan = 0;
+    for(const b of tl.beams){const d = Math.atan2(Math.sin(b.angle - headAng), Math.cos(b.angle - headAng)); fan = Math.max(fan, Math.abs(d));}
+    const bw = Math.max(R*.3, beamVisualRadius*2*1.08);
+    // Emitter head: one rigid slice-of-a-ring block facing the middle of the fan. Its front face
+    // carries one muzzle per beam at that beam's exact angle, so it stays tidy for any spread and
+    // any rotation set in the Inspector. Each muzzle recoils on its own when its beam fires.
+    const inner = R*.55;
+    const halfSpan = fan + Math.asin(Math.min(.95, (bw*.62)/MUZ));
+    ctx.save();
+    ctx.rotate(headAng);
+    ctx.fillStyle = main;
+    ctx.beginPath();
+    ctx.arc(0, 0, MUZ - R*.18, -halfSpan, halfSpan);
+    ctx.arc(0, 0, inner, halfSpan, -halfSpan, true);
+    ctx.closePath();ctx.fill();
+    for(const b of tl.beams){
+      const rel = Math.atan2(Math.sin(b.angle - headAng), Math.cos(b.angle - headAng));
+      const heat = editorMode ? 0 : pointHeat(b, 0)[0];
+      const back = (barrelKick[b.index] || 0)*R*.32;
+      ctx.save();
+      ctx.rotate(rel);
+      // Muzzle sleeve sliding out of the head.
+      ctx.fillStyle = main;
+      roundRect(ctx, MUZ - R*.62 - back, -bw/2, R*.62, bw, bw*.25);ctx.fill();
+      if(heat > .02){
+        const hg = ctx.createLinearGradient(MUZ - R*1.1 - back, 0, MUZ - back, 0);
+        hg.addColorStop(0, "rgba(255,47,23,0)");
+        hg.addColorStop(.6, `rgba(255,47,23,${.5*heat})`);
+        hg.addColorStop(1, `rgba(255,170,40,${.95*heat})`);
+        ctx.fillStyle = hg;
+        roundRect(ctx, MUZ - R*1.1 - back, -bw/2, R*1.1, bw, bw*.25);ctx.fill();
+      }
+      ctx.fillStyle = heat > .25 ? hot.yellow : rgbaHex(accent, .55);
+      ctx.fillRect(MUZ - back - bw*.34, -bw*.56, bw*.2, bw*1.12);
+      ctx.fillStyle = heat > .05 ? hot.white : "rgba(0,0,0,.6)";
+      ctx.beginPath();ctx.ellipse(MUZ - back, 0, bw*.12, bw*.36, 0, 0, Math.PI*2);ctx.fill();
+      ctx.restore();
+    }
+    // Seams between muzzles and a rim line, so each one reads as its own barrel.
+    ctx.strokeStyle = rgbaHex(accent, .3);
+    ctx.lineWidth = Math.max(1, 1.2*s);
+    const sorted = tl.beams.map(b => Math.atan2(Math.sin(b.angle - headAng), Math.cos(b.angle - headAng))).sort((p, q) => p - q);
+    ctx.beginPath();
+    for(let i=1;i<sorted.length;i++){
+      const m = (sorted[i - 1] + sorted[i])/2;
+      ctx.moveTo(Math.cos(m)*(inner + R*.2), Math.sin(m)*(inner + R*.2));
+      ctx.lineTo(Math.cos(m)*(MUZ - R*.3), Math.sin(m)*(MUZ - R*.3));
+    }
+    ctx.stroke();
+    ctx.beginPath();ctx.arc(0, 0, inner + R*.18, -halfSpan + .08, halfSpan - .08);ctx.stroke();
+    ctx.restore();
 
     // Lens: dull ember when idle, white-hot when charging or firing.
     const lensK = editorMode ? .35 : Math.max(charging, live ? .72 + .28*pulse : 0, kick);
@@ -18950,7 +18982,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const back = (barrelKick[b.index] || 0)*R*.38;
       ctx.save();
       ctx.rotate(b.angle);
-      ctx.translate(R*2 - back, 0);
+      ctx.translate(MUZ - back, 0);
       const spikes = 9;
       const layer = (scale, color) => {
         ctx.beginPath();
