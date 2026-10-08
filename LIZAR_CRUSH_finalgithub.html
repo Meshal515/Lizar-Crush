@@ -17220,6 +17220,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const ph = (time + trapHash(seed + 1.7)*period) % period;
     return ph < .14 ? Math.sin(ph/.14*Math.PI) : 0;
   }
+  function creatureEyeMix(a, b, k){
+    const d = {open:1, squint:0, slant:0, pupil:.6, lookX:0, lookY:0, red:0, glow:0, pain:0};
+    const out = {glowRed:k < .5 ? !!a.glowRed : !!b.glowRed};
+    for(const key in d){const va = a[key] ?? d[key], vb = b[key] ?? d[key]; out[key] = va + (vb - va)*k;}
+    return out;
+  }
   function drawCreatureEye(g, x, y, r, e){
     const open = clamp01(e.open ?? 1), squint = clamp01(e.squint || 0);
     const slant = Math.max(-1, Math.min(1, e.slant || 0));
@@ -17324,25 +17330,37 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const main = trapMain();
     const seed = st.seed + (shooter ? 0 : 50);
     const live = st.active ? 1 : 0;
-    let open, eye, shakeAmt, red = 0, kick = 0, gulp = 0, mouthHeat, lick = 0, tongueHeat = 0;
+    let open, eye, shakeAmt, red = 0, kick = 0, gulp = 0, mouthHeat, tongueHeat = 0, teethHeat = 0;
     const off = st.active ? -1 : st.offFor;                 // seconds since the beam stopped
     const win = (a, b) => off >= a && off < b ? (off - a)/(b - a) : -1;
+    const smooth = (k) => k <= 0 ? 0 : k >= 1 ? 1 : k*k*(3 - 2*k);
     if(shooter){
-      // Ending: the jaws snap shut (with a small bounce), then it licks its lips, satisfied.
-      const shut = win(0, .22), lk = win(.3, .85);
+      // Ending: the jaws snap shut with a small bounce; its teeth stay glowing hot and cool down,
+      // steam hisses from the nostrils, and it gives one slow, satisfied blink.
+      const shut = win(0, .22);
       const closing = shut >= 0 ? .9*Math.pow(1 - shut, 2) + Math.sin(shut*Math.PI)*.06 : 0;
-      lick = lk >= 0 ? Math.sin(lk*Math.PI) : 0;
-      open = st.active ? .9 + .08*Math.sin(time*38) : Math.max(st.charge*.38, closing, lick*.16);
+      open = st.active ? .9 + .08*Math.sin(time*38) : Math.max(st.charge*.38, closing);
       tongueHeat = Math.max(st.charge, live, st.heat*.5);
+      teethHeat = Math.max(live*.85, st.charge*.55, st.heat*.95);
       kick = (-st.fireKick*5 + st.offKick*2)*s;
       shakeAmt = st.charge*1.4 + live*.5;
       mouthHeat = Math.max(live, st.charge, st.heat*.6);
       const focus = Math.max(st.charge, live);
-      eye = {open:(.66 + .16*focus)*(1 - creatureBlink(seed)*(1 - focus)), slant:.25 + .6*focus, pupil:.64 - .36*focus, lookX:.95, glow:Math.max(focus*.9, st.heat*.3)};
-      if(lick > 0) eye = {open:.5, squint:.45*lick, slant:.1, pupil:.6, lookX:.6, lookY:-.2, glow:st.heat*.3};
+      const relax = st.active ? 0 : smooth(win(0, .5) >= 0 ? win(0, .5) : (off >= .5 ? 1 : 0)) * (1 - st.charge);
+      const slow = win(.4, 1.0);                              // the satisfied blink
+      const slowBlink = slow >= 0 ? Math.sin(slow*Math.PI) : 0;
+      eye = {
+        open:((.66 + .16*focus)*(1 - creatureBlink(seed)*(1 - focus)))*(1 - .85*slowBlink),
+        squint:.25*relax*(1 - st.charge),
+        slant:(.25 + .6*focus)*(1 - .6*relax),
+        pupil:.64 - .36*focus,
+        lookX:.95 - .35*relax, lookY:-.15*relax,
+        glow:Math.max(focus*.9, st.heat*.35)
+      };
     } else {
       red = st.active ? Math.min(1, .45 + st.onFor*1.6) : st.heat*.85;
-      // Ending: swallows the last of the beam (.16s), snaps shut with a big gulp, then coughs smoke.
+      // Ending: swallows the last of the beam (.16s), snaps shut with a big gulp, coughs smoke,
+      // goes dizzy and then slowly comes back to itself. Every eye change is blended.
       const tail = win(0, .16), shut = win(.16, .3), gl = win(.16, .55), cough = win(.58, .8);
       const closing = tail >= 0 ? .8 : (shut >= 0 ? .8*Math.pow(1 - shut, 2) : 0);
       const coughOpen = cough >= 0 ? .42*Math.sin(cough*Math.PI) : 0;
@@ -17351,14 +17369,21 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       tongueHeat = st.active ? 1 : st.heat*.7;
       shakeAmt = st.charge*1.1 + live*1.7 + st.heat*.35;
       mouthHeat = st.active ? 1 : st.heat*.5;
+      const calm = {open:(.85 - .2*st.heat)*(1 - creatureBlink(seed)), slant:-.15 - .25*st.heat, squint:.25*st.heat, pupil:.55, lookX:.75, red:red*.7, pain:st.heat*.6, glow:st.heat*.5, glowRed:true};
       if(st.active) eye = {open:.74 + .08*Math.sin(time*19), squint:.42, slant:-.3, pupil:.3, lookX:.25, red, pain:1, glow:.95, glowRed:true};
-      else if(st.charge > 0) eye = {open:1, slant:-.6*st.charge, pupil:.6 - .38*st.charge, lookX:.95, lookY:-.1*st.charge};
-      else if(off >= 0 && off < .55) eye = {open:1, slant:-.2, pupil:.22, lookX:.5, lookY:-.3, red:red*.8, glow:.6, glowRed:true};   // gulp: wide-eyed
-      else if(off >= .55 && off < 1.5){                                                                                        // dizzy, cooling
-        const k = 1 - (off - .55)/.95;
-        eye = {open:.62, squint:.3, slant:-.35, pupil:.5, lookX:Math.cos(time*11)*.55*k, lookY:Math.sin(time*11)*.45*k, red:red*.7, pain:.7*k, glow:st.heat*.5, glowRed:true};
+      else if(st.charge > 0) eye = creatureEyeMix(calm, {open:1, slant:-.6, pupil:.22, lookX:.95, lookY:-.1, red:red*.5}, st.charge);
+      else if(off >= 0 && off < 1.9){
+        const wide = {open:1, slant:-.2, pupil:.22, lookX:.5, lookY:-.3, red:red*.8, glow:.6, glowRed:true};
+        const spin = clamp01(1 - (off - .62)/.75);           // dizzy swirl dies away
+        const dizzy = {open:.62, squint:.3, slant:-.35, pupil:.5, lookX:Math.cos(time*11)*.55*spin, lookY:Math.sin(time*11)*.45*spin, red:red*.7, pain:.7*spin, glow:st.heat*.5, glowRed:true};
+        const painNow = {open:.74, squint:.42, slant:-.3, pupil:.3, lookX:.25, red, pain:1, glow:.95, glowRed:true};
+        if(off < .08) eye = creatureEyeMix(painNow, wide, off/.08);
+        else if(off < .5) eye = wide;
+        else if(off < .66) eye = creatureEyeMix(wide, dizzy, smooth((off - .5)/.16));
+        else if(off < 1.3) eye = dizzy;
+        else eye = creatureEyeMix(dizzy, calm, smooth((off - 1.3)/.6));
       }
-      else eye = {open:(.85 - .2*st.heat)*(1 - creatureBlink(seed)), slant:-.15 - .25*st.heat, squint:.25*st.heat, pupil:.55, lookX:.75, red:red*.7, pain:st.heat*.6, glow:st.heat*.5, glowRed:true};
+      else eye = calm;
     }
     // Skin colour: the shop trap colour, scorched toward red on the receiver.
     const mc = hexToRgbObj(safeHex(main, "#111111"));
@@ -17390,8 +17415,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.closePath();
     };
     const teeth = (up) => {
-      ctx.fillStyle = "#f1eadb";
-      ctx.strokeStyle = "rgba(0,0,0,.5)";
+      const th = teethHeat;
+      ctx.fillStyle = th > .02 ? `rgb(${Math.round(241 + 14*th)},${Math.round(234 - 110*th)},${Math.round(219 - 185*th)})` : "#f1eadb";
+      ctx.strokeStyle = th > .3 ? `rgba(120,20,0,${.5})` : "rgba(0,0,0,.5)";
       ctx.lineWidth = Math.max(.5, .55*s);
       const xs = up ? [-5, 0, 5, 10, 15.5] : [-2, 3, 8, 13];
       xs.forEach((x0, i) => {
@@ -17489,6 +17515,28 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.fillStyle = g;
         ctx.fillRect(-30*s, -30*s, 60*s, 60*s);
       }
+      // The beam itself, coming up out of the throat (shooter) or pouring down it (receiver).
+      const ib = st.inBeam ? st.inBeam[shooter ? 0 : 1] : 0;
+      if(ib > .5){
+        const HP = TRAP_SPARK_PALETTES.hot;
+        const x0 = hingeX + 1*s, x1 = 32*s;
+        ctx.lineCap = "butt";
+        ctx.strokeStyle = main; ctx.lineWidth = ib;
+        ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+        ctx.strokeStyle = HP[2]; ctx.lineWidth = Math.max(1, ib*.16);
+        ctx.beginPath(); ctx.moveTo(x0, -ib*.42); ctx.lineTo(x1, -ib*.42); ctx.moveTo(x0, ib*.42); ctx.lineTo(x1, ib*.42); ctx.stroke();
+        ctx.strokeStyle = HP[1]; ctx.lineWidth = Math.max(1, ib*.34);
+        ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+        ctx.strokeStyle = HP[0]; ctx.lineWidth = Math.max(1, ib*.16);
+        ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+        // white-hot where it meets the throat
+        const tg = ctx.createRadialGradient(x0 + 2*s, 0, 0, x0 + 2*s, 0, 7*s);
+        tg.addColorStop(0, "rgba(255,255,240,.95)");
+        tg.addColorStop(.5, shooter ? "rgba(255,190,70,.6)" : "rgba(255,90,60,.6)");
+        tg.addColorStop(1, "rgba(255,90,20,0)");
+        ctx.fillStyle = tg;
+        ctx.fillRect(x0 - 6*s, -8*s, 16*s, 16*s);
+      }
       ctx.restore();
     }
     // Lower jaw with the tongue.
@@ -17535,41 +17583,24 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.beginPath(); ctx.ellipse(17*s, -7*s, 1.5*s, .8*s, -.45, 0, Math.PI*2); ctx.fill();   // nostril
     drawCreatureEye(ctx, -3*s, -11*s, 6.8*s, eye);
     ctx.restore();
-    if(lick > .02){
-      // The tongue slides out of the corner of the mouth and licks up over the snout.
-      const ex = (19 + lick*8)*s, ey = (-2 - lick*7)*s + Math.sin(time*20)*.8*s*lick;
-      ctx.lineCap = "round";
-      ctx.strokeStyle = "#7c2233";
-      ctx.lineWidth = 4.4*s;
-      ctx.beginPath(); ctx.moveTo(15*s, .5*s); ctx.quadraticCurveTo((24 + lick*5)*s, 2*s, ex, ey); ctx.stroke();
-      ctx.strokeStyle = "#e0687c";
-      ctx.lineWidth = 3.4*s;
-      ctx.beginPath(); ctx.moveTo(15*s, .5*s); ctx.quadraticCurveTo((24 + lick*5)*s, 2*s, ex, ey); ctx.stroke();
-      ctx.strokeStyle = "rgba(255,235,240,.6)";
-      ctx.lineWidth = .8*s;
-      ctx.beginPath(); ctx.moveTo(18*s, 0); ctx.quadraticCurveTo((23 + lick*5)*s, .6*s, ex - .8*s, ey + 1*s); ctx.stroke();
-    }
-    // Shooter: fire sputtering from the mouth while it charges, roaring while it fires.
-    const roar = shooter ? (st.active ? 1 : Math.max(st.charge*.7, st.heat*.3)) : 0;
-    if(roar > .03){
-      const n = Math.round(5 + 10*roar);
-      ctx.lineCap = "round";
-      const cols = ["#fff1a8", "#ffb12a", "#ff5a12", "#d91f00"];
-      for(let i=0;i<n;i++){
-        const ph = (time*(4 + 5*roar) + i*.37 + trapHash(i*3.1)) % 1;
-        const spread = (trapHash(i*7.7 + Math.floor(time*2)) - .5)*1.4;
-        const len = (5 + ph*16 + roar*7)*s;
-        const ex = 21*s + Math.cos(spread)*len, ey = Math.sin(spread)*len + ph*ph*7*s;
-        const bx = 21*s + Math.cos(spread)*len*.35, by = Math.sin(spread)*len*.35;
-        ctx.globalAlpha = Math.min(1, (1.15 - ph)*(.6 + .4*roar));
-        ctx.strokeStyle = cols[i % 4];
-        ctx.shadowColor = "#ff5a12";
-        ctx.shadowBlur = (3 + 4*roar)*s;
-        ctx.lineWidth = Math.max(1, (1.7 - ph)*s);
-        ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(ex, ey); ctx.stroke();
+    // Shooter's muzzle flare at the lips: crisp spikes fanning forward, white-hot at the root.
+    // No blur, no halo. A faint sputter while charging, a full flare while firing.
+    if(shooter && (st.active || st.charge > .05)){
+      const P = st.active ? 1 : st.charge*.5;
+      const fx0 = 19*s, tk = Math.floor(time*40);
+      for(let i=0;i<7;i++){
+        const a = (i - 3)*.16 + (trapHash(tk*1.3 + i*7.1) - .5)*.5;
+        const len = (st.active ? 7 + trapHash(tk + i*3.3)*13 + st.fireKick*10 : 2 + trapHash(tk + i)*6)*s*(i === 3 ? 1.3 : 1);
+        const w0 = (1.2 + trapHash(i*5.5 + tk)*1.2)*s*Math.max(.5, P);
+        const ex = fx0 + Math.cos(a)*len, ey = Math.sin(a)*len;
+        const nx = -Math.sin(a)*w0, ny = Math.cos(a)*w0;
+        const g = ctx.createLinearGradient(fx0, 0, ex, ey);
+        g.addColorStop(0, `rgba(255,255,236,${.95*P})`);
+        g.addColorStop(.35, `rgba(255,196,80,${.85*P})`);
+        g.addColorStop(1, "rgba(255,90,10,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.moveTo(fx0 + nx, ny); ctx.lineTo(ex, ey); ctx.lineTo(fx0 - nx, -ny); ctx.closePath(); ctx.fill();
       }
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
     }
     ctx.restore();
   }
@@ -17608,6 +17639,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const wob = 1 + .06*Math.sin(time*47 + seed);
       const bh = core*(1 + fireKick*.6)*wob;
       beamBody(fromX, front, bh);
+      est.inBeam = [bh, enter >= 1 ? bh : 0];
     }
     function beamBody(fromX, front, bh){
       ctx.strokeStyle = main;
@@ -17671,6 +17703,18 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const k = offFor/.16;
         const tail = fromX + (toX - fromX)*k*k;
         beamBody(tail, toX, core*(1 - .55*k));
+        est.inBeam = [0, core*(1 - .55*k)];
+      }
+      if(!editorMode && !disabled && offFor >= .2 && offFor < 1.1){
+        // steam hissing from the shooter's nostrils while its teeth cool
+        const nx = (dir > 0 ? bx : bx + bw) + dir*20, ny = o.y - 10;
+        prismSmokeEmitRate(o, nx, ny, 0, 9*(1 - (offFor - .2)/.9)*(heavy ? 1 : .5), .35);
+      }
+      if(!editorMode && !disabled && charge > .05){
+        const st2 = prismSmokeFor(o);
+        const want = 12*charge*st2.dt;
+        const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+        for(let i=0;i<n;i++) trapSparkBurst(o, (dir > 0 ? bx : bx + bw) + dir*24, o.y, 1, "hot", .4, dir*.6, -.5);
       }
       if(!editorMode && !disabled && offFor >= .58 && offFor < .72){
         // the receiver coughs out a puff of smoke
