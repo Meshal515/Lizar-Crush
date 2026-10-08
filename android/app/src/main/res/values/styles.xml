@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lizar_bg">#F3F3EE</color>
+    <color name="lizar_ink">#111111</color>
+    <style name="Theme.LizarCrush" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/lizar_bg</item>
+        <item name="android:statusBarColor">@color/lizar_bg</item>
+        <item name="android:navigationBarColor">@color/lizar_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The cube with its single eye, centred in the 72dp safe zone of a 108dp adaptive icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#111111"
+        android:pathData="M42,32 L66,32 Q76,32 76,42 L76,66 Q76,76 66,76 L42,76 Q32,76 32,66 L32,42 Q32,32 42,32 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,43 C58.4,43 60,47.5 60,53 C60,58.5 58.4,63 54,63 C49.6,63 48,58.5 48,53 C48,47.5 49.6,43 54,43 Z" />
+    <path
+        android:fillColor="#111111"
+        android:pathData="M54,50 C55.4,50 56,51.4 56,53 C56,54.6 55.4,56 54,56 C52.6,56 52,54.6 52,53 C52,51.4 52.6,50 54,50 Z" />
+</vector>

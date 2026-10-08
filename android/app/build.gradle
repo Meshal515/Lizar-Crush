@@ -1,0 +1,74 @@
+plugins {
+    id "com.android.application"
+}
+
+// The game itself is the single HTML file at the repo root. It is copied into the APK at build
+// time, so there is never a second copy to keep in sync.
+def gameHtml = rootProject.file("../LIZAR_CRUSH_finalgithub.html")
+def gameAssetsDir = layout.buildDirectory.dir("generated/gameAssets")
+def copyGameHtml = tasks.register("copyGameHtml", Copy) {
+    from(gameHtml) { rename { "index.html" } }
+    into(gameAssetsDir.map { it.dir("www") })
+}
+
+// CI passes -PversionCode=<run number>; it only ever goes up, which lets updates install in place.
+def appVersionCode = (project.findProperty("versionCode") ?: "1").toString().toInteger()
+
+// Release signing comes from GitHub Secrets via environment variables. Never commit a keystore.
+def keystorePath = System.getenv("LIZAR_KEYSTORE_PATH")
+def hasReleaseKey = keystorePath != null && file(keystorePath).exists()
+
+android {
+    namespace "com.lizarcrush.game"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.lizarcrush.game"
+        minSdk 26
+        targetSdk 35
+        versionCode appVersionCode
+        versionName "0.1.${appVersionCode}"
+        buildConfigField "String", "UPDATE_REPO", "\"Meshal515/Lizar-Crush\""
+    }
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            release {
+                storeFile file(keystorePath)
+                storePassword System.getenv("LIZAR_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("LIZAR_KEY_ALIAS")
+                keyPassword System.getenv("LIZAR_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (hasReleaseKey) signingConfig signingConfigs.release
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    sourceSets {
+        main.assets.srcDir(gameAssetsDir)
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.named("preBuild") { dependsOn(copyGameHtml) }
+
+dependencies {
+    // Aligns kotlin-stdlib and the old kotlin-stdlib-jdk7/8 artifacts pulled in transitively.
+    implementation platform("org.jetbrains.kotlin:kotlin-bom:1.8.22")
+    implementation "androidx.webkit:webkit:1.12.1"
+    implementation "androidx.core:core:1.13.1"
+    implementation "androidx.activity:activity:1.9.3"
+}
