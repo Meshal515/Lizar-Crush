@@ -17237,10 +17237,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     g.save();
     g.translate(x, y);
     // Socket: a dark rim the eye sits in.
+    const vis = clamp01(open*3.2);                 // how open the eye reads (0 = shut lid)
     g.save();
     g.scale(1.22, 1.3);
     almond();
-    g.fillStyle = "rgba(0,0,0,.55)";
+    g.fillStyle = `rgba(0,0,0,${.55*vis})`;
     g.fill();
     g.restore();
     almond();
@@ -17297,9 +17298,16 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     g.lineWidth = Math.max(.8, r*.16);
     g.beginPath(); g.moveTo(r + 1, sIn); g.quadraticCurveTo(0, cU, -r - 1, sOut); g.stroke();
     g.restore();
-    g.strokeStyle = "rgba(0,0,0,.8)";
+    g.strokeStyle = `rgba(0,0,0,${.8*vis})`;
     g.lineWidth = Math.max(.7, r*.12);
     almond(); g.stroke();
+    if(vis < 1){
+      // shut: one soft lash crease where the lids meet
+      g.strokeStyle = `rgba(0,0,0,${.75*(1 - vis)})`;
+      g.lineWidth = Math.max(.8, r*.17);
+      g.lineCap = "round";
+      g.beginPath(); g.moveTo(-r*.95, -r*.05); g.quadraticCurveTo(0, r*.42, r*.95, -r*.05); g.stroke();
+    }
     // Stress creases when it hurts.
     if((e.pain || 0) > .05){
       g.strokeStyle = `rgba(0,0,0,${.6*e.pain})`;
@@ -17465,6 +17473,35 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         smileK = passK; zzz = passK;
       }
     }
+    // SMOOTHING: every look change (jaw, eye, colour, heat) follows its target over a few frames
+    // instead of flipping in one. Fast for the jaws so bites stay snappy, slow for colour.
+    if(st.o && state !== "editor"){
+      const fxs = prismSmokeFor(st.o);
+      const dts = fxs.dt || 0;
+      const sm = fxs[shooter ? "look0" : "look1"] || (fxs[shooter ? "look0" : "look1"] = {});
+      const fresh = !sm.ready || dts > .2;
+      const follow = (k, target, rate) => {
+        if(fresh || !(k in sm)){sm[k] = target; return target;}
+        sm[k] += (target - sm[k])*(1 - Math.exp(-dts*rate));
+        return sm[k];
+      };
+      open = follow("open", open, 26);
+      red = follow("red", red, 6);
+      teethHeat = follow("teeth", teethHeat, 7);
+      mouthHeat = follow("mouth", mouthHeat, 9);
+      tongueHeat = follow("tongue", tongueHeat, 8);
+      gulp = follow("gulp", gulp, 14);
+      tilt = follow("tilt", tilt, 18);
+      lift = follow("lift", lift, 20);
+      const ed = {open:1, squint:0, slant:0, pupil:.6, lookX:0, lookY:0, red:0, glow:0, pain:0};
+      const e2 = {glowRed:!!eye.glowRed};
+      for(const k in ed){
+        const rate = k === "open" ? 30 : (k === "lookX" || k === "lookY" ? 22 : (k === "red" || k === "glow" ? 7 : 12));
+        e2[k] = follow("e_" + k, eye[k] ?? ed[k], rate);
+      }
+      eye = e2;
+      sm.ready = true;
+    }
     // Skin colour: the shop trap colour, scorched toward red on the receiver.
     const mc = hexToRgbObj(safeHex(main, "#111111"));
     const rk = red*.78;
@@ -17474,7 +17511,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     eye.seed = seed;
     const shx = (trapHash(Math.floor(time*36) + seed) - .5)*shakeAmt*2*s;
     const shy = (trapHash(Math.floor(time*36)*1.3 + seed + 5) - .5)*shakeAmt*2*s;
-    const upA = -open*.34, loA = open*.62;
+    const upA = -open*.28, loA = open*.56;
     const hingeX = -9*s;
     const upperPath = () => {
       ctx.beginPath();
@@ -17487,11 +17524,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.closePath();
     };
     const lowerPath = () => {
+      // the jaw lives in front of the hinge only, so opening never swings anything out the back
       ctx.beginPath();
-      ctx.moveTo(-8*s, 1*s);
+      ctx.moveTo(-10*s, 1*s);
       ctx.lineTo(19*s, 1*s);
       ctx.bezierCurveTo(19*s, 6*s, 12*s, 11*s, 2*s, 12*s);
-      ctx.bezierCurveTo(-10*s, 13*s, -20*s, 10*s, -22*s, 2*s);
+      ctx.bezierCurveTo(-5*s, 12.6*s, -10*s, 10*s, -12*s, 5*s);
       ctx.closePath();
     };
     const teeth = (up) => {
@@ -17499,10 +17537,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.fillStyle = th > .02 ? `rgb(${Math.round(241 + 14*th)},${Math.round(234 - 110*th)},${Math.round(219 - 185*th)})` : "#f1eadb";
       ctx.strokeStyle = th > .3 ? `rgba(120,20,0,${.5})` : "rgba(0,0,0,.5)";
       ctx.lineWidth = Math.max(.5, .55*s);
-      const xs = up ? [-5, 0, 5, 10, 15.5] : [-2, 3, 8, 13];
+      const xs = up ? [-3, 3.5, 10, 15.6] : [0, 6.5, 12.6];
       xs.forEach((x0, i) => {
-        const fang = up ? i === xs.length - 1 : i === xs.length - 1;
-        const wv = (fang ? 4.6 : 3.8)*s, len = (fang ? 6.5 : 4)*s, X = x0*s;
+        const fang = i === xs.length - 1;
+        const wv = (fang ? 5.2 : 5)*s, len = (fang ? 7 : 5)*s, X = x0*s;
         ctx.beginPath();
         if(up){ctx.moveTo(X, -1.2*s); ctx.lineTo(X + wv, -1.2*s); ctx.lineTo(X + wv*.55, -1.2*s + len);}
         else {ctx.moveTo(X, 1.2*s); ctx.lineTo(X + wv, 1.2*s); ctx.lineTo(X + wv*.55, 1.2*s - len);}
@@ -17518,20 +17556,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       g.addColorStop(1, "rgba(0,0,0,.28)");
       ctx.fillStyle = g;
       ctx.fillRect(-30*s, -30*s, 60*s, 60*s);
-      if(red > .3){
-        // Scorch cracks glowing through the skin.
-        ctx.strokeStyle = `rgba(255,200,110,${.55*(red - .3)/.7})`;
-        ctx.lineWidth = Math.max(.6, .75*s);
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        for(let i=0;i<2;i++){
-          const yy = (up ? -6 + i*4 : 5 + i*3)*s, xx = (-17 + trapHash(i*2.3 + seed)*6)*s;
-          ctx.moveTo(xx, yy);
-          ctx.lineTo(xx + 6*s, yy + (trapHash(i + seed) - .5)*5*s);
-          ctx.lineTo(xx + 11*s, yy + (trapHash(i*1.9 + seed) - .5)*6*s);
-        }
-        ctx.stroke();
-      }
       if(shooter && mouthHeat > .02){
         // Heat building inside: glows through the lips and the snout only.
         const g2 = ctx.createRadialGradient(18*s, 0, 0, 18*s, 0, 13*s);
@@ -17540,14 +17564,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         g2.addColorStop(1, "rgba(120,20,0,0)");
         ctx.fillStyle = g2;
         ctx.fillRect(-30*s, -30*s, 60*s, 60*s);
-        ctx.strokeStyle = `rgba(255,170,50,${.55*mouthHeat})`;
-        ctx.lineWidth = Math.max(.6, .7*s);
-        ctx.beginPath();
-        for(let i=0;i<3;i++){
-          const yy = (up ? -2.5 - i*1.8 : 2.5 + i*2)*s;
-          ctx.moveTo(21*s, yy); ctx.lineTo((17 - i*1.5 - mouthHeat*3)*s, yy + (up ? -1.4 : 1.4)*s);
-        }
-        ctx.stroke();
       }
       ctx.restore();
     };
@@ -17555,8 +17571,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.translate(p.x + kick*dir + shx, p.y + shy + lift);
     ctx.scale(dir, 1);
     if(tilt) ctx.rotate(tilt);
-    if(squash) ctx.scale(1 + squash*.12, 1 - squash*.14);
-    if(gulp) ctx.scale(1 + gulp*.04, 1 + gulp*.07);
+    if(squash) ctx.scale(1 + squash*.06, 1 - squash*.07);
+    if(gulp) ctx.scale(1 + gulp*.035, 1 + gulp*.035);
     // Back of the skull with a crest of spines.
     ctx.fillStyle = skin;
     ctx.beginPath(); ctx.arc(-12*s, 0, 11*s, 0, Math.PI*2); ctx.fill();
@@ -17649,6 +17665,20 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         }
       }
       ctx.restore();
+    }
+    // Cheek: a web of skin joining the jaws at the hinge, so the corner of the mouth is one
+    // continuous creature, not two pieces with a gap.
+    if(open > .02){
+      const cu0 = rotP(-12, -1, upA), cu1 = rotP(-1, -1, upA), cl1 = rotP(-1, 1, loA), cl0 = rotP(-12, 1, loA);
+      ctx.beginPath();
+      ctx.moveTo(cu0[0], cu0[1]); ctx.lineTo(cu1[0], cu1[1]);
+      ctx.quadraticCurveTo(hingeX + 3.5*s, 0, cl1[0], cl1[1]);
+      ctx.lineTo(cl0[0], cl0[1]);
+      ctx.closePath();
+      ctx.fillStyle = skin; ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,.35)";
+      ctx.lineWidth = Math.max(.6, .7*s);
+      ctx.beginPath(); ctx.moveTo(cu1[0], cu1[1]); ctx.quadraticCurveTo(hingeX + 3.5*s, 0, cl1[0], cl1[1]); ctx.stroke();
     }
     // Lower jaw with the tongue.
     ctx.save();
