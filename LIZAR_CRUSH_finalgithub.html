@@ -20224,84 +20224,104 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
     ctx.save();
     ctx.translate(cx0, cy0);
-    // Fixed armoured base (no drop shadow: the game has none).
-    ctx.fillStyle = main;
-    octa(R*.92);ctx.fill();
-    ctx.fillStyle = rgbaHex(accent, .5);
-    for(let i=0;i<4;i++){
-      const a = Math.PI/4 + i*Math.PI/2;
-      ctx.beginPath();ctx.arc(Math.cos(a)*R*.7, Math.sin(a)*R*.7, Math.max(1, 1.5*s), 0, Math.PI*2);ctx.fill();
-    }
-    // Turret head: one rigid piece that faces the middle of the fan, so the barrels always sit
-    // in order on it whatever angle the trap is set to.
+    // PRISM_HYDRA_V1: the turret is a hydra. A round one-eyed body; each barrel is a neck ending in
+    // a small eyeless serpent head that spits its beam from its jaws (the muzzle point is unchanged).
+    // The big eye only ever watches the player; it never shows where the beams will go.
+    const darkP = paperIsDark(main);
     let sumC = 0, sumS = 0;
     for(const b of tl.beams){sumC += Math.cos(b.angle); sumS += Math.sin(b.angle);}
     const headAng = Math.atan2(sumS, sumC);
-    let fan = 0;
-    for(const b of tl.beams){const d = Math.atan2(Math.sin(b.angle - headAng), Math.cos(b.angle - headAng)); fan = Math.max(fan, Math.abs(d));}
     const bw = Math.max(R*.3, beamVisualRadius*2*1.08);
-    // Emitter head: one rigid slice-of-a-ring block facing the middle of the fan. Its front face
-    // carries one muzzle per beam at that beam's exact angle, so it stays tidy for any spread and
-    // any rotation set in the Inspector. Each muzzle recoils on its own when its beam fires.
-    const inner = R*.55;
-    const halfSpan = fan + Math.asin(Math.min(.95, (bw*.62)/MUZ));
-    ctx.save();
-    ctx.rotate(headAng);
-    ctx.fillStyle = main;
-    ctx.beginPath();
-    ctx.arc(0, 0, MUZ - R*.18, -halfSpan, halfSpan);
-    ctx.arc(0, 0, inner, halfSpan, -halfSpan, true);
-    ctx.closePath();ctx.fill();
+    // necks and heads (behind the body)
     for(const b of tl.beams){
-      const rel = Math.atan2(Math.sin(b.angle - headAng), Math.cos(b.angle - headAng));
       const heat = editorMode ? 0 : pointHeat(b, 0)[0];
       const back = (barrelKick[b.index] || 0)*R*.32;
+      const jaw = Math.max(fireFlash[b.index] || 0, b.active ? .75 : 0, heat*.4);
       ctx.save();
-      ctx.rotate(rel);
-      // Muzzle sleeve sliding out of the head.
+      ctx.rotate(b.angle + Math.sin(time*2.3 + b.index*1.7)*.03*(1 - jaw));
+      // neck: tapering from the body out to the head, a slight S
+      const n0 = R*.5, n1 = MUZ - R*.95 - back;
+      const nw0 = bw*.9, nw1 = bw*.62;
       ctx.fillStyle = main;
-      roundRect(ctx, MUZ - R*.62 - back, -bw/2, R*.62, bw, bw*.25);ctx.fill();
-      if(heat > .02){
-        const hg = ctx.createLinearGradient(MUZ - R*1.1 - back, 0, MUZ - back, 0);
-        hg.addColorStop(0, "rgba(255,47,23,0)");
-        hg.addColorStop(.6, `rgba(255,47,23,${.5*heat})`);
-        hg.addColorStop(1, `rgba(255,170,40,${.95*heat})`);
-        ctx.fillStyle = hg;
-        roundRect(ctx, MUZ - R*1.1 - back, -bw/2, R*1.1, bw, bw*.25);ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(n0, -nw0); ctx.quadraticCurveTo((n0 + n1)/2, -nw0*.6 + Math.sin(time*3 + b.index)*1.5*s, n1, -nw1);
+      ctx.lineTo(n1, nw1); ctx.quadraticCurveTo((n0 + n1)/2, nw0*.6 + Math.sin(time*3 + b.index)*1.5*s, n0, nw0);
+      ctx.closePath(); ctx.fill();
+      // head: upper and lower jaw opening around the muzzle point
+      const hx0 = MUZ - R*1.02 - back, hx1 = MUZ - back;
+      const op = jaw*.45;
+      const upper = () => {ctx.beginPath(); ctx.moveTo(hx0, -bw*.75); ctx.quadraticCurveTo(hx0 + R*.5, -bw*.95, hx1 + R*.05, -bw*.18); ctx.lineTo(hx1, 0); ctx.lineTo(hx0 + R*.25, 0); ctx.closePath();};
+      const lower = () => {ctx.beginPath(); ctx.moveTo(hx0, bw*.7); ctx.quadraticCurveTo(hx0 + R*.5, bw*.85, hx1 - R*.05, bw*.12); ctx.lineTo(hx1 - R*.08, 0); ctx.lineTo(hx0 + R*.25, 0); ctx.closePath();};
+      // mouth glow between the jaws
+      if(op > .02 || heat > .05){
+        const mg = ctx.createRadialGradient(hx1 - R*.3, 0, 0, hx1 - R*.3, 0, R*.6);
+        const hk = Math.max(heat, jaw);
+        mg.addColorStop(0, `rgba(255,253,240,${hk})`); mg.addColorStop(.4, `rgba(255,170,40,${.9*hk})`); mg.addColorStop(1, "rgba(255,47,23,0)");
+        ctx.fillStyle = mg; ctx.beginPath(); ctx.ellipse(hx1 - R*.3, 0, R*.55, bw*.3 + op*R*.5, 0, 0, Math.PI*2); ctx.fill();
       }
-      ctx.fillStyle = heat > .25 ? hot.yellow : rgbaHex(accent, .55);
-      ctx.fillRect(MUZ - back - bw*.34, -bw*.56, bw*.2, bw*1.12);
-      ctx.fillStyle = heat > .05 ? hot.white : "rgba(0,0,0,.6)";
-      ctx.beginPath();ctx.ellipse(MUZ - back, 0, bw*.12, bw*.36, 0, 0, Math.PI*2);ctx.fill();
+      ctx.fillStyle = main;
+      ctx.save(); ctx.translate(hx0 + R*.25, 0); ctx.rotate(-op); ctx.translate(-(hx0 + R*.25), 0); upper(); ctx.fill();
+      ctx.fillStyle = "#efe7d6"; for(let k=0;k<3;k++){const tx = hx0 + R*(.45 + k*.17); ctx.beginPath(); ctx.moveTo(tx, -1); ctx.lineTo(tx + R*.09, -1); ctx.lineTo(tx + R*.045, bw*.14); ctx.closePath(); ctx.fill();}
+      ctx.restore();
+      ctx.fillStyle = main;
+      ctx.save(); ctx.translate(hx0 + R*.25, 0); ctx.rotate(op*.8); ctx.translate(-(hx0 + R*.25), 0); lower(); ctx.fill();
+      ctx.fillStyle = "#efe7d6"; for(let k=0;k<2;k++){const tx = hx0 + R*(.52 + k*.18); ctx.beginPath(); ctx.moveTo(tx, 1); ctx.lineTo(tx + R*.09, 1); ctx.lineTo(tx + R*.045, -bw*.12); ctx.closePath(); ctx.fill();}
+      ctx.restore();
+      // heat creeping up the throat
+      if(heat > .02){
+        const hg = ctx.createLinearGradient(hx0 - R*.4, 0, hx1, 0);
+        hg.addColorStop(0, "rgba(255,47,23,0)"); hg.addColorStop(1, `rgba(255,120,30,${.45*heat})`);
+        ctx.fillStyle = hg; ctx.fillRect(hx0 - R*.4, -bw*.5, hx1 - hx0 + R*.4, bw);
+      }
       ctx.restore();
     }
-    // Seams between muzzles and a rim line, so each one reads as its own barrel.
-    ctx.strokeStyle = rgbaHex(accent, .3);
-    ctx.lineWidth = Math.max(1, 1.2*s);
-    const sorted = tl.beams.map(b => Math.atan2(Math.sin(b.angle - headAng), Math.cos(b.angle - headAng))).sort((p, q) => p - q);
-    ctx.beginPath();
-    for(let i=1;i<sorted.length;i++){
-      const m = (sorted[i - 1] + sorted[i])/2;
-      ctx.moveTo(Math.cos(m)*(inner + R*.2), Math.sin(m)*(inner + R*.2));
-      ctx.lineTo(Math.cos(m)*(MUZ - R*.3), Math.sin(m)*(MUZ - R*.3));
-    }
-    ctx.stroke();
-    ctx.beginPath();ctx.arc(0, 0, inner + R*.18, -halfSpan + .08, halfSpan - .08);ctx.stroke();
-    ctx.restore();
-
-    // Lens: dull ember when idle, white-hot when charging or firing.
+    // the body: a round mass with a ridge of short spines on top
+    ctx.fillStyle = main;
+    ctx.beginPath(); ctx.arc(0, 0, R*.98, 0, Math.PI*2); ctx.fill();
+    for(let i=0;i<5;i++){const a = -Math.PI/2 + (i - 2)*.35; ctx.beginPath(); ctx.moveTo(Math.cos(a - .1)*R*.9, Math.sin(a - .1)*R*.9); ctx.lineTo(Math.cos(a)*R*1.22, Math.sin(a)*R*1.22); ctx.lineTo(Math.cos(a + .1)*R*.9, Math.sin(a + .1)*R*.9); ctx.closePath(); ctx.fill();}
+    const bg = ctx.createRadialGradient(-R*.35, -R*.4, R*.1, 0, 0, R);
+    bg.addColorStop(0, `rgba(255,255,255,${darkP ? .2 : .32})`); bg.addColorStop(.6, "rgba(255,255,255,0)"); bg.addColorStop(1, `rgba(0,0,0,${darkP ? .32 : .14})`);
+    ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(0, 0, R*.98, 0, Math.PI*2); ctx.fill();
+    // The one big eye (in place of the lens): watches the player; its pupil burns when charging.
     const lensK = editorMode ? .35 : Math.max(charging, live ? .72 + .28*pulse : 0, kick);
-    ctx.fillStyle = hot.dark;
-    ctx.beginPath();ctx.arc(0, 0, R*.52, 0, Math.PI*2);ctx.fill();
-    const lg = ctx.createRadialGradient(0, 0, 1, 0, 0, R*.46);
-    lg.addColorStop(0, lensK > .2 ? hot.white : hot.orange);
-    lg.addColorStop(.35, lensK > .2 ? hot.yellow : hot.red);
-    lg.addColorStop(.75, hot.orange);
-    lg.addColorStop(1, hot.dark);
-    ctx.globalAlpha = .35 + .65*lensK;
-    ctx.fillStyle = lg;
-    ctx.beginPath();ctx.arc(0, 0, R*.46*(.75 + .25*lensK), 0, Math.PI*2);ctx.fill();
-    ctx.globalAlpha = 1;
+    {
+      const fxp = editorMode ? null : prismSmokeFor(o);
+      const dtp = fxp ? (fxp.dt || 0) : 0;
+      const dyingP = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+      let passK = 0, passT = 0;
+      if(fxp){
+        const target = !dyingP && state !== "dying" && (Number(player.baseY) || 0) < c.y - R/s*3 ? 1 : 0;
+        fxp.passK = (fxp.passK || 0) + (target - (fxp.passK || 0))*Math.min(1, dtp*4);
+        if(target){if(fxp.passAt == null) fxp.passAt = time;} else fxp.passAt = null;
+        passK = fxp.passK; passT = fxp.passAt == null ? 0 : time - fxp.passAt;
+      }
+      const dx = player.x - c.x, dy = player.baseY - player.h/2 - c.y, dl = Math.hypot(dx, dy) || 1;
+      let look = {x:Math.max(-1, Math.min(1, dx/dl*1.3)), y:Math.max(-1, Math.min(1, dy/dl*1.3))};
+      let open = 1, squint = .12 + .3*charging, slant = .3 + .5*Math.max(charging, live ? 1 : 0), pupil = .8 - .25*lensK;
+      if(((time*.27 + c.phase) % 1) < .03 && !live && charging <= 0) open = .1;
+      if(dyingP){open = .5; squint = .95; slant = .25;}
+      if(passK > .001){
+        const bored = guardSm((passT - 1.2)/1);
+        open += ((1 - .5*bored) - open)*passK; squint += ((.1 + .25*bored) - squint)*passK; slant += (-.15 - slant)*passK;
+        look = {x:look.x + (.05 - look.x)*passK, y:look.y + ((-1 + .7*bored) - look.y)*passK};
+      }
+      if(fxp){
+        const sm = fxp.hydra || (fxp.hydra = {});
+        const fresh = !sm.ready || dtp > .2;
+        const f = (k, val, rate) => {if(fresh || !(k in sm)){sm[k] = val; return val;} sm[k] += (val - sm[k])*(1 - Math.exp(-dtp*rate)); return sm[k];};
+        open = f("open", open, 30); squint = f("squint", squint, 14); slant = f("slant", slant, 12); look = {x:f("lx", look.x, 14), y:f("ly", look.y, 14)};
+        sm.ready = true;
+      }
+      const erx = R*.42, ery = R*.6;
+      drawGuardianEye(0, -R*.05, erx, ery, s, main, Math.max(0, Math.min(1, open)), squint, slant, pupil, look);
+      if(lensK > .05 && open > .2){
+        // the pupil burns from inside
+        const px = look.x*erx*.42, py = -R*.05 + look.y*ery*.5;
+        const pg = ctx.createRadialGradient(px, py, 0, px, py, erx*.5);
+        pg.addColorStop(0, `rgba(255,253,240,${lensK})`); pg.addColorStop(.5, `rgba(255,140,30,${.8*lensK})`); pg.addColorStop(1, "rgba(255,47,23,0)");
+        ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(px, py, erx*.5, 0, Math.PI*2); ctx.fill();
+      }
+    }
 
     // Charging: energy sucked into the lens from all around.
     if(!editorMode && charging > 0){
