@@ -17332,6 +17332,26 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(o.shootFrom === "right") return -1;
     return trapHash(Math.round(o.y)*.137 + 2.9) < .5 ? 1 : -1;
   }
+  // CREATURE_LASER_V2: one hot, saturated beam: a faint heat band, a fiery body, a white-hot core,
+  // and bright pulses travelling along it in the direction it flows (flow = +1 toward x1).
+  // Used for the open stretch and for the parts inside both mouths, so it is one continuous beam.
+  function drawCreatureLaser(g, x0, x1, y, bh, flow, seed){
+    if(Math.abs(x1 - x0) < .5 || bh <= .3) return;
+    const fl = 1 + .05*Math.sin(time*46 + seed);
+    const line = (w, col) => {g.strokeStyle = col; g.lineWidth = Math.max(.8, w); g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();};
+    g.save();
+    g.lineCap = "butt";
+    line(bh*2*fl, "rgba(255,72,18,.16)");
+    line(bh*fl, "#ff4d12");
+    line(bh*.62*fl, "#ffa53a");
+    line(bh*.3, "#fffbea");
+    g.lineCap = "round";
+    g.setLineDash([bh*1.3, bh*5.5]);
+    g.lineDashOffset = -flow*time*640;
+    line(bh*.5, "rgba(255,255,255,.95)");
+    g.setLineDash([]);
+    g.restore();
+  }
   function drawBeamCreature(x, y, dir, shooter, st){
     const baseM = ctx.getTransform();
     const p = worldToScreen(x, y);
@@ -17515,21 +17535,26 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const hingeX = -9*s;
     const upperPath = () => {
       ctx.beginPath();
-      ctx.moveTo(-22*s, 2*s);
-      ctx.bezierCurveTo(-24*s, -12*s, -16*s, -21*s, -6*s, -20*s);
-      ctx.bezierCurveTo(-1*s, -23.5*s, 6*s, -21.5*s, 8*s, -15*s);     // brow ridge over the eye
-      ctx.bezierCurveTo(11*s, -11*s, 18*s, -9.5*s, 22*s, -4*s);       // long snout
-      ctx.lineTo(22*s, -1*s);
-      ctx.lineTo(-8*s, -1*s);
+      ctx.moveTo(-23*s, 1*s);
+      ctx.bezierCurveTo(-24.5*s, -9*s, -18*s, -18.5*s, -9*s, -19*s);   // back of the skull
+      ctx.lineTo(-1*s, -21*s);                                          // hard brow ridge
+      ctx.quadraticCurveTo(5*s, -20.5*s, 7*s, -15.5*s);
+      ctx.lineTo(23*s, -6.5*s);                                         // long, straight snout
+      ctx.quadraticCurveTo(25*s, -5.5*s, 24.5*s, -3*s);                 // blunt tip
+      ctx.lineTo(22.5*s, -1*s);
+      ctx.lineTo(-9*s, -1*s);
       ctx.closePath();
     };
     const lowerPath = () => {
       // the jaw lives in front of the hinge only, so opening never swings anything out the back
       ctx.beginPath();
+      // a hard, tapered jaw: flat top, angled chin, straight jawline back to the hinge muscle
       ctx.moveTo(-10*s, 1*s);
-      ctx.lineTo(19*s, 1*s);
-      ctx.bezierCurveTo(19*s, 6*s, 12*s, 11*s, 2*s, 12*s);
-      ctx.bezierCurveTo(-5*s, 12.6*s, -10*s, 10*s, -12*s, 5*s);
+      ctx.lineTo(21*s, 1*s);
+      ctx.lineTo(20.5*s, 3.5*s);
+      ctx.lineTo(15*s, 6.8*s);                                          // chin
+      ctx.lineTo(-3*s, 9.6*s);                                          // straight jawline
+      ctx.quadraticCurveTo(-10.5*s, 10.4*s, -12*s, 5*s);                // hinge muscle
       ctx.closePath();
     };
     const teeth = (up) => {
@@ -17550,7 +17575,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const shade = (pathFn, up) => {
       // Volume: a soft lit rim on top, darker underside. No outlines, no halos.
       ctx.save(); pathFn(); ctx.clip();
-      const g = ctx.createLinearGradient(0, up ? -24*s : 0, 0, up ? 0 : 13*s);
+      const g = ctx.createLinearGradient(0, up ? -22*s : 0, 0, up ? 0 : 10*s);
       g.addColorStop(0, up ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.04)");
       g.addColorStop(.45, "rgba(255,255,255,0)");
       g.addColorStop(1, "rgba(0,0,0,.28)");
@@ -17575,12 +17600,15 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(gulp) ctx.scale(1 + gulp*.035, 1 + gulp*.035);
     // Back of the skull with a crest of spines.
     ctx.fillStyle = skin;
-    ctx.beginPath(); ctx.arc(-12*s, 0, 11*s, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-23*s, -2*s); ctx.lineTo(-22*s, 6*s); ctx.quadraticCurveTo(-17*s, 10.5*s, -10*s, 9.5*s);
+    ctx.lineTo(-7*s, 0); ctx.lineTo(-12*s, -10*s); ctx.closePath();
+    ctx.fill();
     for(let i=0;i<3;i++){
       const a = -Math.PI*.5 - .65 - i*.5;
-      const bx = -12*s + Math.cos(a)*10*s, by = Math.sin(a)*10*s;
+      const bx = -12*s + Math.cos(a)*10.5*s, by = Math.sin(a)*10.5*s - 1.5*s;
       const L = (17 - i*2)*s;
-      const tx = -12*s + Math.cos(a - .25)*L, ty = Math.sin(a - .25)*L;
+      const tx = -12*s + Math.cos(a - .25)*L, ty = Math.sin(a - .25)*L - 1.5*s;
       ctx.beginPath();
       ctx.moveTo(bx + Math.cos(a + 1.57)*3*s, by + Math.sin(a + 1.57)*3*s);
       ctx.lineTo(tx, ty);
@@ -17591,7 +17619,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // out), the heat glowing deep in the throat, and a tongue lying on the lower jaw.
     const rotP = (px, py, ang) => {const dx = px*s - hingeX, c = Math.cos(ang), sn = Math.sin(ang); return [hingeX + dx*c - py*s*sn, dx*sn + py*s*c];};
     if(open > .02){
-      const u0 = rotP(-8, -1, upA), u1 = rotP(20.5, -1, upA), l0 = rotP(-8, 1, loA), l1 = rotP(17.5, 1, loA);
+      const u0 = rotP(-8, -1, upA), u1 = rotP(22, -1, upA), l0 = rotP(-8, 1, loA), l1 = rotP(20.5, 1, loA);
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(u0[0], u0[1]); ctx.lineTo(u1[0], u1[1]);
@@ -17622,18 +17650,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const bAng = Math.atan2(far.y, far.x - x0), bLen = Math.hypot(far.x - x0, far.y);
       const ib = st.inBeam ? st.inBeam[shooter ? 0 : 1] : 0;
       if(ib > .5){
-        const HP = TRAP_SPARK_PALETTES.hot;
         ctx.save();
         ctx.translate(x0, 0); ctx.rotate(bAng);
-        ctx.lineCap = "butt";
-        ctx.strokeStyle = main; ctx.lineWidth = ib;
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(bLen, 0); ctx.stroke();
-        ctx.strokeStyle = HP[2]; ctx.lineWidth = Math.max(1, ib*.16);
-        ctx.beginPath(); ctx.moveTo(0, -ib*.42); ctx.lineTo(bLen, -ib*.42); ctx.moveTo(0, ib*.42); ctx.lineTo(bLen, ib*.42); ctx.stroke();
-        ctx.strokeStyle = HP[1]; ctx.lineWidth = Math.max(1, ib*.34);
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(bLen, 0); ctx.stroke();
-        ctx.strokeStyle = HP[0]; ctx.lineWidth = Math.max(1, ib*.16);
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(bLen, 0); ctx.stroke();
+        drawCreatureLaser(ctx, 0, bLen, 0, ib, shooter ? 1 : -1, st.seed);
         ctx.restore();
         // white-hot where it meets the throat
         const tg = ctx.createRadialGradient(x0 + 2*s, 0, 0, x0 + 2*s, 0, 7*s);
@@ -17721,7 +17740,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     shade(upperPath, true);
     teeth(true);
     ctx.fillStyle = "rgba(0,0,0,.55)";
-    ctx.beginPath(); ctx.ellipse(17*s, -7*s, 1.5*s, .8*s, -.45, 0, Math.PI*2); ctx.fill();   // nostril
+    ctx.beginPath(); ctx.ellipse(19*s, -6*s, 1.5*s, .75*s, -.3, 0, Math.PI*2); ctx.fill();   // nostril
     drawCreatureEye(ctx, -3*s, -11*s, 6.8*s, eye);
     ctx.restore();
     if(smileK > .02){
@@ -17806,49 +17825,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       est.inBeam = [bh, enter >= 1 ? bh : 0];
     }
     function beamBody(fromX, front, bh){
-      ctx.strokeStyle = main;
-      ctx.lineWidth = bh;
-      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
-      ctx.strokeStyle = H[2];
-      ctx.lineWidth = Math.max(1, bh*.16);
-      ctx.beginPath(); ctx.moveTo(fromX, p1.y - bh*.42); ctx.lineTo(front, p1.y - bh*.42); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(fromX, p1.y + bh*.42); ctx.lineTo(front, p1.y + bh*.42); ctx.stroke();
-      ctx.strokeStyle = H[1];
-      ctx.lineWidth = Math.max(1, bh*.34);
-      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
-      ctx.strokeStyle = H[0];
-      ctx.lineWidth = Math.max(1, bh*.16);
-      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
-      // Power flowing from the shooter into the receiver.
-      ctx.setLineDash([bh*2.2, bh*3.2]);
-      ctx.strokeStyle = accent;
-      ctx.globalAlpha = .85;
-      ctx.lineWidth = Math.max(1, bh*.3);
-      ctx.lineDashOffset = -time*520*s;
-      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-      const pts = trapBolt(fromX, p1.y, front, p1.y, bh*.45, 18, seed + tick*2.3);
-      trapStrokePts(pts, Math.max(.7, bh*.12), H[0], .8);
+      drawCreatureLaser(ctx, fromX, front, p1.y, bh, 1, seed);
     }
     if(active && shown <= .01){est.inBeam = [0, 0];}
     else if(active){
       const enter = easeOutCubic(info.onT);
       const front = fromX + (toX - fromX)*enter;
       const bh = core*(1 + fireKick*.6)*(1 + .06*Math.sin(time*47 + seed));
-      if(heavy){
-        ctx.globalAlpha = .22;
-        ctx.strokeStyle = H[2];
-        ctx.lineWidth = .9*s;
-        ctx.beginPath();
-        for(let i=0;i<=18;i++){
-          const xx = fromX + (front - fromX)*i/18;
-          const yy = p1.y - bh*1.6 + Math.sin(i*1.3 + time*10)*1.8*s;
-          i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy);
-        }
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
       if(!editorMode){
         const st = prismSmokeFor(o);
         const want = (heavy ? 26 : 12)*st.dt;
