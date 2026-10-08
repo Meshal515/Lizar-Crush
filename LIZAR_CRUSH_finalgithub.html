@@ -4967,8 +4967,9 @@
   function isLikelyWeakDevice(){
     const mem = Number(navigator.deviceMemory || 0);
     const cores = Number(navigator.hardwareConcurrency || 0);
-    const px = Math.max(window.innerWidth || 1, window.innerHeight || 1) * (window.devicePixelRatio || 1);
-    return (mem && mem <= 2) || (cores && cores <= 4) || px > 2600;
+    // A sharp screen is not a weak phone: most modern phones exceed 2600 physical pixels,
+    // so screen size no longer pushes them into Battery Saver. Memory and cores decide.
+    return (mem && mem <= 2) || (cores && cores <= 4);
   }
   function defaultPerformanceMode(){return isLikelyWeakDevice() ? "battery" : "balanced";}
   function loadPerformanceSettings(){
@@ -18308,6 +18309,21 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   }
 
 
+  // Soft smoke puff, rendered once and reused (cheap on phones).
+  let prismSmokeSprite = null;
+  function getPrismSmokeSprite(){
+    if(prismSmokeSprite) return prismSmokeSprite;
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const g = c.getContext("2d");
+    const gr = g.createRadialGradient(32, 32, 2, 32, 32, 32);
+    gr.addColorStop(0, "rgba(88,82,76,.62)");
+    gr.addColorStop(.5, "rgba(88,82,76,.26)");
+    gr.addColorStop(1, "rgba(88,82,76,0)");
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 64, 64);
+    return prismSmokeSprite = c;
+  }
   function drawPrismPulse(o){
     const tl = prismPulseTimeline(o, state === "editor" ? time*.8 : time);
     const c = tl.c;
@@ -18375,35 +18391,28 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     };
     const drawThermalBeam = (a, b, width, alpha, seed=0) => {
       if(alpha <= .01) return;
+      // PRISM_PULSE_HEAT_V2: layered from a wide red heat haze down to a white-hot core, with flicker.
       const pa = worldToScreen(a.x, a.y);
       const pb = worldToScreen(b.x, b.y);
       const w = Math.max(1, width*pa.s);
-      const pulse = .86 + .14*Math.sin(time*18 + seed*2.1);
+      const flick = .84 + .16*Math.sin(time*31 + seed*2.3)*Math.sin(time*17.3 + seed);
+      const line = (lw, color, al) => {
+        ctx.globalAlpha = alpha*al;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lw;
+        ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
+      };
       ctx.save();
       ctx.lineCap = "round";
-      // dark heat aura behind the beam
-      ctx.globalAlpha = alpha*.13*pulse;
-      ctx.strokeStyle = hot.red;
-      ctx.lineWidth = w*4.1;
-      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
-      // orange thermal bloom
-      ctx.globalAlpha = alpha*.28;
-      ctx.strokeStyle = hot.orange;
-      ctx.lineWidth = w*2.45;
-      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
-      // molten yellow body
-      ctx.globalAlpha = alpha*.72;
-      ctx.strokeStyle = hot.yellow;
-      ctx.lineWidth = w*1.12;
-      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
-      // white-hot core
-      ctx.globalAlpha = alpha*.96;
-      ctx.strokeStyle = hot.white;
-      ctx.lineWidth = Math.max(1.2, w*.34);
-      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
-      // thin unstable heat traces, intentionally cheap on Battery Saver.
-      drawHeatWave(a,b,width,alpha*.22,seed);
-      drawHeatWave(a,b,width,alpha*.14,seed+3);
+      line(w*5.4*flick, hot.red, .06);
+      line(w*3.5, hot.red, .13*flick);
+      line(w*2.25, hot.orange, .36);
+      line(w*1.3*flick, hot.yellow, .82);
+      line(w*.66, hot.pale, .96);
+      line(Math.max(1.2, w*.28), hot.white, 1);
+      // Shimmering heat distortion above and around the beam.
+      drawHeatWave(a,b,width,alpha*.30,seed);
+      drawHeatWave(a,b,width*1.7,alpha*.16,seed+3);
       ctx.restore();
     };
     const drawThermalHead = (pt, angle, r, alpha, seed=0) => {
@@ -18455,53 +18464,93 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
     }
 
-    // PRISM_PULSE_POLISH_V1: aim telegraph. Each beam paints its exact path shortly before it fires.
-    // Visual only; prismPulseTimeline still decides when a beam can hit.
-    const AIM_LEAD = .62;
+    // PRISM_PULSE_HEAT_V2: no path preview. Memorising where the beams go is part of the trap.
+    // Everything below is visual only; prismPulseTimeline still decides when a beam can hit.
+    // The core (never the path) heats up just before the next beam fires.
     let charging = 0;
     if(!editorMode){
       for(const b of tl.beams){
         if(b.active || b.mode === "disabled" || b.visible > 0) continue;
         let lead = b.start - tl.t;
         if(lead < 0) lead += tl.cycle;
-        if(lead > AIM_LEAD) continue;
-        const k = 1 - lead/AIM_LEAD;
-        charging = Math.max(charging, k);
-        const flick = .6 + .4*Math.sin(time*42 + b.index*1.7);
-        for(const seg of b.path){
-          drawWorldLine(seg.a, seg.b, Math.max(1.4, c.beamThickness*.2), (.08 + .34*k)*flick, hot.orange, true);
-          if(seg.bounce) drawDot(seg.b, 2 + 3*k, hot.orange, .18 + .3*k);
-        }
-        drawDot({x:c.x + Math.cos(b.angle)*(22 + 6*k), y:c.y + Math.sin(b.angle)*(22 + 6*k)}, 1.6 + 3.4*k, hot.pale, .3 + .6*k);
+        if(lead <= .5) charging = Math.max(charging, 1 - lead/.5);
       }
     }
 
-    // Wall impact: hot slit on the wall plus sparks spraying back into the room.
-    const drawWallImpact = (pt, alpha, seed) => {
-      if(alpha <= .05) return;
-      const hp = worldToScreen(pt.x, pt.y);
-      const side = pt.x < WORLD_W/2 ? 1 : -1;
+    // Heat at a point `dist` along a beam path, straight from the timeline (deterministic, replay-safe).
+    // Returns [heat 0..1, beamStillTouching].
+    const pointHeat = (b, dist) => {
+      if(b.mode === "disabled") return [0, false];
+      const k = clamp01(dist / c.beamRange);
+      const hitStart = b.start + tl.travelTime*(1 - Math.cbrt(1 - k));
+      const offStart = tl.shutdownStart + (c.beamCount - 1 - b.index)*c.shutdownTime;
+      const hitEnd = offStart + c.shutdownTime*(1 - k);
+      let best = 0, live = false;
+      for(const tt of [tl.t, tl.t + tl.cycle]){
+        if(tt < hitStart) continue;
+        if(tt < hitEnd){const h = clamp01((tt - hitStart)/.18); if(h >= best){best = h; live = true;}}
+        else {const h = Math.exp(-(tt - hitEnd)/1.15); if(h > best){best = h; live = false;}}
+      }
+      return [best, live];
+    };
+    const wallPoints = [];
+    let coreHeat = 0;
+    if(!editorMode){
+      for(const b of tl.beams){
+        coreHeat = Math.max(coreHeat, pointHeat(b, 0)[0]);
+        let dist = 0;
+        for(const seg of b.path){
+          dist += seg.len;
+          if(seg.bounce || seg.b.x <= .5 || seg.b.x >= WORLD_W - .5){
+            const [heat, live] = pointHeat(b, dist);
+            if(heat > .02) wallPoints.push({pt:seg.b, heat, live, seed:b.index*7 + wallPoints.length});
+          }
+        }
+      }
+    }
+
+    // Molten wall marks: glowing pool, burnt ring and drips. Drawn under the beams.
+    for(const w of wallPoints){
+      const hp = worldToScreen(w.pt.x, w.pt.y);
+      const ss = hp.s;
+      const side = w.pt.x < WORLD_W/2 ? 1 : -1;
       ctx.save();
-      ctx.globalAlpha = alpha*.75;
-      ctx.fillStyle = hot.orange;
-      ctx.fillRect(hp.x - (side > 0 ? 0 : 3*hp.s), hp.y - 9*hp.s, 3*hp.s, 18*hp.s);
-      ctx.fillStyle = hot.white;
-      ctx.fillRect(hp.x - (side > 0 ? 0 : 1.4*hp.s), hp.y - 5*hp.s, 1.4*hp.s, 10*hp.s);
-      if(heavy){
-        ctx.lineCap = "round";
-        for(let k=0;k<5;k++){
-          const ph = (time*4.2 + k*.2 + seed*.37) % 1;
-          const ang = Math.sin(k*91.7 + seed*3.1)*1.05;
-          const vx = side*Math.cos(ang), vy = Math.sin(ang) - .25;
-          const sx = hp.x + vx*ph*24*hp.s, sy = hp.y + vy*ph*24*hp.s + ph*ph*8*hp.s;
-          ctx.globalAlpha = alpha*(1 - ph);
-          ctx.strokeStyle = k%2 ? hot.pale : hot.yellow;
-          ctx.lineWidth = 1.5*hp.s*(1 - ph*.5);
-          ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx - vx*5*hp.s, sy - vy*5*hp.s);ctx.stroke();
+      // Burnt scorch that stays while the metal cools.
+      ctx.globalAlpha = .22*Math.min(1, w.heat*2.2);
+      ctx.fillStyle = "#2a160c";
+      ctx.beginPath();ctx.ellipse(hp.x, hp.y, 7*ss, 22*ss, 0, 0, Math.PI*2);ctx.fill();
+      // Hot glow: white -> yellow -> orange -> red as it cools.
+      // Hot glow stretched along the wall: white -> yellow -> orange -> red as it cools.
+      const R = (16 + 26*w.heat)*ss;
+      ctx.save();
+      ctx.translate(hp.x, hp.y);
+      ctx.scale(.8, 1.6);
+      const g = ctx.createRadialGradient(0, 0, 1, 0, 0, R);
+      g.addColorStop(0, w.heat > .55 ? hot.white : (w.heat > .3 ? hot.yellow : hot.orange));
+      g.addColorStop(.28, `rgba(255,170,40,${.8*w.heat})`);
+      g.addColorStop(.62, `rgba(255,60,10,${.36*w.heat})`);
+      g.addColorStop(1, "rgba(255,47,23,0)");
+      ctx.globalAlpha = Math.min(1, .35 + w.heat);
+      ctx.fillStyle = g;
+      ctx.beginPath();ctx.arc(0, 0, R, 0, Math.PI*2);ctx.fill();
+      ctx.restore();
+      // Molten slit cut into the wall.
+      ctx.globalAlpha = Math.min(1, w.heat*1.4);
+      ctx.fillStyle = w.heat > .5 ? hot.pale : hot.orange;
+      ctx.fillRect(hp.x - (side > 0 ? 0 : 3.5*ss), hp.y - 11*ss*w.heat - 3*ss, 3.5*ss, (22*w.heat + 6)*ss);
+      // Drips of molten metal running down the wall while the beam is on it.
+      if(w.live && w.heat > .4){
+        for(let k=0;k<3;k++){
+          const ph = (time*.9 + k*.33 + w.seed*.17) % 1;
+          ctx.globalAlpha = (1 - ph)*.9;
+          ctx.fillStyle = ph < .35 ? hot.yellow : hot.orange;
+          const dx = hp.x + side*(1.5 + k*1.6)*ss;
+          const dy = hp.y + 6*ss + ph*26*ss;
+          ctx.beginPath();ctx.ellipse(dx, dy, 1.4*ss, (2.6 + ph*2.2)*ss, 0, 0, Math.PI*2);ctx.fill();
         }
       }
       ctx.restore();
-    };
+    }
 
     // Active sequential thermal traveling beams.
     for(const b of tl.beams){
@@ -18511,13 +18560,105 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(const seg of visibleSegs){
         drawThermalBeam(seg.a, seg.b, c.beamThickness, alpha, b.index + seg.len*.01);
         if(seg.bounce && b.mode !== "shutdown") drawDot(seg.b, Math.max(4.5, c.beamThickness*.46), hot.yellow, alpha*.72);
-        if(!editorMode && (seg.bounce || seg.b.x <= .5 || seg.b.x >= WORLD_W - .5)) drawWallImpact(seg.b, alpha, b.index);
+        // Embers peeling off the beam and rising.
+        if(heavy && !editorMode && alpha > .3){
+          const pa = worldToScreen(seg.a.x, seg.a.y), pb = worldToScreen(seg.b.x, seg.b.y);
+          const n = Math.max(2, Math.min(6, Math.floor(seg.len/70)));
+          for(let k=0;k<n;k++){
+            const ph = (time*1.3 + k/n + b.index*.29) % 1;
+            const along = (k + .5)/n + Math.sin(time*.7 + k*3.1)*.04;
+            const ex = pa.x + (pb.x - pa.x)*along + Math.sin(ph*7 + k)*3*pa.s;
+            const ey = pa.y + (pb.y - pa.y)*along - ph*22*pa.s;
+            ctx.save();
+            ctx.globalAlpha = alpha*(1 - ph)*.85;
+            ctx.fillStyle = ph < .4 ? hot.pale : hot.orange;
+            ctx.beginPath();ctx.arc(ex, ey, (1.8 - ph)*pa.s, 0, Math.PI*2);ctx.fill();
+            ctx.restore();
+          }
+        }
       }
       const headSeg = visibleSegs[visibleSegs.length-1];
       if(headSeg){
         const ang = Math.atan2(headSeg.b.y-headSeg.a.y, headSeg.b.x-headSeg.a.x);
         drawThermalHead(headSeg.b, ang, Math.max(5, c.beamThickness*.72), alpha*.96, b.index);
       }
+    }
+
+    // Spark showers and smoke from the burning wall points. Smoke keeps rising while the metal cools.
+    for(const w of wallPoints){
+      const hp = worldToScreen(w.pt.x, w.pt.y);
+      const ss = hp.s;
+      const side = w.pt.x < WORLD_W/2 ? 1 : -1;
+      ctx.save();
+      ctx.lineCap = "round";
+      if(w.live){
+        // Contact flare: the point where the beam is burning in.
+        const fl = (.75 + .25*Math.sin(time*38 + w.seed))*w.heat;
+        const spikeV = 30*ss*fl, spikeH = 13*ss*fl;
+        ctx.globalAlpha = fl;
+        let fg = ctx.createLinearGradient(hp.x, hp.y - spikeV, hp.x, hp.y + spikeV);
+        fg.addColorStop(0, "rgba(255,241,168,0)"); fg.addColorStop(.5, hot.white); fg.addColorStop(1, "rgba(255,241,168,0)");
+        ctx.fillStyle = fg;
+        ctx.fillRect(hp.x - 1.4*ss, hp.y - spikeV, 2.8*ss, spikeV*2);
+        fg = ctx.createLinearGradient(hp.x - spikeH, hp.y, hp.x + spikeH, hp.y);
+        fg.addColorStop(0, "rgba(255,241,168,0)"); fg.addColorStop(.5, hot.white); fg.addColorStop(1, "rgba(255,241,168,0)");
+        ctx.fillStyle = fg;
+        ctx.fillRect(hp.x - spikeH, hp.y - 1.2*ss, spikeH*2, 2.4*ss);
+        ctx.fillStyle = hot.white;
+        ctx.beginPath();ctx.arc(hp.x, hp.y, 4.2*ss*fl, 0, Math.PI*2);ctx.fill();
+        const n = heavy ? 10 : 5;
+        for(let k=0;k<n;k++){
+          const ph = (time*3.3 + k/n + w.seed*.13) % 1;
+          const spread = Math.sin(k*78.233 + w.seed*1.7);
+          const vx = side*(.55 + .45*Math.abs(spread));
+          const vy = -.75 + spread*.5;
+          const sx = hp.x + vx*ph*38*ss;
+          const sy = hp.y + vy*ph*38*ss + ph*ph*34*ss;
+          const tx = vx, ty = vy + ph*1.8;
+          const tl2 = Math.hypot(tx, ty) || 1;
+          ctx.globalAlpha = w.heat*(1 - ph);
+          ctx.strokeStyle = k % 3 === 0 ? hot.white : (k % 3 === 1 ? hot.yellow : hot.orange);
+          ctx.lineWidth = (2.3 - ph*1.1)*ss;
+          ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx - tx/tl2*9*ss, sy - ty/tl2*9*ss);ctx.stroke();
+        }
+      }
+      if(heavy){
+        const smoke = getPrismSmokeSprite();
+        const puffs = 8;
+        const amount = w.live ? .55 + .45*w.heat : Math.min(1, w.heat*1.6);
+        for(let k=0;k<puffs;k++){
+          const ph = (time*.38 + k/puffs + w.seed*.21) % 1;
+          const px = hp.x + side*(8 + ph*22)*ss + Math.sin(ph*4.5 + k*2.3)*7*ss;
+          const py = hp.y - 4*ss - ph*72*ss;
+          const pr = (9 + ph*26)*ss;
+          ctx.globalAlpha = amount*.75*(1 - ph)*Math.min(1, ph*5);
+          ctx.drawImage(smoke, px - pr, py - pr, pr*2, pr*2);
+        }
+      }
+      ctx.restore();
+    }
+
+    // Core cools down with a short plume of smoke after the beams shut off.
+    if(heavy && !editorMode && coreHeat > .05 && !tl.beams.some(b => b.active)){
+      ctx.save();
+      for(let k=0;k<4;k++){
+        const ph = (time*.5 + k/4) % 1;
+        const pr = (9 + ph*22)*s;
+        ctx.globalAlpha = coreHeat*.6*(1 - ph)*Math.min(1, ph*5);
+        ctx.drawImage(getPrismSmokeSprite(), p.x + Math.sin(ph*4 + k)*7*s - pr, p.y - 14*s - ph*56*s - pr, pr*2, pr*2);
+      }
+      ctx.restore();
+    }
+    // Heat bloom around the core while it fires and cools.
+    if(!editorMode && coreHeat > .02){
+      ctx.save();
+      const R = (30 + 18*coreHeat)*s;
+      const g = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, R);
+      g.addColorStop(0, `rgba(255,120,20,${.38*coreHeat})`);
+      g.addColorStop(1, "rgba(255,47,23,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();ctx.arc(p.x, p.y, R, 0, Math.PI*2);ctx.fill();
+      ctx.restore();
     }
 
     // Prism core body: dark prism with a hot molten eye.
