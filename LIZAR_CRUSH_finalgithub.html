@@ -12678,6 +12678,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const anim = resolveModDeathAnimation(mod, deathCulprit);
       if(mod || anim) return modDeathAnimationDuration(anim, mod, deathCulprit);
     }
+    if(deathCulprit){
+      if(type === "electric" && deathCulprit.type === "slider") return 1.0;
+      if(type === "laser" && deathCulprit.type === "beam") return .95;
+      if(type === "fan" && deathCulprit.type === "sideSweeper") return 1.0;
+    }
+    if(type === "gate") return 1.0;
     if(type === "ink") return 1.95;
     if(type === "electric") return .82;
     if(type === "laser") return .72;
@@ -16048,7 +16054,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function spawnInkDeathParticles(){const rect = playerRect();for(let i=0,n=perfParticleCount(70);i<n;i++){addAshParticle({kind:"ink",x: rect.x + Math.random()*rect.w,y: rect.y + rect.h*(.2 + Math.random()*.8),vx:(Math.random()-.5)*90,vy:-20 - Math.random()*90,life:.35 + Math.random()*.5,size:2 + Math.random()*6,ink:1});}}
   function spawnDeathParticles(type){
     // Prism Pulse draws its own sparks, exit spray and smoke in its melt death.
-    if(type === "prismPulse") return;
+    if(type === "prismPulse" || type === "gate") return;
+    if(deathCulprit && ((type === "electric" && deathCulprit.type === "slider") || (type === "laser" && deathCulprit.type === "beam") || (type === "fan" && deathCulprit.type === "sideSweeper"))) return;
     const rect = playerRect();
     if(type === "ink"){spawnInkDeathParticles();spawnInkDeathParticles();return;}
     if(type === "shockMine"){
@@ -16399,7 +16406,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         }
         continue;
       }
-      if(o.type === "slider"){const r = sliderDamageRect(o, time);if(rectsOverlap(p,r)) return startDeath(voidseamEscape.active ? "The glitch link erased your route." : "The electric link burned through you.", "electric", null, o);}
+      if(o.type === "slider"){const r = sliderDamageRect(o, time);if(rectsOverlap(p,r)) return startDeath(voidseamEscape.active ? "The glitch link erased your route." : "The electric link burned through you.", "electric", {x:r.x + r.w/2, y:o.y}, o);}
       if(o.type === "beam"){if(isBeamActive(o)){const hit = beamHitThickness(o);const r = {x:o.x ?? 0, y:o.y - hit/2, w:o.w ?? WORLD_W, h:hit};if(rectsOverlap(p,r)){const cutY = Math.max(cur.y + 4, Math.min(o.y, cur.y + cur.h - 4));return startDeath("The pulse beam cut through you.", "laser", {worldY:cutY, beamY:o.y}, o);}}}
       if(o.type === "prismPulse"){
         const segs = prismPulseActiveSegments(o, time);
@@ -17097,226 +17104,318 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
 
 
-  function drawBeamEmitter(x,y,dir,active,heat=0){
-    const p = worldToScreen(x,y);
+  // LASER_BEAM_V2 emitter: heavy wall unit with a lens. Charges before firing, kicks back on the
+  // shot and again on shutdown, glows and smokes while it cools. dir = +1 fires right, -1 left.
+  function drawBeamEmitter(x, y, dir, st){
+    const p = worldToScreen(x, y);
     const s = p.s;
-    const w = 28*s;
-    const h = 42*s;
-    const hot = active ? 1 : Math.max(.45, heat);
+    const C = TRAP_SPARK_PALETTES.crimson;
+    const main = trapMain(), accent = trapAccent();
+    const w = 30*s, h = 44*s;
+    const kick = (st.fireKick*-7 + st.offKick*4)*s*dir;
     ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.fillStyle = "rgba(0,0,0,.16)";
-    roundRect(ctx, -w/2 - 3*s, -h/2 - 3*s, w + 6*s, h + 6*s, 8*s);ctx.fill();
-
-    // Generator body stays solid. Only the laser beam turns off.
-    ctx.fillStyle = trapMain();
-    roundRect(ctx, -w/2, -h/2, w, h, 6*s);ctx.fill();
-    ctx.strokeStyle = rgbaHex(trapAccent(), active ? .40 : .24);
-    ctx.lineWidth = 1.45*s;
+    ctx.translate(p.x + kick, p.y);
+    // Wall plate and body.
+    ctx.fillStyle = main;
+    roundRect(ctx, -w/2, -h/2, w, h, 7*s);ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, .24);
+    ctx.lineWidth = 1.3*s;
     roundRect(ctx, -w/2 + 5*s, -h/2 + 5*s, w - 10*s, h - 10*s, 4*s);ctx.stroke();
-
-    ctx.fillStyle = trapAccent();
-    ctx.beginPath();
-    ctx.moveTo(dir > 0 ? w*.28 : -w*.28, -5*s);
-    ctx.lineTo(dir > 0 ? w*.48 : -w*.48, 0);
-    ctx.lineTo(dir > 0 ? w*.28 : -w*.28, 5*s);
-    ctx.closePath();
-    ctx.fill();
-
-    const mouthX = dir > 0 ? w*.50 : -w*.50;
-    ctx.save();
-    ctx.shadowColor = "rgba(255,92,12,.95)";
-    ctx.shadowBlur = (active ? 13 : 8) * s;
-    const glow = ctx.createRadialGradient(mouthX,0,0,mouthX,0,22*s);
-    glow.addColorStop(0, `rgba(255,205,88,${.34 + hot*.28})`);
-    glow.addColorStop(.35, `rgba(255,92,12,${.18 + hot*.20})`);
-    glow.addColorStop(1, "rgba(255,92,12,0)");
-    ctx.fillStyle = glow;
-    ctx.beginPath();ctx.arc(mouthX,0,22*s,0,Math.PI*2);ctx.fill();
-    ctx.restore();
-
-    const sparkCount = active ? 13 : 8;
-    for(let i=0;i<sparkCount;i++){
-      const burst = ((time*(active ? 8.5 : 4.8) + i*.37) % 1);
-      const sy = (Math.sin(time*17+i*1.9)*12 + (i-sparkCount/2)*1.7) * s;
-      const len = (5 + burst*15 + hot*7 + Math.sin(time*23+i)*2) * s;
-      const kick = Math.sin(time*21+i*2.1) * (3 + burst*5) * s;
-      const colors = ["#fff1a8","#ffb12a","#ff5a12","#d91f00"];
-      ctx.strokeStyle = colors[i % colors.length];
-      ctx.shadowColor = "#ff5a12";
-      ctx.shadowBlur = (active ? 7 : 4) * s;
-      ctx.lineWidth = Math.max(1.1, (1.05 + (1-burst)*1.15)*s);
-      ctx.beginPath();
-      ctx.moveTo(mouthX, sy*.45);
-      ctx.lineTo(mouthX + dir*len, sy + kick);
-      ctx.stroke();
-
-      if(i%3 === 0){
-        ctx.fillStyle = colors[(i+1) % colors.length];
-        ctx.beginPath();
-        ctx.arc(mouthX + dir*len*.78, sy + kick*.8, (1.4 + burst*1.4)*s, 0, Math.PI*2);
-        ctx.fill();
-      }
+    // Cooling fins glow with stored heat.
+    for(let f=0;f<3;f++){
+      const fy = -h/2 + 9*s + f*9*s;
+      ctx.fillStyle = st.heat > .05 ? `rgba(255,${Math.round(60 + 80*st.heat)},40,${.25 + .7*st.heat})` : rgbaHex(accent, .18);
+      ctx.fillRect(-w/2 + 6*s, fy, w*.42, 2.2*s);
     }
-    ctx.shadowBlur = 0;
+    // Barrel and lens.
+    const bx = dir*w*.5;
+    ctx.fillStyle = main;
+    roundRect(ctx, dir > 0 ? w*.32 : -w*.32 - 12*s, -8*s, 12*s, 16*s, 3*s);ctx.fill();
+    const lx = bx + dir*7*s;
+    ctx.fillStyle = "#1a0006";
+    ctx.beginPath();ctx.ellipse(lx, 0, 3.2*s, 7*s, 0, 0, Math.PI*2);ctx.fill();
+    const lensK = Math.max(st.charge, st.active ? 1 : 0, st.heat*.6);
+    if(lensK > .02){
+      const lg = ctx.createRadialGradient(lx, 0, 0, lx, 0, 7*s);
+      lg.addColorStop(0, C[0]);
+      lg.addColorStop(.4, C[1]);
+      lg.addColorStop(1, C[2]);
+      ctx.globalAlpha = lensK;
+      ctx.fillStyle = lg;
+      ctx.beginPath();ctx.ellipse(lx, 0, 2.6*s, 6*s*(.5 + .5*lensK), 0, 0, Math.PI*2);ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    // Charging: energy sucked into the lens.
+    if(st.charge > 0){
+      ctx.lineCap = "round";
+      for(let k=0;k<7;k++){
+        const ph = (time*3 + k/7) % 1;
+        const a = (k/7 - .5)*2.2 + (dir > 0 ? 0 : Math.PI);
+        const d0 = (26 - ph*20)*s, d1 = d0 + 5*s*(1 - ph);
+        ctx.globalAlpha = st.charge*ph;
+        ctx.strokeStyle = k % 2 ? C[1] : C[2];
+        ctx.lineWidth = 1.6*s*ph;
+        ctx.beginPath();ctx.moveTo(lx + Math.cos(a)*d0, Math.sin(a)*d0);ctx.lineTo(lx + Math.cos(a)*d1, Math.sin(a)*d1);ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    // Muzzle flash on the shot.
+    if(st.fireKick > .05){
+      const f = st.fireKick;
+      ctx.save();
+      ctx.translate(lx, 0);
+      ctx.rotate(dir > 0 ? 0 : Math.PI);
+      ctx.beginPath();
+      for(let i=0;i<14;i++){
+        const a = i/14*Math.PI*2;
+        const fwd = Math.max(0, Math.cos(a));
+        const r = (i % 2 ? 3 : (6 + 10*trapHash(i + Math.floor(time*30)) + fwd*14))*s*(.5 + f);
+        i ? ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r) : ctx.moveTo(Math.cos(a)*r, Math.sin(a)*r);
+      }
+      ctx.closePath();
+      ctx.globalAlpha = f;
+      ctx.fillStyle = C[2]; ctx.fill();
+      ctx.fillStyle = C[0];
+      ctx.beginPath();ctx.arc(0, 0, 3.5*s*f + 1, 0, Math.PI*2);ctx.fill();
+      ctx.restore();
+    }
     ctx.restore();
   }
 
   function drawSlider(o){
+    // ELECTRIC_LINK_V2: two moving Tesla nodes with a live, crackling, forking arc between them.
+    // The arc lags a touch behind the motion, nodes jolt when the link reverses, sparks drop off the
+    // arc under gravity. Visual only: collision is still sliderDamageRect.
     const x = wavePosition(o, time);
     const p = worldToScreen(x, o.y);
     const start = worldToScreen(o.x1, o.y);
     const end = worldToScreen(o.x2, o.y);
     const s = p.s;
+    const editorMode = state === "editor";
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const E = TRAP_SPARK_PALETTES.electric;
+    const main = trapMain(), accent = trapAccent();
     const span = o.len * s;
     const poleR = Math.max(8*s, o.thick * .56 * s);
-    const leftX = p.x - span/2 + poleR;
-    const rightX = p.x + span/2 - poleR;
+    const tick = Math.floor(time*30);
+    const seed = (o.phase || 0)*13.7 + (o.x1 || 0)*.11;
+    if(!editorMode) prismFxBeginFrame(o);
+    // Velocity (world units/s) for lag and for the reversal jolt.
+    const v = (wavePosition(o, time) - wavePosition(o, time - .03))/.03;
+    const vPrev = (wavePosition(o, time - .06) - wavePosition(o, time - .09))/.03;
+    const reversal = Math.sign(v) !== Math.sign(vPrev) ? 1 : 0;
+    const jolt = (trapHash(tick*1.7 + seed) - .5)*(1.2 + reversal*3)*s;
+    const leftX = p.x - span/2 + poleR, rightX = p.x + span/2 - poleR;
+    const cy = p.y + jolt*.4;
 
     ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,.12)";
-    ctx.lineWidth = 2*s;
+    // Rail: one clean line with end stops.
+    ctx.strokeStyle = rgbaHex(main, .14);
+    ctx.lineWidth = 1.6*s;
     ctx.beginPath();ctx.moveTo(start.x, start.y);ctx.lineTo(end.x, end.y);ctx.stroke();
-    ctx.fillStyle = "rgba(0,0,0,.08)";
-    ctx.beginPath();ctx.arc(start.x, start.y, 2.2*s, 0, Math.PI*2);ctx.fill();
-    ctx.beginPath();ctx.arc(end.x, end.y, 2.2*s, 0, Math.PI*2);ctx.fill();
-
-    for(const cx of [leftX, rightX]){
-      ctx.fillStyle = "rgba(0,0,0,.16)";
-      ctx.beginPath();ctx.arc(cx, p.y, poleR+2*s, 0, Math.PI*2);ctx.fill();
-      ctx.fillStyle = trapMain();
-      ctx.beginPath();ctx.arc(cx, p.y, poleR, 0, Math.PI*2);ctx.fill();
-      ctx.strokeStyle = rgbaHex(trapAccent(), .28);
-      ctx.lineWidth = 1.4*s;
-      ctx.beginPath();ctx.arc(cx, p.y, poleR*.62, 0, Math.PI*2);ctx.stroke();
-      ctx.fillStyle = trapAccent();
-      ctx.beginPath();ctx.arc(cx, p.y, poleR*.20, 0, Math.PI*2);ctx.fill();
-    }
-
-    ctx.lineCap = "round";
-    ctx.strokeStyle = "rgba(0,0,0,.14)";
-    ctx.lineWidth = Math.max(7*s, o.thick*.62*s);
+    ctx.strokeStyle = rgbaHex(main, .3);
+    ctx.lineWidth = 2*s;
     ctx.beginPath();
-    ctx.moveTo(leftX + poleR*.15, p.y);
-    for(let i=1;i<=9;i++){
-      const t = i/9;
-      const px = leftX + poleR*.15 + (rightX - leftX - poleR*.3) * t;
-      const py = p.y + Math.sin(time*14 + i*1.35 + o.phase) * (2.6*s + (i%2)*1.4*s);
-      ctx.lineTo(px, py);
-    }
-    ctx.lineTo(rightX - poleR*.15, p.y);
+    for(const ex of [start.x, end.x]){ctx.moveTo(ex, start.y - 5*s); ctx.lineTo(ex, start.y + 5*s);}
     ctx.stroke();
 
-    ctx.strokeStyle = trapMain();
-    ctx.lineWidth = Math.max(4*s, o.thick*.34*s);
-    ctx.beginPath();
-    ctx.moveTo(leftX + poleR*.15, p.y);
-    for(let i=1;i<=9;i++){
-      const t = i/9;
-      const px = leftX + poleR*.15 + (rightX - leftX - poleR*.3) * t;
-      const py = p.y + Math.sin(time*14 + i*1.35 + o.phase) * (2.6*s + (i%2)*1.4*s);
-      ctx.lineTo(px, py);
+    // The arc: three forking bolts, re-rolled every frame-tick, bowing against the motion.
+    const lag = Math.max(-1, Math.min(1, -v/220))*6*s;
+    const ax0 = leftX + poleR*.55, ax1 = rightX - poleR*.55;
+    const amp = Math.max(4*s, o.thick*.55*s);
+    const boltW = Math.max(3*s, o.thick*.22*s);
+    const midX = (ax0 + ax1)/2;
+    for(let b=0;b<3;b++){
+      const bseed = seed + b*31.3 + tick*3.1;
+      const pts = trapBolt(ax0, cy, ax1, cy, amp*(b ? .8 : 1.1)*(.8 + .5*trapHash(bseed + 1)), 12, bseed);
+      for(const q of pts){q[0] += lag*Math.sin((q[0] - ax0)/(ax1 - ax0)*Math.PI);}
+      trapDrawBolt(pts, boltW*(b ? .7 : 1), E, b ? .7 : 1);
+      // A fork snapping off the main bolt.
+      if(b === 0){
+        const k = 2 + Math.floor(trapHash(bseed)*6);
+        const fx = pts[k][0], fy = pts[k][1];
+        const fa = (trapHash(bseed + 4) - .5)*2.4 + (trapHash(bseed + 9) > .5 ? -Math.PI/2 : Math.PI/2);
+        const fl = (8 + trapHash(bseed + 2)*14)*s;
+        trapDrawBolt(trapBolt(fx, fy, fx + Math.cos(fa)*fl, fy + Math.sin(fa)*fl, 3*s, 4, bseed + 7), boltW*.55, E, .8);
+      }
     }
-    ctx.lineTo(rightX - poleR*.15, p.y);
-    ctx.stroke();
-
-    ctx.strokeStyle = rgbaHex(trapAccent(), .92);
-    ctx.lineWidth = Math.max(1.1*s, o.thick*.07*s);
-    ctx.beginPath();
-    ctx.moveTo(leftX + poleR*.15, p.y);
-    for(let i=1;i<=9;i++){
-      const t = i/9;
-      const px = leftX + poleR*.15 + (rightX - leftX - poleR*.3) * t;
-      const py = p.y + Math.sin(time*14 + i*1.35 + o.phase) * (2.6*s + (i%2)*1.4*s);
-      ctx.lineTo(px, py);
+    // Sparks shaken off the arc.
+    if(!editorMode){
+      const st = prismSmokeFor(o);
+      const want = (heavy ? 22 : 10)*st.dt;
+      const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+      for(let i=0;i<n;i++){
+        const u = Math.random();
+        const wx = x - o.len/2 + poleR/s + (o.len - 2*poleR/s)*u;
+        trapSparkBurst(o, wx, o.y + (Math.random() - .5)*o.thick*.4, 1, "electric", .55);
+      }
+      prismSparksUpdateDraw(o);
     }
-    ctx.lineTo(rightX - poleR*.15, p.y);
-    ctx.stroke();
 
-    for(let i=0;i<4;i++){
-      const sparkT = ((time*1.8) + i*.23 + o.phase*.1) % 1;
-      const sx = leftX + poleR*.25 + (rightX-leftX-poleR*.5) * sparkT;
-      const sy = p.y + Math.sin(time*14 + (sparkT*9)*1.35 + o.phase) * 2.2*s;
-      ctx.strokeStyle = rgbaHex(trapAccent(), .72);
-      ctx.lineWidth = 1.1*s;
-      ctx.beginPath();ctx.moveTo(sx-2*s, sy-2*s);ctx.lineTo(sx+2*s, sy+2*s);ctx.stroke();
+    // Tesla nodes: coil body, glowing core window, little arcs crawling on the rim.
+    const pulse = .6 + .4*Math.sin(time*23 + seed);
+    for(const [i, nx] of [[0, leftX], [1, rightX]]){
+      const jx = nx + (i ? -1 : 1)*jolt;
+      ctx.fillStyle = main;
+      ctx.beginPath();ctx.arc(jx, cy, poleR, 0, Math.PI*2);ctx.fill();
+      ctx.strokeStyle = rgbaHex(accent, .3);
+      ctx.lineWidth = 1.2*s;
+      for(let r=0;r<3;r++){ctx.beginPath();ctx.arc(jx, cy, poleR*(.5 + r*.14), 0, Math.PI*2);ctx.stroke();}
+      const cg = ctx.createRadialGradient(jx, cy, 0, jx, cy, poleR*.48);
+      cg.addColorStop(0, E[0]);
+      cg.addColorStop(.45, E[1]);
+      cg.addColorStop(1, E[2]);
+      ctx.globalAlpha = .65 + .35*pulse;
+      ctx.fillStyle = cg;
+      ctx.beginPath();ctx.arc(jx, cy, poleR*.42, 0, Math.PI*2);ctx.fill();
+      ctx.globalAlpha = 1;
+      // Rim crawlers.
+      for(let k=0;k<2;k++){
+        const a0 = trapHash(tick*2.3 + i*5 + k*11 + seed)*Math.PI*2;
+        const a1 = a0 + .7 + trapHash(tick + k)*.8;
+        const pts = trapBolt(jx + Math.cos(a0)*poleR*1.02, cy + Math.sin(a0)*poleR*1.02, jx + Math.cos(a1)*poleR*1.02, cy + Math.sin(a1)*poleR*1.02, 3*s, 4, tick + k*3 + i);
+        trapDrawBolt(pts, 1.1*s, E, .8);
+      }
     }
     ctx.restore();
   }
   function drawBeam(o){
+    // LASER_BEAM_V2: crimson volumetric laser fired from both emitters, meeting in the middle.
+    // Charge-up, recoil, sparks at the mouths, crackle and heat shimmer while live, and the
+    // emitters stay hot, glow and smoke after it shuts off. Visual only: isBeamActive + beamHitThickness.
     const info = beamCycleInfo(o);
     const active = info.active;
     const bx = o.x ?? 0;
     const bw = o.w ?? WORLD_W;
-    const p1 = worldToScreen(bx,o.y);
-    const p2 = worldToScreen(bx + bw,o.y);
+    const p1 = worldToScreen(bx, o.y);
+    const p2 = worldToScreen(bx + bw, o.y);
     const s = p1.s;
-    const core = beamHitThickness(o) * s;
-    const innerL = p1.x + 16*s;
-    const innerR = p2.x - 16*s;
-    const beamW = innerR - innerL;
-    const enter = active ? easeOutCubic(info.onT) : 1;
-    const melt = active ? 0 : info.meltT;
-    const heat = active ? 1 : Math.max(0, 1 - melt);
+    const editorMode = state === "editor";
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const C = TRAP_SPARK_PALETTES.crimson;
+    if(!editorMode) prismFxBeginFrame(o);
+    const hw = Math.max(2.6*s, beamHitThickness(o)/2*s*1.35);
+    const innerL = p1.x + 24*s, innerR = p2.x - 24*s;
+    const mid = (innerL + innerR)/2;
+    const disabled = obstacleDisabledByPower(o);
+    const offFor = active ? 0 : info.local - o.on;
+    const untilOn = active ? 0 : info.cycle - info.local;
+    const charge = !active && !disabled && untilOn < .5 ? 1 - untilOn/.5 : 0;
+    const fireKick = active && info.local < .22 ? Math.pow(1 - info.local/.22, 2) : 0;
+    const offKick = !active && offFor < .25 ? Math.pow(1 - offFor/.25, 2) : 0;
+    const heat = active ? 1 : Math.max(0, 1 - offFor/1.6);
+    const tick = Math.floor(time*30);
+    const seed = (o.phase || 0)*9.1 + o.y*.013;
+    const est = {active, charge, fireKick, offKick, heat};
     ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,.08)";
-    ctx.lineWidth = 1*s;
-    ctx.beginPath();ctx.moveTo(innerL,p1.y - 9*s);ctx.lineTo(innerR,p2.y - 9*s);ctx.stroke();
-    ctx.beginPath();ctx.moveTo(innerL,p1.y + 9*s);ctx.lineTo(innerR,p2.y + 9*s);ctx.stroke();
+    ctx.lineCap = "round";
     if(active){
-      const mid = (innerL + innerR) / 2;
-      const half = beamW * enter * .5;
-      const startX = mid - half;
-      const endX = mid + half;
-      ctx.lineCap = "round";
-      ctx.strokeStyle = "rgba(0,0,0,.14)";
-      ctx.lineWidth = Math.max(5*s, core + 4*s);
-      ctx.beginPath();ctx.moveTo(startX,p1.y);ctx.lineTo(endX,p2.y);ctx.stroke();
-      ctx.strokeStyle = trapMain();
-      ctx.lineWidth = Math.max(3.2*s, core*.74);
-      ctx.beginPath();ctx.moveTo(startX,p1.y);ctx.lineTo(endX,p2.y);ctx.stroke();
-      ctx.strokeStyle = rgbaHex(trapAccent(), .94);
-      ctx.lineWidth = Math.max(1.1, core*.13);
-      ctx.beginPath();ctx.moveTo(startX,p1.y);ctx.lineTo(endX,p2.y);ctx.stroke();
-      for(let i=0;i<5;i++){
-        const travel = ((time*2.3 + i*.19 + o.phase*.2) % 1);
-        const x = startX + (endX-startX) * travel;
-        const pulseW = (10 + Math.sin(time*8+i)*2)*s;
-        ctx.strokeStyle = rgbaHex(trapAccent(), .72);
-        ctx.lineWidth = 1.35*s;
-        ctx.beginPath();ctx.moveTo(x-pulseW, p1.y);ctx.lineTo(x+pulseW, p1.y);ctx.stroke();
+      // Both halves race in from the emitters and meet in the middle.
+      const enter = easeOutCubic(info.onT);
+      const lEnd = innerL + (mid - innerL)*enter, rStart = innerR - (innerR - mid)*enter;
+      const wob = 1 + .08*Math.sin(time*47 + seed) + .05*Math.sin(time*83);
+      const bh = hw*wob*(1 + fireKick*.8);
+      const drawHalf = (xa, xb, flowDir) => {
+        if(Math.abs(xb - xa) < 1) return;
+        ctx.globalAlpha = .12;
+        ctx.strokeStyle = C[2];
+        ctx.lineWidth = bh*7;
+        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
+        ctx.globalAlpha = .3;
+        ctx.lineWidth = bh*3.8;
+        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
+        const g = ctx.createLinearGradient(0, p1.y - bh, 0, p1.y + bh);
+        g.addColorStop(0, "#4a0010"); g.addColorStop(.12, "#a3001f"); g.addColorStop(.3, C[2]);
+        g.addColorStop(.44, C[1]); g.addColorStop(.5, C[0]); g.addColorStop(.56, C[1]);
+        g.addColorStop(.7, C[2]); g.addColorStop(.88, "#a3001f"); g.addColorStop(1, "#4a0010");
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = g;
+        ctx.lineCap = "butt";
+        ctx.lineWidth = bh*2;
+        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
+        // Power pulses streaming out of the emitter.
+        ctx.lineCap = "round";
+        ctx.setLineDash([bh*2.6, bh*3.4]);
+        ctx.lineDashOffset = -time*700*s*flowDir;
+        ctx.strokeStyle = C[0];
+        ctx.globalAlpha = .75;
+        ctx.lineWidth = bh*.6;
+        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
+        ctx.setLineDash([]);
+      };
+      drawHalf(innerL, lEnd, 1);
+      drawHalf(innerR, rStart, 1);
+      // Crackling filament over the whole live length.
+      const pts = trapBolt(innerL, p1.y, enter >= 1 ? innerR : lEnd, p1.y, bh*.7, 18, seed + tick*2.3);
+      ctx.save(); ctx.lineCap = "round"; trapStrokePts(pts, Math.max(.8, bh*.2), C[0], .9); ctx.restore();
+      // Heat shimmer above the beam.
+      if(heavy){
+        for(let k=0;k<2;k++){
+          ctx.globalAlpha = .18;
+          ctx.strokeStyle = C[1];
+          ctx.lineWidth = 1*s;
+          ctx.beginPath();
+          for(let i=0;i<=16;i++){
+            const xx = innerL + (innerR - innerL)*i/16;
+            const yy = p1.y - bh*(1.8 + k*1.2) + Math.sin(i*1.3 + time*9 + k*2)*2.2*s;
+            i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy);
+          }
+          ctx.stroke();
+        }
       }
-    } else if(melt < 1){
-      ctx.lineCap = "round";
-      const pieces = 11;
-      for(let i=0;i<pieces;i++){
-        const a = i/pieces;
-        const b = (i+.62)/pieces;
-        const drift = Math.sin(time*15+i) * melt * 5*s;
-        ctx.globalAlpha = (1-melt) * (.78 - (i%3)*.08);
-        ctx.strokeStyle = i%2 ? rgbaHex(trapAccent(), .78) : trapMain();
-        ctx.lineWidth = Math.max(1*s, core * (.52 - melt*.28));
+      // Clash flash where the halves meet.
+      if(enter < 1 || info.local < .14){
+        const f = 1 - Math.min(1, info.local/.14);
+        ctx.globalAlpha = f;
+        ctx.fillStyle = C[0];
         ctx.beginPath();
-        ctx.moveTo(innerL + beamW*a, p1.y + drift);
-        ctx.lineTo(innerL + beamW*b, p1.y - drift*.4);
-        ctx.stroke();
+        for(let i=0;i<16;i++){
+          const a = i/16*Math.PI*2;
+          const r = (i % 2 ? 3 : 8 + 14*trapHash(i + tick))*s;
+          i ? ctx.lineTo(mid + Math.cos(a)*r, p1.y + Math.sin(a)*r*.6) : ctx.moveTo(mid + Math.cos(a)*r, p1.y + Math.sin(a)*r*.6);
+        }
+        ctx.closePath();ctx.fill();
       }
       ctx.globalAlpha = 1;
-    } else {
-      ctx.setLineDash([10*s,8*s]);
-      ctx.strokeStyle = rgbaHex(trapIdle(), .55);
-      ctx.lineWidth = Math.max(1.5*s, core*.36);
-      ctx.beginPath();ctx.moveTo(innerL,p1.y);ctx.lineTo(innerR,p2.y);ctx.stroke();
-      ctx.setLineDash([]);
-      for(let i=0;i<4;i++){
-        const x = innerL + beamW*((i+.5)/4);
-        ctx.fillStyle = rgbaHex(trapIdle(), .22);
-        ctx.beginPath();ctx.arc(x, p1.y, 1.7*s, 0, Math.PI*2);ctx.fill();
+      // Sparks spitting up and out of both mouths.
+      if(!editorMode){
+        const want = (heavy ? 26 : 12)*prismSmokeFor(o).dt;
+        const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+        for(let i=0;i<n;i++){
+          const left = Math.random() < .5;
+          trapSparkBurst(o, left ? bx + 24 : bx + bw - 24, o.y, 1, "crimson", .7, left ? .6 : -.6, -.7);
+        }
       }
+    } else {
+      const melt = info.meltT;
+      if(!disabled && melt < 1){
+        // Shutdown: the beam collapses to a white-hot thread that breaks apart.
+        const pieces = 12;
+        for(let i=0;i<pieces;i++){
+          const a = i/pieces, b = (i + .7 - melt*.4)/pieces;
+          ctx.globalAlpha = (1 - melt)*(.9 - (i % 3)*.15);
+          ctx.strokeStyle = i % 2 ? C[1] : C[0];
+          ctx.lineWidth = Math.max(1, hw*1.2*(1 - melt));
+          const dy = Math.sin(i*2.1 + time*12)*melt*4*s;
+          ctx.beginPath();ctx.moveTo(innerL + (innerR - innerL)*a, p1.y + dy);ctx.lineTo(innerL + (innerR - innerL)*b, p1.y - dy*.5);ctx.stroke();
+        }
+      }
+      // Idle guide: a faint thin line, flickering red while charging.
+      ctx.setLineDash([8*s, 7*s]);
+      const flick = charge > 0 ? (Math.floor(time*(10 + charge*20)) % 2 ? 1 : .35) : 1;
+      ctx.globalAlpha = charge > 0 ? (.3 + .6*charge)*flick : .35;
+      ctx.strokeStyle = charge > 0 ? C[2] : trapIdle();
+      ctx.lineWidth = Math.max(1.2*s, hw*.5*(1 + charge));
+      ctx.beginPath();ctx.moveTo(innerL, p1.y);ctx.lineTo(innerR, p1.y);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      // Hot emitters keep smoking while they cool.
+      if(!editorMode && heat > .25) for(const ex of [bx + 14, bx + bw - 14]) prismSmokeEmitRate(o, ex, o.y - 18, 0, 2.5*heat*(heavy ? 1 : .45), heat*.6);
     }
     ctx.restore();
-    drawBeamEmitter(bx,o.y,1,active,heat);
-    drawBeamEmitter(bx + bw,o.y,-1,active,heat);
+    if(!editorMode){prismSmokeUpdateDraw(o); prismSparksUpdateDraw(o);}
+    drawBeamEmitter(bx, o.y, 1, est);
+    drawBeamEmitter(bx + bw, o.y, -1, est);
   }
   function drawOrbitSaw(o){
     // ORBIT_SAW_POLISH_V1: visual only. Collision still uses orbitSawState + o.sawR.
@@ -17634,116 +17733,216 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.restore();
   }
   function drawClamp(o){
+    // ENERGY_GATE_V2: two plasma reactors fire turbulent green plasma jets at each other. When the
+    // jets meet they clash and spray. Reactors charge up before closing and vent after. No text, no
+    // lane box. Visual only: collision is still clampBeamData (blocks + segments).
     const info = clampBeamData(o);
     const blocks = info.blocks;
-    const p = worldToScreen(0, o.y);
-    const s = p.s;
+    const s = worldToScreen(0, o.y).s;
+    const editorMode = state === "editor";
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const P = TRAP_SPARK_PALETTES.plasma;
+    const main = trapMain(), accent = trapAccent();
     const leftX = worldToScreen(blocks.leftX, o.y).x;
     const rightX = worldToScreen(blocks.rightX, o.y).x;
-    const size = blocks.size * s;
+    const size = blocks.size*s;
     const top = worldToScreen(0, blocks.y).y;
     const cy = worldToScreen(0, o.y).y;
     const innerLeft = worldToScreen(info.innerLeft, o.y).x;
     const innerRight = worldToScreen(info.innerRight, o.y).x;
-    const leftSegW = info.leftSeg.w * s;
-    const rightSegW = info.rightSeg.w * s;
-    const beamH = info.thickness * s;
+    const leftEnd = innerLeft + info.leftSeg.w*s;
+    const rightStart = innerRight - info.rightSeg.w*s;
+    const beamH = info.thickness*s;
+    const tick = Math.floor(time*30);
+    const seed = (o.phase || 0)*7.7 + o.y*.01;
+    if(!editorMode) prismFxBeginFrame(o);
+    // Charge just before the jets fire: the open phase's last 0.45s.
+    const cycle = o.open + o.close;
+    const local = ((time + o.phase) % cycle + cycle) % cycle;
+    const disabled = obstacleDisabledByPower(o);
+    const charge = !disabled && local < o.open && o.open - local < .45 ? 1 - (o.open - local)/.45 : 0;
+    const live = info.progress > .08;
+    const clash = live && rightStart - leftEnd < beamH*.6;
+    const energy = Math.max(charge, info.amount);
 
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,.03)";
-    roundRect(ctx, worldToScreen(0,o.y).x, cy - (o.h*s)/2, WORLD_W*s, o.h*s, 20*s);ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,.05)";
-    ctx.lineWidth = 1*s;
-    roundRect(ctx, worldToScreen(0,o.y).x, cy - (o.h*s)/2, WORLD_W*s, o.h*s, 20*s);ctx.stroke();
-
-    const drawCore = (x)=>{
-      ctx.fillStyle = "rgba(0,0,0,.16)";
-      roundRect(ctx, x-3*s, top-3*s, size+6*s, size+6*s, 14*s);ctx.fill();
-      ctx.fillStyle = trapMain();
-      roundRect(ctx, x, top, size, size, 12*s);ctx.fill();
-      ctx.strokeStyle = rgbaHex(trapAccent(), .18);
-      ctx.lineWidth = 1.2*s;
-      roundRect(ctx, x+6*s, top+6*s, size-12*s, size-12*s, 9*s);ctx.stroke();
-      ctx.fillStyle = rgbaHex(trapAccent(), .10);
-      roundRect(ctx, x+size*.22, top+size*.16, size*.56, size*.11, 4*s);ctx.fill();
-      ctx.beginPath();ctx.arc(x+size/2, top+size/2, size*.18, 0, Math.PI*2);ctx.fill();
-      ctx.strokeStyle = rgbaHex(trapAccent(), .28);
-      ctx.lineWidth = 1.5*s;
-      ctx.beginPath();ctx.arc(x+size/2, top+size/2, size*.29, 0, Math.PI*2);ctx.stroke();
-      ctx.strokeStyle = rgbaHex(trapAccent(), .18);
-      ctx.lineWidth = 1*s;
-      ctx.beginPath();ctx.moveTo(x+size*.2, top+size/2);ctx.lineTo(x+size*.36, top+size/2);ctx.stroke();
-      ctx.beginPath();ctx.moveTo(x+size*.64, top+size/2);ctx.lineTo(x+size*.8, top+size/2);ctx.stroke();
-    };
-
-    drawCore(leftX);
-    drawCore(rightX);
-
-    if(info.progress <= .08){
-      ctx.strokeStyle = trapIdle();
-      ctx.lineWidth = 2.2*s;
-      ctx.setLineDash([7*s,6*s]);
-      ctx.beginPath();ctx.moveTo(innerLeft + 5*s, cy);ctx.lineTo(innerRight - 5*s, cy);ctx.stroke();
+    // Idle guide between the nozzles.
+    if(!live){
+      ctx.setLineDash([6*s, 7*s]);
+      ctx.strokeStyle = charge > 0 ? P[2] : trapIdle();
+      ctx.globalAlpha = charge > 0 ? .35 + .55*charge : .4;
+      ctx.lineWidth = 1.6*s;
+      ctx.beginPath();ctx.moveTo(innerLeft + 6*s, cy);ctx.lineTo(innerRight - 6*s, cy);ctx.stroke();
       ctx.setLineDash([]);
-    } else {
-      const drawEnergySeg = (fromX, toX, flip=1)=>{
-        ctx.lineCap = "round";
-        ctx.strokeStyle = "rgba(0,0,0,.14)";
-        ctx.lineWidth = beamH + 5*s;
-        ctx.beginPath();ctx.moveTo(fromX, cy);for(let i=1;i<=7;i++){const t=i/7;const x=fromX+(toX-fromX)*t;const y=cy + Math.sin(time*16 + i*1.3 + info.amount*2) * (2.8*s + (i%2)*1.4*s) * flip;ctx.lineTo(x,y);}ctx.stroke();
-        ctx.strokeStyle = trapMain();
-        ctx.lineWidth = beamH;
-        ctx.beginPath();ctx.moveTo(fromX, cy);for(let i=1;i<=7;i++){const t=i/7;const x=fromX+(toX-fromX)*t;const y=cy + Math.sin(time*16 + i*1.3 + info.amount*2) * (2.8*s + (i%2)*1.4*s) * flip;ctx.lineTo(x,y);}ctx.stroke();
-        ctx.strokeStyle = rgbaHex(trapAccent(), .92);
-        ctx.lineWidth = Math.max(1*s, beamH*.16);
-        ctx.beginPath();ctx.moveTo(fromX, cy);for(let i=1;i<=7;i++){const t=i/7;const x=fromX+(toX-fromX)*t;const y=cy + Math.sin(time*16 + i*1.3 + info.amount*2) * (2.8*s + (i%2)*1.4*s) * flip;ctx.lineTo(x,y);}ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Plasma jets: a churning ribbon of layered noisy strands with a white-hot core.
+    const jet = (fromX, toX, dir) => {
+      const len = Math.abs(toX - fromX);
+      if(len < 1) return;
+      const steps = Math.max(4, Math.min(22, Math.floor(len/(7*s))));
+      const strand = (k, widthMul, color, alpha, ampMul) => {
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(1, beamH*widthMul);
+        ctx.beginPath();
+        for(let i=0;i<=steps;i++){
+          const u = i/steps;
+          const xx = fromX + (toX - fromX)*u;
+          const env = .35 + .65*Math.sin(Math.min(1, u*1.15)*Math.PI*.5);
+          const wob = (Math.sin(u*9 - time*22*dir + k*2.1 + seed) + (trapHash(seed + k*13 + i*3.7 + tick) - .5)*1.2)*beamH*.32*ampMul*env;
+          i ? ctx.lineTo(xx, cy + wob) : ctx.moveTo(xx, cy + wob);
+        }
+        ctx.stroke();
       };
-      if(leftSegW > .5) drawEnergySeg(innerLeft + 3*s, innerLeft + leftSegW, 1);
-      if(rightSegW > .5) drawEnergySeg(innerRight - rightSegW, innerRight - 3*s, -1);
-      for(let i=0;i<5;i++){
-        const tt = ((time*1.6) + i*.19) % 1;
-        const x = innerLeft + (innerRight-innerLeft) * tt;
-        if(tt < info.progress*.5 || tt > 1-info.progress*.5){
-          ctx.strokeStyle = rgbaHex(trapAccent(), .72);
-          ctx.lineWidth = 1.1*s;
-          ctx.beginPath();ctx.moveTo(x-2*s, cy-2*s);ctx.lineTo(x+2*s, cy+2*s);ctx.stroke();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      strand(0, 2.4, P[2], .16, 1.3);
+      strand(1, 1.25, "#1f8f3a", .9, 1);
+      strand(2, .9, P[2], 1, .9);
+      strand(3, .5, P[1], 1, .7);
+      strand(4, .2, P[0], 1, .5);
+      // Jagged plasma tip pushing forward.
+      if(!clash){
+        ctx.save();
+        ctx.translate(toX, cy);
+        ctx.scale(dir, 1);
+        ctx.beginPath();
+        for(let i=0;i<12;i++){
+          const a = i/12*Math.PI*2;
+          const fwd = Math.max(0, Math.cos(a));
+          const r = (i % 2 ? beamH*.45 : beamH*(.6 + .7*trapHash(i + tick + seed) + fwd*.9));
+          i ? ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r) : ctx.moveTo(Math.cos(a)*r, Math.sin(a)*r);
+        }
+        ctx.closePath();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = P[2]; ctx.fill();
+        ctx.fillStyle = P[0];
+        ctx.beginPath();ctx.arc(0, 0, beamH*.28, 0, Math.PI*2);ctx.fill();
+        ctx.restore();
+      }
+    };
+    if(live){
+      if(info.leftSeg.w > .5) jet(innerLeft, clash ? (leftEnd + rightStart)/2 : leftEnd, 1);
+      if(info.rightSeg.w > .5) jet(innerRight, clash ? (leftEnd + rightStart)/2 : rightStart, -1);
+      // Clash: two jets fighting in the middle, arcing and spraying.
+      if(clash){
+        const mx = (leftEnd + rightStart)/2;
+        for(let k=0;k<3;k++){
+          const a = (trapHash(tick + k*7 + seed) - .5)*Math.PI*1.4 - Math.PI/2;
+          const l = beamH*(1.2 + trapHash(tick*1.3 + k)*1.6);
+          trapDrawBolt(trapBolt(mx, cy, mx + Math.cos(a)*l, cy + Math.sin(a)*l, 3*s, 5, tick + k*5 + seed), 1.2*s, P, .9);
+        }
+        ctx.globalAlpha = .85;
+        ctx.fillStyle = P[0];
+        ctx.beginPath();ctx.ellipse(mx, cy, beamH*.45, beamH*.7, 0, 0, Math.PI*2);ctx.fill();
+        ctx.globalAlpha = 1;
+        if(!editorMode){
+          const want = (heavy ? 40 : 18)*prismSmokeFor(o).dt;
+          const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+          for(let i=0;i<n;i++) trapSparkBurst(o, (info.leftSeg.x + info.leftSeg.w + info.rightSeg.x)/2, o.y, 1, "plasma", .9, 0, -.5);
+        }
+      } else if(!editorMode){
+        const want = (heavy ? 14 : 6)*prismSmokeFor(o).dt;
+        if(Math.random() < want){
+          trapSparkBurst(o, info.leftSeg.x + info.leftSeg.w, o.y, 1, "plasma", .5, .4, -.4);
+          trapSparkBurst(o, info.rightSeg.x, o.y, 1, "plasma", .5, -.4, -.4);
         }
       }
     }
+    if(!editorMode){prismSmokeUpdateDraw(o); prismSparksUpdateDraw(o);}
 
-    ctx.fillStyle = themeSkin().muted;
-    ctx.font = `${9*s}px Inter, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText(info.progress > .12 ? "ENERGY GATE" : "CHARGING", worldToScreen(0,o.y).x + WORLD_W*s/2, cy - (o.h*s)/2 - 10*s);
+    // Reactors: armoured block, plasma window that swirls brighter with energy, nozzle on the
+    // inner face, vents. They shudder while firing.
+    const shake = (live ? .8 : 0) + charge*.6;
+    const reactor = (bx, side) => {
+      const jx = bx + (trapHash(tick*1.9 + side*3 + seed) - .5)*2*s*shake;
+      const jy = (trapHash(tick*2.3 + side*5 + seed) - .5)*1.4*s*shake;
+      ctx.save();
+      ctx.translate(jx, top + jy);
+      ctx.fillStyle = main;
+      roundRect(ctx, 0, 0, size, size, 10*s);ctx.fill();
+      // Plasma window.
+      const wx = size*.2, wy = size*.2, ww = size*.6, wh = size*.6;
+      ctx.fillStyle = "#06210d";
+      roundRect(ctx, wx, wy, ww, wh, 7*s);ctx.fill();
+      ctx.save();
+      roundRect(ctx, wx, wy, ww, wh, 7*s);ctx.clip();
+      const cxw = wx + ww/2, cyw = wy + wh/2;
+      for(let k=0;k<3;k++){
+        const a = time*(3 + k) + k*2.1 + seed;
+        const r = ww*(.18 + .1*k);
+        const g = ctx.createRadialGradient(cxw + Math.cos(a)*r*.4, cyw + Math.sin(a)*r*.4, 0, cxw, cyw, ww*.7);
+        g.addColorStop(0, P[0]);
+        g.addColorStop(.3, P[1]);
+        g.addColorStop(.7, P[2]);
+        g.addColorStop(1, "rgba(6,33,13,0)");
+        ctx.globalAlpha = (.25 + .75*energy)*(k ? .5 : 1);
+        ctx.fillStyle = g;
+        ctx.fillRect(wx, wy, ww, wh);
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = rgbaHex(accent, .3);
+      ctx.lineWidth = 1.2*s;
+      roundRect(ctx, wx, wy, ww, wh, 7*s);ctx.stroke();
+      // Vents on the outer side.
+      ctx.fillStyle = rgbaHex(accent, .2);
+      for(let v=0;v<3;v++) ctx.fillRect(side > 0 ? size*.06 : size*.88, size*(.3 + v*.17), size*.06, 2*s);
+      // Nozzle on the inner face.
+      const nx = side > 0 ? size - 2*s : -6*s;
+      ctx.fillStyle = main;
+      roundRect(ctx, nx, size/2 - 8*s, 8*s, 16*s, 3*s);ctx.fill();
+      ctx.fillStyle = energy > .05 ? P[1] : rgbaHex(accent, .3);
+      ctx.globalAlpha = .4 + .6*energy;
+      ctx.fillRect(side > 0 ? nx + 5*s : nx, size/2 - 5*s, 3*s, 10*s);
+      ctx.globalAlpha = 1;
+      // Charge crackle on the nozzle.
+      if(charge > 0){
+        const ox = side > 0 ? size + 3*s : -3*s;
+        trapDrawBolt(trapBolt(ox, size/2 - 9*s, ox, size/2 + 9*s, 4*s*charge, 5, tick + side*9 + seed), 1*s, P, charge);
+      }
+      ctx.restore();
+    };
+    reactor(leftX, 1);
+    reactor(rightX, -1);
     ctx.restore();
   }
   function drawSideSweeper(o){
+    // BLADE_FAN_V2: same blade shape, now properly mounted: a solid wall bracket and motor carry
+    // the hub. Steel blades with a bright cutting edge on the leading side, motion-blur ghosts
+    // instead of a guide arc, a glint that runs along the blade, bolted spinning hub.
+    // Visual only: collision is still sideSweeperHitBlades.
     const line = sideSweeperLine(o);
     const pivot = worldToScreen(line.pivot.x, line.pivot.y);
     const s = pivot.s;
+    const main = trapMain(), accent = trapAccent();
     const leftSide = o.x < WORLD_W/2;
-    const housingX = pivot.x + (leftSide ? -18*s : -40*s);
-    const sweepR = o.len * s;
-    const bladeLen = o.len * .88 * s;
-    const bladeW = Math.max(15*s, o.thick * 1.35 * s);
+    const wallX = worldToScreen(leftSide ? 0 : WORLD_W, o.y).x;
+    const bladeLen = o.len*.88*s;
+    const bladeW = Math.max(15*s, o.thick*1.35*s);
+    const dir = (Number(o.speed) || 0) < 0 ? -1 : 1;
+    const omega = Math.abs((Number(o.speed) || 0)*3.8);
+    const blur = Math.min(1, omega/9);
 
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,.045)";
-    roundRect(ctx, housingX, pivot.y - 42*s, 58*s, 84*s, 14*s);ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,.12)";
-    ctx.lineWidth = 1*s;
-    roundRect(ctx, housingX, pivot.y - 42*s, 58*s, 84*s, 14*s);ctx.stroke();
-
-    ctx.strokeStyle = "rgba(0,0,0,.10)";
-    ctx.lineWidth = 1.2*s;
+    // Wall bracket: plate on the wall and an arm out to the motor.
+    const plateW = 10*s, plateH = 64*s;
+    ctx.fillStyle = main;
+    roundRect(ctx, leftSide ? wallX : wallX - plateW, pivot.y - plateH/2, plateW, plateH, 3*s);ctx.fill();
+    ctx.fillStyle = rgbaHex(accent, .5);
+    for(const by of [-plateH*.36, plateH*.36]){ctx.beginPath();ctx.arc(leftSide ? wallX + plateW/2 : wallX - plateW/2, pivot.y + by, 1.6*s, 0, Math.PI*2);ctx.fill();}
+    const armFrom = leftSide ? wallX + plateW : wallX - plateW;
+    ctx.fillStyle = main;
     ctx.beginPath();
-    ctx.arc(pivot.x, pivot.y, sweepR*.88, line.ang - 1.10, line.ang + 1.10);
-    ctx.stroke();
+    ctx.moveTo(armFrom, pivot.y - 11*s);ctx.lineTo(pivot.x, pivot.y - 7*s);ctx.lineTo(pivot.x, pivot.y + 7*s);ctx.lineTo(armFrom, pivot.y + 11*s);
+    ctx.closePath();ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, .22);
+    ctx.lineWidth = 1*s;
+    ctx.beginPath();ctx.moveTo(armFrom, pivot.y);ctx.lineTo(pivot.x, pivot.y);ctx.stroke();
 
-    const drawFanBlade = (angle) => {
-      ctx.save();
-      ctx.rotate(angle);
-      ctx.fillStyle = trapMain();
+    const bladePath = () => {
       ctx.beginPath();
       ctx.moveTo(8*s, -bladeW*.28);
       ctx.quadraticCurveTo(bladeLen*.46, -bladeW*.95, bladeLen, -bladeW*.16);
@@ -17751,29 +17950,60 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.lineTo(bladeLen, bladeW*.16);
       ctx.quadraticCurveTo(bladeLen*.45, bladeW*.72, 8*s, bladeW*.25);
       ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = rgbaHex(trapAccent(), .30);
-      ctx.lineWidth = 1.2*s;
-      ctx.beginPath();
-      ctx.moveTo(18*s, 0);
-      ctx.quadraticCurveTo(bladeLen*.45, -bladeW*.22, bladeLen*.86, -bladeW*.06);
-      ctx.stroke();
+    };
+    const drawFanBlade = (angle, alpha=1, ghost=false) => {
+      ctx.save();
+      ctx.rotate(angle);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = main;
+      bladePath();ctx.fill();
+      if(!ghost){
+        // Cutting edge on the leading side + a glint sliding along the blade.
+        ctx.strokeStyle = rgbaHex(accent, .85);
+        ctx.lineWidth = 1.4*s;
+        ctx.beginPath();
+        if(dir > 0){ctx.moveTo(10*s, bladeW*.24); ctx.quadraticCurveTo(bladeLen*.45, bladeW*.7, bladeLen, bladeW*.16); ctx.lineTo(bladeLen + 15*s, 0);}
+        else {ctx.moveTo(10*s, -bladeW*.27); ctx.quadraticCurveTo(bladeLen*.46, -bladeW*.93, bladeLen, -bladeW*.16); ctx.lineTo(bladeLen + 15*s, 0);}
+        ctx.stroke();
+        const gl = (time*1.4 + angle*.3) % 1;
+        const gx = 14*s + (bladeLen - 14*s)*gl;
+        const gg = ctx.createLinearGradient(gx - 14*s, 0, gx + 14*s, 0);
+        gg.addColorStop(0, rgbaHex(accent, 0)); gg.addColorStop(.5, rgbaHex(accent, .45)); gg.addColorStop(1, rgbaHex(accent, 0));
+        ctx.save(); bladePath(); ctx.clip();
+        ctx.fillStyle = gg; ctx.fillRect(gx - 14*s, -bladeW, 28*s, bladeW*2);
+        ctx.restore();
+        // Root rivets.
+        ctx.fillStyle = rgbaHex(accent, .45);
+        ctx.beginPath();ctx.arc(16*s, 0, 1.4*s, 0, Math.PI*2);ctx.fill();
+        ctx.beginPath();ctx.arc(24*s, 0, 1.2*s, 0, Math.PI*2);ctx.fill();
+      }
       ctx.restore();
     };
 
     ctx.translate(pivot.x, pivot.y);
+    // Motion-blur ghosts trailing each blade (stronger the faster it spins).
+    if(blur > .05){
+      for(let k=3;k>=1;k--){
+        const back = -dir*k*.11*(.5 + blur);
+        drawFanBlade(line.ang + back, .1*blur*(4 - k), true);
+        drawFanBlade(line.ang + Math.PI + back, .1*blur*(4 - k), true);
+      }
+    }
     drawFanBlade(line.ang);
     drawFanBlade(line.ang + Math.PI);
-
-    ctx.fillStyle = "rgba(0,0,0,.16)";
-    ctx.beginPath();ctx.arc(0,0,15*s,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle = trapMain();
-    ctx.beginPath();ctx.arc(0,0,10.5*s,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = rgbaHex(trapAccent(), .28);
-    ctx.lineWidth = 1.4*s;
-    ctx.beginPath();ctx.arc(0,0,6.6*s,0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle = trapAccent();
-    ctx.beginPath();ctx.arc(0,0,2*s,0,Math.PI*2);ctx.fill();
+    // Motor hub: spins with the blades, bolts on a ring, centre cap.
+    ctx.fillStyle = main;
+    ctx.beginPath();ctx.arc(0, 0, 12*s, 0, Math.PI*2);ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, .3);
+    ctx.lineWidth = 1.3*s;
+    ctx.beginPath();ctx.arc(0, 0, 8.4*s, 0, Math.PI*2);ctx.stroke();
+    ctx.fillStyle = rgbaHex(accent, .6);
+    for(let i=0;i<5;i++){
+      const a = line.ang + i*Math.PI*2/5;
+      ctx.beginPath();ctx.arc(Math.cos(a)*8.4*s, Math.sin(a)*8.4*s, 1.2*s, 0, Math.PI*2);ctx.fill();
+    }
+    ctx.fillStyle = accent;
+    ctx.beginPath();ctx.arc(0, 0, 2.6*s, 0, Math.PI*2);ctx.fill();
     ctx.restore();
   }
   function drawChase(lvl){
@@ -18452,11 +18682,127 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const a = worldToScreen(p.x, p.y);
       const b = worldToScreen(p.x - p.vx*.028, p.y - p.vy*.028);
       ctx.globalAlpha = 1 - k*k;
-      ctx.strokeStyle = k < .3 ? "#fffdf0" : (k < .65 ? "#ffd34a" : "#ff7a00");
+      const pal = TRAP_SPARK_PALETTES[p.pal || "hot"] || TRAP_SPARK_PALETTES.hot;
+      ctx.strokeStyle = k < .3 ? pal[0] : (k < .65 ? pal[1] : pal[2]);
       ctx.lineWidth = Math.max(.8, p.w*a.s*(1 - k*.5));
       ctx.beginPath();ctx.moveTo(a.x, a.y);ctx.lineTo(b.x, b.y);ctx.stroke();
     }
     ctx.restore();
+  }
+  // TRAP_FX_V1: shared helpers so every polished trap uses the same physical smoke/spark system
+  // (prismSmoke*/prismSpark* work on any obstacle) plus pre-drawn cube art for death pieces.
+  function trapHash(n){const v = Math.sin(n*127.1 + 311.7)*43758.5453; return v - Math.floor(v);}
+  const TRAP_SPARK_PALETTES = {
+    hot:["#fffdf0","#ffd34a","#ff7a00"],
+    electric:["#f4feff","#9ff0ff","#2aa8ff"],
+    plasma:["#f6fff0","#c8ff8a","#3fdc4a"],
+    crimson:["#fff5f6","#ff8aa0","#ff1a3c"],
+    metal:["#fffbe8","#ffe08a","#ff9a3c"]
+  };
+  // One-shot burst of physical sparks in world space.
+  function trapSparkBurst(o, wx, wy, n, pal="hot", speed=1, dirX=0, dirY=0){
+    const st = prismSmokeFor(o);
+    for(let i=0;i<n && st.sparks.length < 160;i++){
+      const a = Math.random()*Math.PI*2;
+      const sp = (90 + Math.random()*260)*speed;
+      st.sparks.push({x:wx, y:wy, vx:Math.cos(a)*sp + dirX*sp*.8, vy:Math.sin(a)*sp - 60 + dirY*sp*.8, age:0, life:.25 + Math.random()*.5, w:.8 + Math.random()*1.2, pal});
+    }
+  }
+  // Jagged lightning path from a to b. Re-rolls with `tick` so it crackles.
+  function trapBolt(ax, ay, bx, by, amp, steps, seed){
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy/len, ny = dx/len;
+    const pts = [[ax, ay]];
+    for(let i=1;i<steps;i++){
+      const u = i/steps;
+      const env = Math.sin(u*Math.PI);
+      const off = (trapHash(seed + i*7.31) - .5)*2*amp*env;
+      pts.push([ax + dx*u + nx*off, ay + dy*u + ny*off]);
+    }
+    pts.push([bx, by]);
+    return pts;
+  }
+  function trapStrokePts(pts, width, color, alpha){
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.stroke();
+  }
+  // Lightning with glow, body and white core.
+  function trapDrawBolt(pts, w, pal, alpha=1){
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    trapStrokePts(pts, w*4.2, pal[2], .2*alpha);
+    trapStrokePts(pts, w*2.2, pal[2], .35*alpha);
+    trapStrokePts(pts, w*1.5, pal[2], .9*alpha);
+    trapStrokePts(pts, w*.85, pal[1], alpha);
+    trapStrokePts(pts, Math.max(.8, w*.38), pal[0], alpha);
+    ctx.restore();
+  }
+  // Pre-drawn cube (body, outline, eye) used by the piece-based deaths. Cached per death.
+  let trapDeathArt = null;
+  function trapCubeArt(key, w, h, s, cube, eyeTone, normalH, eyeScale=1.15, pupil=1.4){
+    if(trapDeathArt && trapDeathArt.key === key && Math.abs(trapDeathArt.w - w) < 1 && Math.abs(trapDeathArt.h - h) < 1) return trapDeathArt.canvas;
+    const c = document.createElement("canvas");
+    c.width = Math.max(4, Math.ceil(w)); c.height = Math.max(4, Math.ceil(h));
+    const g = c.getContext("2d");
+    const rad = Math.max(7*s, cube.radius*s);
+    g.fillStyle = cubeBodyPaint(g, 0, 0, w, h, cube);
+    roundRect(g, 0, 0, w, h, rad); g.fill();
+    strokeCustomCubeOutline(g, 0, 0, w, h, rad, s, cube);
+    const eyeY = Math.min(h - 12*s, Math.min(h*.48, normalH*.50*s) - 1.1*s);
+    g.save();
+    g.translate(w/2, eyeY);
+    g.scale(eyeScale, eyeScale);
+    g.fillStyle = eyeTone.color;
+    g.beginPath(); g.ellipse(0, 0, 6.2*s, 9.4*s, 0, 0, Math.PI*2); g.fill();
+    strokeCustomEyeOutline(g, 0, 0, 6.2*s, 9.4*s, s, eyeTone);
+    g.fillStyle = eyeTone.pupil;
+    g.beginPath(); g.arc(0, 0, pupil*s, 0, Math.PI*2); g.fill();
+    g.restore();
+    trapDeathArt = {key, w, h, canvas:c};
+    return c;
+  }
+  // Draw one rigid piece of the pre-drawn cube: clipped to `poly` (cube-local px), moved by (dx,dy),
+  // rotated by rot around its own centre. Optional glowing cut edges: [[x1,y1,x2,y2], ...].
+  function trapDrawPiece(art, ox, oy, poly, dx, dy, rot, edgeColor=null, edgeWidth=0, edges=null, tint=null){
+    let mx = 0, my = 0;
+    for(const q of poly){mx += q[0]; my += q[1];}
+    mx /= poly.length; my /= poly.length;
+    ctx.save();
+    ctx.translate(ox + mx + dx, oy + my + dy);
+    ctx.rotate(rot);
+    ctx.translate(-mx, -my);
+    ctx.beginPath();
+    poly.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]));
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(art, 0, 0);
+    if(tint){ctx.fillStyle = tint; ctx.fillRect(-4, -4, art.width + 8, art.height + 8);}
+    if(edgeColor && edges){
+      ctx.lineCap = "round";
+      ctx.strokeStyle = edgeColor;
+      ctx.lineWidth = edgeWidth;
+      ctx.beginPath();
+      for(const e of edges){ctx.moveTo(e[0], e[1]); ctx.lineTo(e[2], e[3]);}
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // Clip a convex polygon by the half-plane n·p <= d (Sutherland–Hodgman, one edge).
+  function trapClipPoly(poly, nx, ny, d){
+    const out = [];
+    for(let i=0;i<poly.length;i++){
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const da = nx*a[0] + ny*a[1] - d, db = nx*b[0] + ny*b[1] - d;
+      if(da <= 0) out.push(a);
+      if((da <= 0) !== (db <= 0)){const k = da/(da - db); out.push([a[0] + (b[0] - a[0])*k, a[1] + (b[1] - a[1])*k]);}
+    }
+    return out;
   }
   function drawPrismPulse(o){
     const tl = prismPulseTimeline(o, state === "editor" ? time*.8 : time);
@@ -19401,7 +19747,209 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.save();
     ctx.globalAlpha = 1 - Math.max(0, t-.72)*3.2;
 
-    if(deathType === "laser"){
+    if(deathType === "electric" && deathCulprit?.type === "slider"){
+      // ELECTRIC_LINK_DEATH_V1 (electrocution): the cube is pinned and shaken by the current, flicking
+      // between itself and an x-ray frame while arcs crawl over it from the side the link touched;
+      // then an overload flash and it bursts into charred, smoking shards.
+      ctx.globalAlpha = 1;
+      const E = TRAP_SPARK_PALETTES.electric;
+      const tick = Math.floor(time*30);
+      const key = deathPlayerSnapshot || deathCulprit;
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.25, 1.1);
+      const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
+      const rad = Math.max(7*s, cube.radius*s);
+      const side = Number.isFinite(deathImpact?.x) ? (deathImpact.x < p.x + p.w/2 ? -1 : 1) : 1;
+      const shockEnd = .6, burstAt = .66;
+      const eyeY = Math.min(h - 12*s, Math.min(h*.48, normalH*.50*s) - 1.1*s);
+      if(t < shockEnd){
+        const shake = 3.4*s*(1 - t*.4);
+        const jx = (trapHash(tick*1.3) - .5)*2*shake, jy = (trapHash(tick*2.1 + 4) - .5)*shake;
+        const ox = x + jx, oy = y + jy;
+        if(tick % 3 === 0){
+          // X-ray frame.
+          ctx.save();
+          ctx.translate(ox, oy);
+          roundRect(ctx, 0, 0, w, h, rad);
+          ctx.fillStyle = E[0]; ctx.fill();
+          ctx.lineWidth = 2*s; ctx.strokeStyle = "#0b1f33"; ctx.stroke();
+          ctx.strokeStyle = "#0b1f33";
+          ctx.lineWidth = 1.5*s;
+          roundRect(ctx, w*.2, h*.14, w*.6, h*.72, rad*.5); ctx.stroke();
+          ctx.beginPath();
+          for(let i=1;i<=3;i++){const ry = h*(.36 + i*.15); if(ry < h*.84){ctx.moveTo(w*.28, ry); ctx.lineTo(w*.72, ry);}}
+          ctx.stroke();
+          ctx.lineWidth = 2*s;
+          ctx.beginPath(); ctx.ellipse(w/2, eyeY, 6*s, 9*s, 0, 0, Math.PI*2); ctx.stroke();
+          ctx.restore();
+        } else {
+          ctx.drawImage(art, ox, oy);
+          ctx.save();
+          roundRect(ctx, ox, oy, w, h, rad); ctx.clip();
+          ctx.globalAlpha = .18 + .22*trapHash(tick*.7);
+          ctx.fillStyle = E[2];
+          ctx.fillRect(ox, oy, w, h);
+          ctx.restore();
+        }
+        // Arcs crawling over the body from the contact side.
+        for(let k=0;k<4;k++){
+          const hy = oy + h*(.15 + .7*trapHash(tick*3.3 + k*7));
+          const sx = side > 0 ? ox + w + 6*s : ox - 6*s;
+          const ta = trapHash(tick*1.7 + k*11)*Math.PI*2;
+          const tx = ox + w/2 + Math.cos(ta)*w*.5, ty = oy + h/2 + Math.sin(ta)*h*.5;
+          trapDrawBolt(trapBolt(sx, hy, tx, ty, 6*s, 6, tick*2 + k*5), 1.5*s, E, .95);
+        }
+        if(deathCulprit && Math.random() < .7) trapSparkBurst(deathCulprit, p.x + (side > 0 ? p.w : 0), p.y + p.h*Math.random(), 1, "electric", .8);
+      } else if(t < burstAt){
+        // Overload flash.
+        ctx.save();
+        roundRect(ctx, x, y, w, h, rad);
+        ctx.fillStyle = E[0]; ctx.fill();
+        ctx.lineWidth = 3*s; ctx.strokeStyle = E[1]; ctx.stroke();
+        ctx.restore();
+      } else {
+        if(!fx.burst && deathCulprit){
+          fx.burst = true;
+          trapSparkBurst(deathCulprit, p.x + p.w/2, p.y + p.h/2, 34, "electric", 1.3);
+          for(let i=0;i<6;i++) prismSmokeEmit(deathCulprit, p.x + p.w*Math.random(), p.y + p.h*Math.random(), 0, 1, .9);
+        }
+        const T = (t - burstAt);
+        const cx0 = w*(.5 + (trapHash(3.1) - .5)*.2), r1 = h*(.33 + (trapHash(5.7) - .5)*.1), r2 = h*(.66 + (trapHash(8.3) - .5)*.1);
+        const pieces = [
+          [[0,0],[cx0,0],[cx0 + 3*s,r1],[0,r1 - 2*s]], [[cx0,0],[w,0],[w,r1 + 2*s],[cx0 + 3*s,r1]],
+          [[0,r1 - 2*s],[cx0 + 3*s,r1],[cx0 - 2*s,r2],[0,r2 + 2*s]], [[cx0 + 3*s,r1],[w,r1 + 2*s],[w,r2 - 2*s],[cx0 - 2*s,r2]],
+          [[0,r2 + 2*s],[cx0 - 2*s,r2],[cx0,h],[0,h]], [[cx0 - 2*s,r2],[w,r2 - 2*s],[w,h],[cx0,h]]
+        ];
+        const floorY = h + 2*s;
+        pieces.forEach((poly, i) => {
+          let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= 4; my /= 4;
+          const vx = (mx < w/2 ? -1 : 1)*(70 + trapHash(i*3.7)*90)*s;
+          const vy = -(90 + trapHash(i*5.1)*140)*s;
+          let dy = vy*T + .5*1300*s*T*T;
+          const landed = my + dy > floorY - 4*s;
+          if(landed) dy = floorY - 4*s - my;
+          const rot = (trapHash(i*9.3) - .5)*9*Math.min(T, .3);
+          trapDrawPiece(art, x, y, poly, vx*T, dy, rot, E[1], 1.6*s*(1 - Math.min(1, T*3)),
+            poly.map((q, j) => [q[0], q[1], poly[(j + 1) % poly.length][0], poly[(j + 1) % poly.length][1]]), "rgba(18,22,28,.78)");
+        });
+      }
+      ctx.restore();
+      return;
+    } else if(deathType === "laser" && deathCulprit?.type === "beam"){
+      // LASER_BEAM_DEATH_V1 (slice): cut clean at the beam's height. The top slides off along the
+      // cut and drops, both cut faces glow white-hot then cool to red and smoke, sparks shower
+      // from the cut while the beam is still live.
+      ctx.globalAlpha = 1;
+      const C = TRAP_SPARK_PALETTES.crimson;
+      const key = deathPlayerSnapshot || deathCulprit;
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.2, 1.2);
+      const cutWorld = Number.isFinite(deathImpact?.worldY) ? deathImpact.worldY : p.y + p.h/2;
+      const cut = Math.max(4*s, Math.min(h - 4*s, (cutWorld - p.y)*s));
+      const dirS = (p.x + p.w/2) < WORLD_W/2 ? 1 : -1;
+      const slide = easeOutCubic(clamp01(t/.45))*w*.32 + Math.pow(Math.max(0, t - .35), 2)*w*2.4;
+      const drop = Math.pow(Math.max(0, t - .38), 2)*h*3.2;
+      const rot = dirS*Math.max(0, t - .3)*1.5;
+      const edgeCol = t < .25 ? C[0] : (t < .55 ? C[1] : C[2]);
+      const edgeW = 3.2*s*(1 - t*.6);
+      trapDrawPiece(art, x, y, [[0,cut],[w,cut],[w,h],[0,h]], 0, 0, 0, edgeCol, edgeW, [[0,cut,w,cut]]);
+      trapDrawPiece(art, x, y, [[0,0],[w,0],[w,cut],[0,cut]], dirS*slide, drop, rot, edgeCol, edgeW, [[0,cut,w,cut]]);
+      if(t < .1){
+        ctx.globalAlpha = 1 - t/.1;
+        ctx.strokeStyle = C[0];
+        ctx.lineWidth = 2.4*s;
+        ctx.beginPath(); ctx.moveTo(x - 4*s, y + cut); ctx.lineTo(x + w + 4*s, y + cut); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      if(deathCulprit){
+        if(t < .45 && Math.random() < .8) trapSparkBurst(deathCulprit, p.x + (Math.random() < .5 ? 0 : p.w), cutWorld, 1, "crimson", .9, 0, -.6);
+        if(t > .2 && Math.random() < .35) prismSmokeEmit(deathCulprit, p.x + p.w*Math.random(), cutWorld - 2, 0, 1, .8);
+      }
+      ctx.restore();
+      return;
+    } else if(deathType === "gate"){
+      // ENERGY_GATE_DEATH_V1 (disintegration): the plasma eats the cube from both sides inward.
+      // Each cell glows green, breaks loose and streams upward as fading energy; the middle goes last.
+      ctx.globalAlpha = 1;
+      const P = TRAP_SPARK_PALETTES.plasma;
+      const key = deathPlayerSnapshot || deathCulprit;
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.15, 1.2);
+      const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
+      if(!fx.burst && deathCulprit){
+        fx.burst = true;
+        trapSparkBurst(deathCulprit, p.x, p.y + p.h/2, 14, "plasma", .9, -.5, 0);
+        trapSparkBurst(deathCulprit, p.x + p.w, p.y + p.h/2, 14, "plasma", .9, .5, 0);
+      }
+      const cols = 7, rows = Math.max(6, Math.min(60, Math.round(cols*h/Math.max(1, w))));
+      const cw = w/cols, ch = h/rows;
+      const T = t;
+      for(let j=0;j<rows;j++){
+        for(let i=0;i<cols;i++){
+          const u = (i + .5)/cols;
+          const centre = 1 - Math.abs(u - .5)*2;
+          const td = .06 + centre*.6 + trapHash(i*7.1 + j*13.3)*.14;
+          const sx = i*cw, sy = j*ch;
+          if(T < td){
+            ctx.drawImage(art, sx, sy, cw + .5, ch + .5, x + sx, y + sy, cw + .5, ch + .5);
+            const g = clamp01(1 - (td - T)/.18);
+            if(g > 0){ctx.globalAlpha = g*.8; ctx.fillStyle = g > .7 ? P[0] : P[2]; ctx.fillRect(x + sx, y + sy, cw + .5, ch + .5); ctx.globalAlpha = 1;}
+          } else {
+            const k = (T - td)/.4;
+            if(k >= 1) continue;
+            const vy = -(60 + trapHash(i*3.3 + j*1.7)*90)*s;
+            const vx = (.5 - u)*50*s + (trapHash(i + j*5.5) - .5)*30*s;
+            const tt = (T - td);
+            const size = Math.max(1, Math.min(cw, ch)*(1 - k)*.9);
+            ctx.globalAlpha = 1 - k;
+            ctx.fillStyle = k < .3 ? P[0] : (k < .6 ? P[1] : P[2]);
+            ctx.fillRect(x + sx + cw/2 + vx*tt - size/2, y + sy + ch/2 + vy*tt - size/2, size, size);
+          }
+        }
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      return;
+    } else if(deathType === "fan" && deathCulprit?.type === "sideSweeper"){
+      // BLADE_FAN_DEATH_V1 (chopped): two cuts along the blade split the cube into three strips that
+      // are flung along the blade's swing, spinning, then drop and land. Metal sparks at the hit.
+      ctx.globalAlpha = 1;
+      const M = TRAP_SPARK_PALETTES.metal;
+      const key = deathPlayerSnapshot || deathCulprit;
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.2, 1.2);
+      const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
+      const ang = Number.isFinite(deathImpact?.ang) ? deathImpact.ang : 0;
+      const spin = (Number(deathCulprit.speed) || 0) < 0 ? -1 : 1;
+      const dx0 = Math.cos(ang), dy0 = Math.sin(ang);
+      const nx = -dy0, ny = dx0;
+      const tx = -dy0*spin, ty = dx0*spin;
+      if(!fx.burst && deathCulprit){
+        fx.burst = true;
+        trapSparkBurst(deathCulprit, p.x + p.w/2, p.y + p.h/2, 26, "metal", 1.2, tx, ty);
+      }
+      const rect = [[0,0],[w,0],[w,h],[0,h]];
+      const c0 = nx*w/2 + ny*h/2;
+      const off = Math.min(w, h)*.22;
+      const k1 = c0 - off, k2 = c0 + off;
+      const strips = [
+        trapClipPoly(rect, nx, ny, k1),
+        trapClipPoly(trapClipPoly(rect, -nx, -ny, -k1), nx, ny, k2),
+        trapClipPoly(rect, -nx, -ny, -k2)
+      ];
+      const T = t;
+      const floorY = h + 2*s;
+      const flash = t < .07 ? "rgba(255,255,255,.85)" : null;
+      strips.forEach((poly, i) => {
+        if(poly.length < 3) return;
+        let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
+        const sp = (180 + i*70)*s*(i === 1 ? .8 : 1);
+        const vx = tx*sp + (i - 1)*nx*50*s, vy = ty*sp + (i - 1)*ny*50*s - 70*s;
+        let ddx = vx*T, ddy = vy*T + .5*1200*s*T*T;
+        const landed = my + ddy > floorY - 5*s;
+        if(landed) ddy = floorY - 5*s - my;
+        const rot = spin*(2 + i*1.5)*(landed ? Math.min(T, .45) : T);
+        trapDrawPiece(art, x, y, poly, ddx, ddy, rot, null, 0, null, flash);
+      });
+      ctx.restore();
+      return;
+    } else if(deathType === "laser"){
       const impactScreen = deathImpact?.worldY !== undefined ? worldToScreen(player.x, deathImpact.worldY).y : y + h*.48;
       const cutY = Math.max(y + 5*s, Math.min(y + h - 5*s, impactScreen + Math.sin(time*18)*.9*s));
       const cutRatio = clamp01((cutY - y) / Math.max(1,h));
