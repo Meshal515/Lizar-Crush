@@ -16406,8 +16406,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const c = prismPulseConfig(o);
         for(const seg of segs){
           if(capsuleRectCollide(seg.a, seg.b, Math.max(3, c.beamThickness*.42), p)){
-            const impactY = Math.max(cur.y + 4, Math.min((seg.a.y + seg.b.y)/2, cur.y + cur.h - 4));
-            return startDeath("The prism pulse crossed your path.", "prismPulse", {worldY:impactY, ang:Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x)}, o);
+            // Contact = point of the hitting segment closest to the cube's centre. The exact segment
+            // is kept too, so the death can burn from wherever this beam actually touched.
+            const sx = seg.b.x - seg.a.x, sy = seg.b.y - seg.a.y, sl = sx*sx + sy*sy || 1;
+            const k = Math.max(0, Math.min(1, ((cur.x + cur.w/2 - seg.a.x)*sx + (cur.y + cur.h/2 - seg.a.y)*sy)/sl));
+            const hitX = seg.a.x + sx*k, hitY = seg.a.y + sy*k;
+            const impactY = Math.max(cur.y + 4, Math.min(hitY, cur.y + cur.h - 4));
+            return startDeath("The prism pulse crossed your path.", "prismPulse", {worldY:impactY, ang:Math.atan2(sy, sx), hitX, hitY, ax:seg.a.x, ay:seg.a.y, bx:seg.b.x, by:seg.b.y}, o);
           }
         }
       }
@@ -19194,7 +19199,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   // body. Ash flakes and embers peel off the front. The distance field is built once per death on a
   // small grid; each frame only rebuilds a tiny mask and composites the pre-drawn cube through it.
   let prismBurnCache = null;
-  function prismBurnBuild(key, w, h, s, iyLocal, ang, cube, eyeTone, normalH){
+  function prismBurnBuild(key, w, h, s, seg, cube, eyeTone, normalH){
     const W = Math.max(4, Math.ceil(w)), H = Math.max(4, Math.ceil(h));
     // Pre-drawn cube (body, outline, eye wide open in shock).
     const art = document.createElement("canvas");
@@ -19217,8 +19222,14 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // Burn-time field on a small grid.
     const cols = 30, rows = Math.max(8, Math.min(260, Math.round(cols*h/Math.max(1, w))));
     const field = new Float32Array(cols*rows);
-    const dx = Math.cos(ang), dy = Math.sin(ang);
-    const ox = w/2, oy = iyLocal;
+    // seg is the beam piece that touched the cube, in the cube's local pixels. Distance is measured
+    // to that finite segment, so a pass-through burns from a line, a graze from the edge it touched,
+    // and a beam tip that just reached the cube from a single point.
+    const sdx = seg.bx - seg.ax, sdy = seg.by - seg.ay, sl2 = sdx*sdx + sdy*sdy || 1;
+    const segDist = (px, py) => {
+      const k = Math.max(0, Math.min(1, ((px - seg.ax)*sdx + (py - seg.ay)*sdy)/sl2));
+      return Math.hypot(px - (seg.ax + sdx*k), py - (seg.ay + sdy*k));
+    };
     const seed = Math.random()*1000;
     // Smooth, low-frequency wobble with a little fine grain: an organic burn edge, not speckles.
     const noise = (px, py) =>
@@ -19229,7 +19240,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     for(let j=0;j<rows;j++){
       for(let i=0;i<cols;i++){
         const px = (i + .5)/cols*w, py = (j + .5)/rows*h;
-        const dLine = Math.abs((px - ox)*dy - (py - oy)*dx);
+        const dLine = segDist(px, py);
         const dEdge = Math.min(px, w - px, py, h - py);
         const d = Math.max(0, Math.min(dLine, dEdge*2.4 + 16*s) + noise(px, py)*2.4*s);
         field[j*cols + i] = d;
@@ -19567,29 +19578,37 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
       return;
     } else if(deathType === "prismPulse"){
-      // PRISM_PULSE_DEATH_V4: the cube burns away like paper, starting on the laser's cut and
-      // closing in on its last unburned spot (see PRISM_BURN_V1).
+      // PRISM_PULSE_DEATH_V4: the cube burns away like paper, starting exactly where the beam
+      // touched it and closing in on its last unburned spot (see PRISM_BURN_V1). The real beam is
+      // still drawn by the trap, so nothing extra is drawn for it here.
       ctx.globalAlpha = 1;
-      const iy0 = Number.isFinite(deathImpact?.worldY) ? worldToScreen(player.x, deathImpact.worldY).y : y + h*.5;
-      const iy = Math.max(y + 4*s, Math.min(y + h - 4*s, iy0));
-      const ang = Number.isFinite(deathImpact?.ang) ? deathImpact.ang : 0;
+      const toLocal = (wx, wy) => [(wx - p.x)*s, (wy - p.y)*s];
+      let seg;
+      if(Number.isFinite(deathImpact?.ax) && Number.isFinite(deathImpact?.bx)){
+        const A = toLocal(deathImpact.ax, deathImpact.ay), Bp = toLocal(deathImpact.bx, deathImpact.by);
+        seg = {ax:A[0], ay:A[1], bx:Bp[0], by:Bp[1]};
+      } else {
+        // Older replays without the segment: a horizontal pass at the recorded height.
+        const ly = Number.isFinite(deathImpact?.worldY) ? (deathImpact.worldY - p.y)*s : h*.5;
+        seg = {ax:-w, ay:ly, bx:w*2, by:ly};
+      }
       const key = deathPlayerSnapshot || deathCulprit;
       const B = prismBurnCache;
-      if(!B || B.key !== key || Math.abs(B.w - w) > 1 || Math.abs(B.h - h) > 1 || B.s !== s) prismBurnBuild(key, w, h, s, iy - y, ang, cube, eyeTone, normalH);
+      if(!B || B.key !== key || Math.abs(B.w - w) > 1 || Math.abs(B.h - h) > 1 || B.s !== s) prismBurnBuild(key, w, h, s, seg, cube, eyeTone, normalH);
       const tremble = clamp01(1 - t/.35)*2*s;
       const jx = (Math.random() - .5)*tremble, jy = (Math.random() - .5)*tremble*.6;
       prismBurnDraw(x + jx, y + jy, w, h, s, t, p);
-      // The beam punching through on impact, with a white-hot flash along the cut.
-      if(t < .3){
-        const k = 1 - t/.3;
-        const Lb = Math.max(w, h)*1.05;
-        const bx = Math.cos(ang), by = Math.sin(ang);
-        const px0 = cx - bx*Lb, py0 = iy - by*Lb, px1 = cx + bx*Lb, py1 = iy + by*Lb;
-        ctx.lineCap = "round";
+      // A short white-hot flash at the contact point only.
+      if(t < .14 && Number.isFinite(deathImpact?.hitX)){
+        const hp = worldToScreen(deathImpact.hitX, deathImpact.hitY);
+        const k = 1 - t/.14;
+        const g = ctx.createRadialGradient(hp.x, hp.y, 0, hp.x, hp.y, 12*s);
+        g.addColorStop(0, "rgba(255,253,240,1)");
+        g.addColorStop(.4, "rgba(255,211,74,.85)");
+        g.addColorStop(1, "rgba(255,122,0,0)");
         ctx.globalAlpha = k;
-        ctx.strokeStyle = "#ff2f17"; ctx.lineWidth = 11*s*k; ctx.beginPath();ctx.moveTo(px0, py0);ctx.lineTo(px1, py1);ctx.stroke();
-        ctx.strokeStyle = "#ffd34a"; ctx.lineWidth = 5*s*k; ctx.beginPath();ctx.moveTo(px0, py0);ctx.lineTo(px1, py1);ctx.stroke();
-        ctx.strokeStyle = "#fffdf0"; ctx.lineWidth = 2*s*k; ctx.beginPath();ctx.moveTo(px0, py0);ctx.lineTo(px1, py1);ctx.stroke();
+        ctx.fillStyle = g;
+        ctx.beginPath();ctx.arc(hp.x, hp.y, 12*s, 0, Math.PI*2);ctx.fill();
       }
       ctx.restore();
       return;
