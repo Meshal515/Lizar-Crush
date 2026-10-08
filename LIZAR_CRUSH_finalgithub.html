@@ -18570,20 +18570,38 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const blur = Math.min(1, omega/9);
 
     ctx.save();
-    // Wall bracket: plate on the wall and an arm out to the motor.
-    const plateW = 10*s, plateH = 64*s;
+    // BLADE_FAN_CREATURE_V1: a creature clinging to the wall by a splayed hand, a long neck out to
+    // its head at the pivot; the two blades are bone-edged sickles it whirls around its head. The
+    // head never spins. Visual only: collision is still sideSweeperHitBlades.
+    const dark = paperIsDark(main);
+    const ws = leftSide ? 1 : -1;                        // +1: wall on the left
+    // gripping hand on the wall
     ctx.fillStyle = main;
-    roundRect(ctx, leftSide ? wallX : wallX - plateW, pivot.y - plateH/2, plateW, plateH, 3*s);ctx.fill();
-    ctx.fillStyle = rgbaHex(accent, .5);
-    for(const by of [-plateH*.36, plateH*.36]){ctx.beginPath();ctx.arc(leftSide ? wallX + plateW/2 : wallX - plateW/2, pivot.y + by, 1.6*s, 0, Math.PI*2);ctx.fill();}
-    const armFrom = leftSide ? wallX + plateW : wallX - plateW;
-    ctx.fillStyle = main;
-    ctx.beginPath();
-    ctx.moveTo(armFrom, pivot.y - 11*s);ctx.lineTo(pivot.x, pivot.y - 7*s);ctx.lineTo(pivot.x, pivot.y + 7*s);ctx.lineTo(armFrom, pivot.y + 11*s);
-    ctx.closePath();ctx.fill();
-    ctx.strokeStyle = rgbaHex(accent, .22);
-    ctx.lineWidth = 1*s;
-    ctx.beginPath();ctx.moveTo(armFrom, pivot.y);ctx.lineTo(pivot.x, pivot.y);ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(wallX + ws*5*s, pivot.y, 7*s, 15*s, 0, 0, Math.PI*2); ctx.fill();
+    ctx.lineCap = "round"; ctx.strokeStyle = main;
+    for(const [fa, fl] of [[-1.1, 15], [-.35, 18], [.35, 18], [1.1, 15]]){
+      ctx.lineWidth = 4.2*s;
+      const fx = wallX + ws*3*s, fy = pivot.y + Math.sin(fa)*9*s;
+      ctx.beginPath(); ctx.moveTo(fx, fy); ctx.quadraticCurveTo(fx + ws*2*s, fy + Math.sin(fa)*fl*.6*s, wallX + ws*1.5*s, fy + Math.sin(fa)*fl*s); ctx.stroke();
+    }
+    // the neck: a tapered limb from the hand to the head, swaying a little
+    {
+      const sx = wallX + ws*8*s, sy = pivot.y;
+      const sway = Math.sin(time*2.1 + o.y*.01)*3*s;
+      const c1 = {x:sx + ws*14*s, y:sy - 10*s + sway}, c2 = {x:pivot.x - ws*14*s, y:pivot.y + 8*s - sway};
+      const N = 14, L = [], R = [];
+      const P = (u) => {const v = 1 - u; return {x:v*v*v*sx + 3*v*v*u*c1.x + 3*v*u*u*c2.x + u*u*u*pivot.x, y:v*v*v*sy + 3*v*v*u*c1.y + 3*v*u*u*c2.y + u*u*u*pivot.y};};
+      for(let i=0;i<=N;i++){
+        const u = i/N, p0 = P(Math.max(0, u - .02)), p1 = P(Math.min(1, u + .02)), pm = P(u);
+        const dx = p1.x - p0.x, dy = p1.y - p0.y, dl = Math.hypot(dx, dy) || 1, nx = -dy/dl, ny = dx/dl;
+        const w = (8 - 2.5*u)*s;
+        L.push({x:pm.x + nx*w, y:pm.y + ny*w}); R.push({x:pm.x - nx*w, y:pm.y - ny*w});
+      }
+      ctx.beginPath(); L.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); for(let i=R.length - 1;i>=0;i--) ctx.lineTo(R[i].x, R[i].y); ctx.closePath();
+      ctx.fillStyle = main; ctx.fill();
+      ctx.strokeStyle = dark ? "rgba(255,255,255,.1)" : "rgba(0,0,0,.12)"; ctx.lineWidth = 1.2*s;
+      for(let i=2;i<N;i+=2){ctx.beginPath(); ctx.moveTo(L[i].x, L[i].y); ctx.lineTo(R[i].x, R[i].y); ctx.stroke();}  // ridges
+    }
 
     const bladePath = () => {
       ctx.beginPath();
@@ -18601,9 +18619,14 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.fillStyle = main;
       bladePath();ctx.fill();
       if(!ghost){
-        // Cutting edge on the leading side + a glint sliding along the blade.
-        ctx.strokeStyle = rgbaHex(accent, .85);
-        ctx.lineWidth = 1.4*s;
+        // chitin sheen, then a bone-white cutting edge on the leading side
+        ctx.save(); bladePath(); ctx.clip();
+        const cg = ctx.createLinearGradient(0, -bladeW, 0, bladeW);
+        cg.addColorStop(0, `rgba(255,255,255,${dark ? .16 : .3})`); cg.addColorStop(.5, "rgba(255,255,255,0)"); cg.addColorStop(1, `rgba(0,0,0,${dark ? .3 : .15})`);
+        ctx.fillStyle = cg; ctx.fillRect(0, -bladeW, bladeLen + 20*s, bladeW*2);
+        ctx.restore();
+        ctx.strokeStyle = "#ece4d2";
+        ctx.lineWidth = 2*s;
         ctx.beginPath();
         if(dir > 0){ctx.moveTo(10*s, bladeW*.24); ctx.quadraticCurveTo(bladeLen*.45, bladeW*.7, bladeLen, bladeW*.16); ctx.lineTo(bladeLen + 15*s, 0);}
         else {ctx.moveTo(10*s, -bladeW*.27); ctx.quadraticCurveTo(bladeLen*.46, -bladeW*.93, bladeLen, -bladeW*.16); ctx.lineTo(bladeLen + 15*s, 0);}
@@ -18615,10 +18638,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.save(); bladePath(); ctx.clip();
         ctx.fillStyle = gg; ctx.fillRect(gx - 14*s, -bladeW, 28*s, bladeW*2);
         ctx.restore();
-        // Root rivets.
-        ctx.fillStyle = rgbaHex(accent, .45);
-        ctx.beginPath();ctx.arc(16*s, 0, 1.4*s, 0, Math.PI*2);ctx.fill();
-        ctx.beginPath();ctx.arc(24*s, 0, 1.2*s, 0, Math.PI*2);ctx.fill();
+        // growth ridges near the root
+        ctx.strokeStyle = dark ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.14)"; ctx.lineWidth = 1*s;
+        for(const rx of [18, 26, 34]){ctx.beginPath(); ctx.moveTo(rx*s, -bladeW*.32); ctx.quadraticCurveTo((rx + 3)*s, 0, rx*s, bladeW*.3); ctx.stroke();}
       }
       ctx.restore();
     };
@@ -18634,19 +18656,64 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     drawFanBlade(line.ang);
     drawFanBlade(line.ang + Math.PI);
-    // Motor hub: spins with the blades, bolts on a ring, centre cap.
+    // The head at the pivot: it does not spin. A collar ring turns with the blades behind it.
     ctx.fillStyle = main;
-    ctx.beginPath();ctx.arc(0, 0, 12*s, 0, Math.PI*2);ctx.fill();
-    ctx.strokeStyle = rgbaHex(accent, .3);
-    ctx.lineWidth = 1.3*s;
-    ctx.beginPath();ctx.arc(0, 0, 8.4*s, 0, Math.PI*2);ctx.stroke();
-    ctx.fillStyle = rgbaHex(accent, .6);
-    for(let i=0;i<5;i++){
-      const a = line.ang + i*Math.PI*2/5;
-      ctx.beginPath();ctx.arc(Math.cos(a)*8.4*s, Math.sin(a)*8.4*s, 1.2*s, 0, Math.PI*2);ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, 13*s, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = "#ece4d2"; ctx.globalAlpha = .55; ctx.lineWidth = 1.2*s;
+    for(let i=0;i<6;i++){const a = line.ang + i*Math.PI/3; ctx.beginPath(); ctx.arc(0, 0, 11.5*s, a, a + .35); ctx.stroke();}
+    ctx.globalAlpha = 1;
+    {
+      const fxb = state === "editor" ? null : prismSmokeFor(o);
+      if(fxb) prismFxBeginFrame(o);
+      const dtb = fxb ? (fxb.dt || 0) : 0;
+      const dyingB = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+      let passK = 0, passT = 0;
+      if(fxb){
+        const target = !dyingB && state !== "dying" && (Number(player.baseY) || 0) < o.y - o.len*.9 ? 1 : 0;
+        fxb.passK = (fxb.passK || 0) + (target - (fxb.passK || 0))*Math.min(1, dtb*4);
+        if(target){if(fxb.passAt == null) fxb.passAt = time;} else fxb.passAt = null;
+        passK = fxb.passK; passT = fxb.passAt == null ? 0 : time - fxb.passAt;
+      }
+      const pcx = player.x, pcy = player.baseY - player.h/2;
+      const dx = (pcx - o.x)*ws, dy = pcy - o.y, dl = Math.hypot(dx, dy) || 1;
+      const near = dl < o.len*1.4;
+      let look = near ? {x:Math.max(-1, Math.min(1, dx/dl*1.3)), y:Math.max(-1, Math.min(1, dy/dl*1.3))} : {x:.6, y:Math.sin(time*.7)*.4};
+      let open = 1, squint = .1, slant = .45 + .3*blur, pupil = near ? .35 : .5, mouth = .15 + .25*blur, grin = .5 + .5*blur;
+      if(((time*.31 + o.y*.003) % 1) < .03) open = .1;
+      if(dyingB){const c = Math.abs(Math.sin(deathTimer*22)); open = .5; squint = .95; slant = .3; mouth = .35 + .45*c; grin = 1;}
+      if(passK > .001){
+        const bored = guardSm((passT - 1.2)/1);
+        const tg = {open:1 - .5*bored, squint:.1 + .25*bored, slant:-.15, mouth:.08, grin:.2 - .6*bored, look:{x:.1, y:-1 + .7*bored}};
+        open += (tg.open - open)*passK; squint += (tg.squint - squint)*passK; slant += (tg.slant - slant)*passK; mouth += (tg.mouth - mouth)*passK; grin += (tg.grin - grin)*passK;
+        look = {x:look.x + (tg.look.x - look.x)*passK, y:look.y + (tg.look.y - look.y)*passK};
+      }
+      if(fxb){
+        const sm = fxb.head || (fxb.head = {});
+        const fresh = !sm.ready || dtb > .2;
+        const f = (k, val, rate) => {if(fresh || !(k in sm)){sm[k] = val; return val;} sm[k] += (val - sm[k])*(1 - Math.exp(-dtb*rate)); return sm[k];};
+        open = f("open", open, 30); squint = f("squint", squint, 14); slant = f("slant", slant, 12); mouth = f("mouth", mouth, 24); grin = f("grin", grin, 10);
+        look = {x:f("lx", look.x, 14), y:f("ly", look.y, 14)};
+        sm.ready = true;
+      }
+      ctx.save();
+      ctx.scale(ws, 1);                                  // local +x = away from the wall
+      const R = 13*s;
+      const hg = ctx.createRadialGradient(-R*.35, -R*.45, R*.1, 0, 0, R*1.1);
+      hg.addColorStop(0, `rgba(255,255,255,${dark ? .2 : .32})`); hg.addColorStop(.6, "rgba(255,255,255,0)"); hg.addColorStop(1, `rgba(0,0,0,${dark ? .3 : .14})`);
+      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI*2); ctx.fill();
+      // grin
+      const mo = Math.max(0, Math.min(1, mouth));
+      ctx.fillStyle = "#1a0510";
+      ctx.beginPath();
+      ctx.moveTo(-R*.55, R*.25 - grin*R*.15);
+      ctx.quadraticCurveTo(R*.1, R*.38, R*.75, R*.18 - grin*R*.15);
+      ctx.quadraticCurveTo(R*.15, R*.45 + mo*R*.4, -R*.55, R*.25 - grin*R*.15);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#f1eadb";
+      for(let k=0;k<4;k++){const tx = -R*.42 + k*R*.3; ctx.beginPath(); ctx.moveTo(tx, R*.3); ctx.lineTo(tx + R*.2, R*.3); ctx.lineTo(tx + R*.1, R*.45); ctx.closePath(); ctx.fill();}
+      drawGuardianEye(R*.1, -R*.22, R*.34, R*.48, s*.6, main, Math.max(0, Math.min(1, open)), squint, slant, pupil, look);
+      ctx.restore();
     }
-    ctx.fillStyle = accent;
-    ctx.beginPath();ctx.arc(0, 0, 2.6*s, 0, Math.PI*2);ctx.fill();
     ctx.restore();
   }
   function drawChase(lvl){
