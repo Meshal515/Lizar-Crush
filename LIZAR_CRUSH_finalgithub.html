@@ -17185,29 +17185,119 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       prismSparksUpdateDraw(o);
     }
 
-    // Tesla nodes: coil body, glowing core window, little arcs crawling on the rim.
+    // ELECTRIC_LINK_CRITTERS_V1: the two nodes are two small electrified critters, fur standing up
+    // with static, biting the live arc between them and carrying it. Visual only.
+    //  moving  — they lean into the motion; at the turn-around they squash and blink
+    //  near you— their eyes find you; otherwise they look where they are going
+    //  kill    — they cackle, bouncing, crackling
+    //  passed  — they look up at you, sulk, then get bored
     const pulse = .6 + .4*Math.sin(time*23 + seed);
+    const fxl = editorMode ? null : prismSmokeFor(o);
+    const dtl = fxl ? (fxl.dt || 0) : 0;
+    if(fxl && reversal && (fxl.revAt == null || time - fxl.revAt > .2)) fxl.revAt = time;
+    const revAge = fxl && fxl.revAt != null ? time - fxl.revAt : 9;
+    const dying = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+    let passK = 0, passT = 0;
+    if(fxl){
+      const target = !dying && state !== "dying" && (Number(player.baseY) || 0) < o.y - o.thick ? 1 : 0;
+      fxl.passK = (fxl.passK || 0) + (target - (fxl.passK || 0))*Math.min(1, dtl*4);
+      if(target){if(fxl.passAt == null) fxl.passAt = time;} else fxl.passAt = null;
+      passK = fxl.passK; passT = fxl.passAt == null ? 0 : time - fxl.passAt;
+    }
+    const pcx = player.x, pcy = player.baseY - player.h/2;
+    const dark = paperIsDark(main);
     for(const [i, nx] of [[0, leftX], [1, rightX]]){
+      const facing = i ? -1 : 1;                           // which way the arc leaves its mouth
       const jx = nx + (i ? -1 : 1)*jolt;
-      ctx.fillStyle = main;
-      ctx.beginPath();ctx.arc(jx, cy, poleR, 0, Math.PI*2);ctx.fill();
-      ctx.strokeStyle = rgbaHex(accent, .3);
-      ctx.lineWidth = 1.2*s;
-      for(let r=0;r<3;r++){ctx.beginPath();ctx.arc(jx, cy, poleR*(.5 + r*.14), 0, Math.PI*2);ctx.stroke();}
-      const cg = ctx.createRadialGradient(jx, cy, 0, jx, cy, poleR*.48);
-      cg.addColorStop(0, E[0]);
-      cg.addColorStop(.45, E[1]);
-      cg.addColorStop(1, E[2]);
-      ctx.globalAlpha = .65 + .35*pulse;
-      ctx.fillStyle = cg;
-      ctx.beginPath();ctx.arc(jx, cy, poleR*.42, 0, Math.PI*2);ctx.fill();
-      ctx.globalAlpha = 1;
-      // Rim crawlers.
+      const R = poleR*1.25;
+      const sd = Math.sign(v) || 1;
+      // ---- pose ----
+      let lean = Math.max(-1, Math.min(1, v/220))*.22;
+      const squash = .22*Math.exp(-revAge*9)*Math.cos(revAge*30);
+      let open = 1, squint = .1, slant = .35, pupil = .5, mouth = .22, grin = .6, bounce = 0;
+      const worldX = x + (i ? 1 : -1)*(o.len/2 - poleR/s);
+      const near = Math.abs(pcy - o.y) < 150 && !dying;
+      let look = {x:sd*facing*.7, y:0};
+      if(near){const dx = (pcx - worldX)*facing, dy = pcy - o.y, dl = Math.hypot(dx, dy) || 1; look = {x:Math.max(-1, Math.min(1, dx/dl*1.3)), y:Math.max(-1, Math.min(1, dy/dl*1.3))};}
+      if(revAge < .14) open = .15;                          // blink at the turn
+      const blinkPh = (time*.37 + i*.41 + seed) % 1;
+      if(blinkPh < .03) open = Math.min(open, .1);
+      if(dying){
+        const k = deathTimer;
+        const cackle = Math.abs(Math.sin(k*24 + i));
+        open = .55; squint = .95; slant = .25; mouth = .35 + .45*cackle; grin = 1; bounce = -cackle*3*s; lean = Math.sin(k*18 + i)*.12;
+      }
+      if(passK > .001){
+        const sulk = guardSm((passT - .8)/.6), bored = guardSm((passT - 2.2)/.8);
+        const tgt = {open:1 - .45*bored, squint:.1 + .2*bored, slant:-.1 - .35*sulk*(1 - bored), mouth:.12 - .08*sulk, grin:.6 - 1.2*sulk*(1 - bored) - .3*bored, look:{x:.15, y:-1 + .7*bored}};
+        open = open + (tgt.open - open)*passK; squint = squint + (tgt.squint - squint)*passK; slant = slant + (tgt.slant - slant)*passK;
+        mouth = mouth + (tgt.mouth - mouth)*passK; grin = grin + (tgt.grin - grin)*passK;
+        look = {x:look.x + (tgt.look.x - look.x)*passK, y:look.y + (tgt.look.y - look.y)*passK};
+      }
+      if(fxl){
+        const sm = fxl["c" + i] || (fxl["c" + i] = {});
+        const fresh = !sm.ready || dtl > .2;
+        const f = (k, val, rate) => {if(fresh || !(k in sm)){sm[k] = val; return val;} sm[k] += (val - sm[k])*(1 - Math.exp(-dtl*rate)); return sm[k];};
+        open = f("open", open, 30); squint = f("squint", squint, 14); slant = f("slant", slant, 12); mouth = f("mouth", mouth, 24);
+        grin = f("grin", grin, 10); lean = f("lean", lean, 10); look = {x:f("lx", look.x, 14), y:f("ly", look.y, 14)};
+        sm.ready = true;
+      }
+      // ---- draw ----
+      ctx.save();
+      ctx.translate(jx, cy + bounce);
+      ctx.rotate(lean);
+      ctx.scale(facing, 1);                                 // local +x = toward the arc
+      ctx.scale(1 + squash, 1 - squash*.8);
+      // body: a smooth egg, a crest of static spikes standing up along its back only
+      ctx.beginPath();
+      const N = 48;
+      for(let k=0;k<=N;k++){
+        const a = k/N*Math.PI*2;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        let rr = R*(1 + .1*ca);                               // egg: fuller toward the arc
+        const back = Math.max(0, -ca*.75 - sa*.55);           // the back/top arc carries the crest
+        if(back > .05){
+          const ph = (k*.5) % 1, flick = trapHash(tick*1.7 + Math.floor(k/2)*3.1 + i*9);
+          rr += R*(.18 + .3*back*(.75 + .25*flick))*(ph < .5 ? ph*2 : (1 - ph)*2);
+        }
+        const px = ca*rr, py = sa*rr*.92;
+        k ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = main; ctx.fill();
+      ctx.save(); ctx.clip();
+      const g = ctx.createRadialGradient(-R*.35, -R*.45, R*.1, 0, 0, R*1.2);
+      g.addColorStop(0, `rgba(255,255,255,${dark ? .22 : .35})`); g.addColorStop(.6, "rgba(255,255,255,0)"); g.addColorStop(1, `rgba(0,0,0,${dark ? .35 : .16})`);
+      ctx.fillStyle = g; ctx.fillRect(-R*1.4, -R*1.4, R*2.8, R*2.8);
+      ctx.restore();
+      // two prongs on top (its antennae), crackling between their tips
+      ctx.strokeStyle = main; ctx.lineWidth = Math.max(1.4, 2.2*s); ctx.lineCap = "round";
+      const tipL = {x:-R*.45, y:-R*1.55}, tipR = {x:R*.15, y:-R*1.65};
+      ctx.beginPath(); ctx.moveTo(-R*.3, -R*.8); ctx.quadraticCurveTo(-R*.5, -R*1.2, tipL.x, tipL.y); ctx.moveTo(R*.1, -R*.85); ctx.quadraticCurveTo(R*.25, -R*1.25, tipR.x, tipR.y); ctx.stroke();
+      ctx.fillStyle = E[1];
+      for(const tp of [tipL, tipR]){ctx.beginPath(); ctx.arc(tp.x, tp.y, Math.max(1.2, 1.5*s)*pulse + .4*s, 0, Math.PI*2); ctx.fill();}
+      if(!editorMode && trapHash(tick + i*3) > .35) trapDrawBolt(trapBolt(tipL.x, tipL.y, tipR.x, tipR.y, 2*s, 4, tick + i), .9*s, E, .8);
+      // mouth biting the arc on the arc side: a toothy grin clamped on the current
+      const mo = Math.max(0, Math.min(1, mouth));
+      const mx = R*.55, my = R*.32;
+      ctx.fillStyle = "#1a0510";
+      ctx.beginPath();
+      ctx.moveTo(mx - R*.75, my - grin*R*.18);
+      ctx.quadraticCurveTo(mx - R*.3, my - R*.08, R*1.02, my - R*.1);
+      ctx.lineTo(R*1.02, my + R*.12 + mo*R*.35);
+      ctx.quadraticCurveTo(mx - R*.3, my + R*.15 + mo*R*.3, mx - R*.75, my - grin*R*.18);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#f1eadb";
+      for(let k=0;k<3;k++){const tx = mx - R*.45 + k*R*.32; ctx.beginPath(); ctx.moveTo(tx, my - R*.08); ctx.lineTo(tx + R*.22, my - R*.08); ctx.lineTo(tx + R*.11, my + R*.12); ctx.closePath(); ctx.fill();}
+      // eye: the player's eye style, big for its size
+      drawGuardianEye(-R*.12, -R*.18, R*.4, R*.56, s*.55, main, Math.max(0, Math.min(1, open)), squint, slant, pupil, look);
+      ctx.restore();
+      // rim crawlers (kept: they sell the charge)
       for(let k=0;k<2;k++){
         const a0 = trapHash(tick*2.3 + i*5 + k*11 + seed)*Math.PI*2;
         const a1 = a0 + .7 + trapHash(tick + k)*.8;
-        const pts = trapBolt(jx + Math.cos(a0)*poleR*1.02, cy + Math.sin(a0)*poleR*1.02, jx + Math.cos(a1)*poleR*1.02, cy + Math.sin(a1)*poleR*1.02, 3*s, 4, tick + k*3 + i);
-        trapDrawBolt(pts, 1.1*s, E, .8);
+        const pts = trapBolt(jx + Math.cos(a0)*R*1.05, cy + bounce + Math.sin(a0)*R*1.05, jx + Math.cos(a1)*R*1.05, cy + bounce + Math.sin(a1)*R*1.05, 3*s, 4, tick + k*3 + i);
+        trapDrawBolt(pts, 1*s, E, .7);
       }
     }
     ctx.restore();
