@@ -12682,7 +12682,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(type === "electric" && deathCulprit.type === "slider") return 1.0;
       if(type === "laser" && deathCulprit.type === "beam") return .95;
       if(type === "fan" && deathCulprit.type === "sideSweeper") return 1.0;
-      if(type === "crusher" && deathCulprit.type === "stillCrusher") return 1.0;
     }
     if(type === "gate") return 1.0;
     if(type === "ink") return 1.95;
@@ -16056,7 +16055,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function spawnDeathParticles(type){
     // Prism Pulse draws its own sparks, exit spray and smoke in its melt death.
     if(type === "prismPulse" || type === "gate") return;
-    if(deathCulprit && ((type === "electric" && deathCulprit.type === "slider") || (type === "laser" && deathCulprit.type === "beam") || (type === "fan" && deathCulprit.type === "sideSweeper") || (type === "crusher" && deathCulprit.type === "stillCrusher") || (type === "saw" && deathCulprit.type === "orbitSaw"))) return;
+    if(deathCulprit && ((type === "electric" && deathCulprit.type === "slider") || (type === "laser" && deathCulprit.type === "beam") || (type === "fan" && deathCulprit.type === "sideSweeper") || (type === "saw" && deathCulprit.type === "orbitSaw"))) return;
     const rect = playerRect();
     if(type === "ink"){spawnInkDeathParticles();spawnInkDeathParticles();return;}
     if(type === "shockMine"){
@@ -18605,93 +18604,275 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.restore();
   }
 
-  function drawStillCrusher(o){
-    const info = stillCrusherState(o, time);
-    const left = worldToScreen(info.left.x, info.left.y);
-    const right = worldToScreen(info.right.x, info.right.y);
-    const safe = worldToScreen(info.safe.x, info.safe.y);
-    const s = left.s;
-    const main = trapMain();
-    const accent = trapAccent();
-    const idle = trapIdle();
-    const active = info.mode === "hold" || info.mode === "closing" || info.mode === "crush";
+  // STILL_CRUSHER_GUARDIANS_V1: the two walls are two heavy armoured creatures, each one IS its
+  // wall (the body fills the collision rect exactly; the face is the edge that comes for you).
+  // Logic is untouched: stillCrusherState still decides everything; this only reads it.
+  //   open     — slumped, half asleep, breathing slowly, eyeing each other with boredom
+  //   closing  — they heave in with effort (grunt), eyes snapping open
+  //   hold     — frozen, eyes locked on you from up close; they do nothing unless you move
+  //   crush    — eyes fly wide ("got you!"), then they grind you between them, chew, and spit
+  //   opening  — they back off, disappointed, rolling their eyes
+  //   passed   — they look up at you, one yawns, both nod off
+  const guardSm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
+  // The player's eye (a tall white oval with a round pupil, shop eye colours), given lids made of
+  // the creature's skin: open 0..1, squint (lower lid), slant (+ angry: front corner down).
+  function drawGuardianEye(ex, ey, rx, ry, s, skin, open, squint, slant, pupil, look){
+    const tone = eyeSkin();
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,.035)";
-    roundRect(ctx, left.x, left.y, WORLD_W*s, info.cfg.h*s, 18*s);ctx.fill();
-    function jaw(rect, p, flip){
-      const w = Math.max(0, rect.w*s), h = rect.h*s;
-      if(w <= .5) return;
-      ctx.fillStyle = "rgba(0,0,0,.18)";
-      roundRect(ctx, p.x + (flip>0 ? -3*s : 3*s), p.y-3*s, w+6*s, h+6*s, 10*s);ctx.fill();
-      ctx.fillStyle = main;
-      roundRect(ctx, p.x, p.y, w, h, 9*s);ctx.fill();
-      ctx.strokeStyle = "#000"; ctx.lineWidth = Math.max(1,2*s);
-      roundRect(ctx, p.x, p.y, w, h, 9*s);ctx.stroke();
-      ctx.fillStyle = rgbaHex(accent, active ? .22 : .12);
-      for(let i=0;i<4;i++){
-        const yy = p.y + (14 + i*24)*s;
-        roundRect(ctx, p.x + (flip>0 ? w-22*s : 8*s), yy, 14*s, 7*s, 3*s);ctx.fill();
-      }
-      const biteW = Math.min(14*s, Math.max(5*s, w*.18));
-      ctx.fillStyle = "rgba(0,0,0,.82)";
-      if(flip>0) roundRect(ctx, p.x + w - biteW, p.y + 4*s, biteW, Math.max(1,h - 8*s), 5*s);
-      else roundRect(ctx, p.x, p.y + 4*s, biteW, Math.max(1,h - 8*s), 5*s);
-      ctx.fill();
-      ctx.strokeStyle = rgbaHex(accent, active ? .55 : .25);
-      ctx.lineWidth = Math.max(1,1.4*s);
-      const edgeX = flip>0 ? p.x + w - 5*s : p.x + 5*s;
-      ctx.beginPath();ctx.moveTo(edgeX,p.y+9*s);ctx.lineTo(edgeX,p.y+h-9*s);ctx.stroke();
-    }
-    jaw(info.left, left, 1);
-    jaw(info.right, right, -1);
-
-    if(info.mode === "crush"){
-      const c = worldToScreen(info.centerX, info.cy);
-      const power = Math.max(0, info.impactT || 0);
-      ctx.save();
-      ctx.globalAlpha = .22 + power*.38;
-      ctx.strokeStyle = "rgba(255,255,255,.92)";
-      ctx.lineWidth = Math.max(2, (3 + power*6)*s);
-      ctx.beginPath();
-      ctx.moveTo(c.x, left.y + 8*s);
-      ctx.lineTo(c.x, left.y + info.cfg.h*s - 8*s);
-      ctx.stroke();
-      ctx.globalAlpha = .18 + power*.32;
-      ctx.strokeStyle = rgbaHex(accent, .92);
-      ctx.lineWidth = Math.max(1.5, (2 + power*4)*s);
-      for(let i=0;i<7;i++){
-        const yy = left.y + info.cfg.h*s*(.15 + i*.115);
-        const len = (20 + i%3*12 + power*34)*s;
-        ctx.beginPath();
-        ctx.moveTo(c.x - len, yy - (i%2?4:-3)*s);
-        ctx.lineTo(c.x - 4*s, yy);
-        ctx.moveTo(c.x + len, yy + (i%2?3:-4)*s);
-        ctx.lineTo(c.x + 4*s, yy);
-        ctx.stroke();
-      }
-      ctx.restore();
-    } else {
-      const gapPulse = info.mode === "hold" ? .12 + Math.abs(Math.sin(time*8))*.10 : .07;
-      ctx.strokeStyle = info.mode === "hold" ? rgbaHex(accent, .75) : rgbaHex(idle, .55);
-      ctx.lineWidth = Math.max(1,1.5*s);
-      ctx.setLineDash([6*s,5*s]);
-      roundRect(ctx, safe.x, safe.y + 8*s, info.safe.w*s, Math.max(1, info.safe.h*s - 16*s), 10*s);ctx.stroke();
-      ctx.setLineDash([]);
-      if(info.mode === "hold"){
-        const cx = safe.x + info.safe.w*s/2;
-        const cy = safe.y - 15*s;
-        const txt = Math.max(1, Math.ceil(info.holdLeft));
-        ctx.fillStyle = rgbaHex(accent, .88);
-        roundRect(ctx, cx-18*s, cy-12*s, 36*s, 22*s, 9*s);ctx.fill();
-        ctx.fillStyle = "#fff"; ctx.font = `${11*s}px Inter, sans-serif`; ctx.textAlign="center"; ctx.textBaseline="middle";
-        ctx.fillText(String(txt), cx, cy);
-        ctx.strokeStyle = rgbaHex(accent, .55 + gapPulse);ctx.lineWidth = Math.max(1,2*s);
-        ctx.beginPath();ctx.moveTo(safe.x, safe.y + info.safe.h*s + 8*s);ctx.lineTo(safe.x + info.safe.w*s, safe.y + info.safe.h*s + 8*s);ctx.stroke();
-      }
-    }
+    ctx.translate(ex, ey);
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI*2);
+    ctx.fillStyle = tone.color; ctx.fill();
+    ctx.save(); ctx.clip();
+    const px = Math.max(-1, Math.min(1, look.x))*rx*.42, py = Math.max(-1, Math.min(1, look.y))*ry*.5;
+    ctx.fillStyle = tone.pupil;
+    ctx.beginPath(); ctx.ellipse(px, py, rx*.42*(.6 + .6*pupil), rx*.5*(.6 + .6*pupil), 0, 0, Math.PI*2); ctx.fill();
+    // lids
+    const sIn = Math.max(0, slant)*ry*.7, sOut = Math.max(0, -slant)*ry*.7;
+    const lidY = -ry + (1 - open)*ry*2.1;
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(-rx - 2, -ry - 2); ctx.lineTo(rx + 2, -ry - 2);
+    ctx.lineTo(rx + 2, lidY + sIn); ctx.quadraticCurveTo(0, lidY + (sIn + sOut)*.5 + ry*.25*open, -rx - 2, lidY + sOut);
+    ctx.closePath(); ctx.fill();
+    const low = ry - squint*ry*1.1;
+    ctx.beginPath();
+    ctx.moveTo(-rx - 2, ry + 2); ctx.lineTo(rx + 2, ry + 2); ctx.lineTo(rx + 2, low); ctx.quadraticCurveTo(0, low - ry*.2*squint, -rx - 2, low); ctx.closePath(); ctx.fill();
+    // lid edge
+    ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.lineWidth = Math.max(.8, 1.2*s); ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(rx + 2, lidY + sIn); ctx.quadraticCurveTo(0, lidY + (sIn + sOut)*.5 + ry*.25*open, -rx - 2, lidY + sOut); ctx.stroke();
+    ctx.restore();
+    if(open > .06) strokeCustomEyeOutline(ctx, 0, 0, rx, ry, s, tone);
     ctx.restore();
   }
-
+  function drawStillCrusher(o){
+    const info = stillCrusherState(o, time);
+    const editorMode = state === "editor";
+    const main = trapMain();
+    const dark = paperIsDark(main);
+    const s = worldToScreen(0, info.cy).s;
+    const cyS = worldToScreen(0, info.cy).y;
+    const hS = info.cfg.h*s;
+    const fx = editorMode ? null : prismSmokeFor(o);
+    if(fx) prismFxBeginFrame(o);
+    const dt = fx ? (fx.dt || 0) : 0;
+    // Shared context: the player, the death, "passed".
+    const pc = {x:player.x, y:player.baseY - player.h/2};
+    const dyingHere = state === "dying" && deathType === "crusher" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+    const dT = dyingHere ? deathTimer : -1;
+    let passK = 0, passT = 0;
+    if(fx){
+      const target = !dyingHere && state !== "dying" && (Number(player.baseY) || 0) < info.top - 6 ? 1 : 0;
+      fx.passK = (fx.passK || 0) + (target - (fx.passK || 0))*Math.min(1, dt*4);
+      if(target){if(fx.passAt == null) fx.passAt = time;} else fx.passAt = null;
+      passK = fx.passK; passT = fx.passAt == null ? 0 : time - fx.passAt;
+    }
+    for(const side of [1, -1]){
+      // side +1: left guardian (faces right); -1: right guardian (faces left).
+      const rect = side > 0 ? info.left : info.right;
+      let faceX = side > 0 ? rect.x + rect.w : rect.x;
+      // In the crush the jaws over-close; visually the faces meet instead of passing through.
+      if(info.mode === "crush") faceX = side > 0 ? Math.min(faceX, info.centerX - 2) : Math.max(faceX, info.centerX + 2);
+      const bodyW = side > 0 ? faceX : WORLD_W - faceX;
+      if(bodyW < 2) continue;
+      const fS = worldToScreen(faceX, info.cy);
+      // ---- pose (targets) ----
+      const t = time, seed = side*3.7 + (Number(o.y) || 0)*.011;
+      const breath = Math.sin(t*1.4 + seed);
+      let open = .5, squint = .2, slant = -.1, pupil = .55, look = {x:1, y:.1}, mouth = .05, frown = 0, brow = 0, widen = 0, chew = 0, tremble = 0, grunt = 0, zzz = 0, yawn = 0;
+      const m = info.mode, p = info.progress;
+      // gaze toward the player, relative to this guardian's eye
+      const eyeWX = faceX - side*24, eyeWY = info.cy - info.cfg.h*.17;
+      const gdx = (pc.x - eyeWX)*side, gdy = pc.y - eyeWY, gl = Math.hypot(gdx, gdy) || 1;
+      const atYou = {x:Math.max(-1, Math.min(1, gdx/gl*1.3)), y:Math.max(-1, Math.min(1, gdy/gl*1.3))};
+      if(m === "open"){
+        // bored: heavy lids, a slow blink, every few seconds an eye-roll at the other one
+        const roll = (t*.31 + side*.27) % 1;
+        open = .46 + .06*breath; squint = .25; slant = -.15;
+        look = roll < .14 ? {x:Math.cos(roll/.14*Math.PI*2)*.6, y:-.55 + Math.sin(roll/.14*Math.PI)*.2} : {x:.9, y:.15};
+        mouth = .04 + .03*(.5 + .5*breath);
+      } else if(m === "closing"){
+        open = .55 + .5*guardSm(p*1.6); slant = .55*p; brow = .7*p; grunt = Math.sin(Math.min(1, p)*Math.PI);
+        mouth = .08 + .3*grunt; squint = .25*(1 - p); look = {x:.6 + .4*atYou.x*p, y:atYou.y*p};
+        pupil = .55 - .15*p;
+      } else if(m === "hold"){
+        open = 1; slant = .75; brow = .9; squint = .1; pupil = .34; look = atYou;
+        tremble = 1; mouth = .03; frown = -.35;                      // a tight, toothy grin
+      } else if(m === "opening"){
+        const k = 1 - p;                                               // 0 → 1 as they back off
+        open = .62 - .1*k; slant = -.45*k; brow = -.4*k; frown = .6*k; squint = .2;
+        const r = t*7 + seed;
+        look = {x:Math.cos(r)*.6*Math.sin(k*Math.PI), y:-.3 + Math.sin(r)*.45*Math.sin(k*Math.PI)};
+        mouth = .05; pupil = .5;
+      }
+      if(m === "crush"){
+        const a = guardSm(info.slamAge/.06);
+        open = 1; widen = a*(1 - guardSm((info.slamAge - .25)/.3)); pupil = .2; slant = .9; brow = 1; look = atYou; mouth = .1;
+      }
+      if(dT >= 0){
+        // grinding you between them: jaws chewing, then they spit you out and look pleased
+        // grinding you between them, then a satisfied squint
+        if(dT < .42){chew = guardSm(dT/.08); mouth = .12 + .3*Math.abs(Math.sin(dT*22 + side)); open = .85; squint = .3; slant = .6; widen = 0;}
+        else {open = .5; squint = .85; slant = .3; mouth = .1; frown = -.6; look = {x:.4, y:.6};}
+      }
+      if(passK > .001){
+        // you got past: they look up at you; then the right one yawns; then both doze off
+        const up = {open:1, squint:.1, slant:-.1, pupil:.5, look:{x:.2, y:-1}};
+        const doze = guardSm((passT - 2.2)/.9);
+        const yw = side < 0 ? Math.sin(clamp01((passT - 1.1)/1.0)*Math.PI) : 0;
+        const tgtOpen = up.open*(1 - doze) - .4*yw*(1 - doze);
+        open = open + (Math.max(0, tgtOpen) - open)*passK;
+        squint = squint + ((.1 + .5*yw)*(1 - doze) + .15*doze - squint)*passK;
+        slant = slant + (-.1 - slant)*passK; brow = brow*(1 - passK); tremble *= 1 - passK; frown = frown*(1 - passK);
+        look = {x:look.x + (up.look.x - look.x)*passK, y:look.y + (up.look.y - look.y)*passK};
+        mouth = mouth + ((.05 + .7*yw)*(1 - doze) + (.04 + .03*(.5 + .5*breath))*doze - mouth)*passK;
+        zzz = doze*passK;
+      }
+      // ---- smoothing: nothing flips in one frame ----
+      if(fx){
+        const key = side > 0 ? "gL" : "gR";
+        const sm = fx[key] || (fx[key] = {});
+        const fresh = !sm.ready || dt > .2;
+        const f = (k, v, rate) => {if(fresh || !(k in sm)){sm[k] = v; return v;} sm[k] += (v - sm[k])*(1 - Math.exp(-dt*rate)); return sm[k];};
+        const fast = dT >= 0 || m === "crush";
+        open = f("open", open, fast ? 40 : 14); squint = f("squint", squint, 12); slant = f("slant", slant, 10);
+        pupil = f("pupil", pupil, 12); look = {x:f("lx", look.x, 16), y:f("ly", look.y, 16)};
+        mouth = f("mouth", mouth, fast ? 40 : 16); frown = f("frown", frown, 8); brow = f("brow", brow, 10);
+        widen = f("widen", widen, 30); tremble = f("tremble", tremble, 8); zzz = f("zzz", zzz, 4);
+        sm.ready = true;
+      }
+      // ---- draw ----
+      const W = bodyW*s;
+      const jit = tremble*.6*s;
+      const jx = (trapHash(Math.floor(t*30) + side*11) - .5)*jit, jy = (trapHash(Math.floor(t*30)*1.3 + side) - .5)*jit;
+      ctx.save();
+      ctx.translate(fS.x, cyS);
+      ctx.scale(side, 1);                                   // local +x = toward the middle
+      // Body: one armoured mass from the screen edge to the face.
+      const r = Math.min(hS*.36, 28*s);
+      const bodyPath = () => {
+        ctx.beginPath();
+        ctx.moveTo(-W - 30*s, -hS/2);
+        ctx.lineTo(-r, -hS/2);
+        ctx.quadraticCurveTo(0, -hS/2, 0, -hS/2 + r);
+        ctx.lineTo(0, hS/2 - r);
+        ctx.quadraticCurveTo(0, hS/2, -r, hS/2);
+        ctx.lineTo(-W - 30*s, hS/2);
+        ctx.closePath();
+      };
+      bodyPath(); ctx.fillStyle = main; ctx.fill();
+      ctx.save(); bodyPath(); ctx.clip();
+      const g = ctx.createLinearGradient(0, -hS/2, 0, hS/2);
+      g.addColorStop(0, `rgba(255,255,255,${dark ? .14 : .28})`);
+      g.addColorStop(.42, "rgba(255,255,255,0)");
+      g.addColorStop(1, `rgba(0,0,0,${dark ? .34 : .16})`);
+      ctx.fillStyle = g; ctx.fillRect(-W - 40*s, -hS/2, W + 50*s, hS);
+      // shell plates behind the head
+      ctx.strokeStyle = dark ? "rgba(255,255,255,.1)" : "rgba(0,0,0,.14)";
+      ctx.lineWidth = 2*s;
+      for(let px = -78*s; px > -W - 20*s; px -= 30*s){
+        ctx.beginPath(); ctx.moveTo(px, -hS/2); ctx.quadraticCurveTo(px - 10*s, 0, px, hS/2); ctx.stroke();
+      }
+      // face plate: slightly lighter muzzle at the front
+      const fp = ctx.createLinearGradient(-74*s, 0, 0, 0);
+      fp.addColorStop(0, "rgba(255,255,255,0)"); fp.addColorStop(1, `rgba(255,255,255,${dark ? .07 : .12})`);
+      ctx.fillStyle = fp; ctx.fillRect(-74*s, -hS/2, 74*s, hS);
+      ctx.restore();
+      // spikes along the spine, on the shell seams
+      ctx.fillStyle = main;
+      for(let px = -78*s, i = 0; px > -W + 6*s && i < 6; px -= 30*s, i++){
+        ctx.beginPath(); ctx.moveTo(px - 6*s, -hS/2 + 1); ctx.lineTo(px - 1*s, -hS/2 - 7*s); ctx.lineTo(px + 4*s, -hS/2 + 1); ctx.closePath(); ctx.fill();
+      }
+      // Mouth: low on the face, opening at the front edge (the edge that grinds you).
+      {
+        const mo = Math.max(0, Math.min(1, mouth));
+        const backX = -62*s, frontX = -3*s, yTop = hS*.16, corner = hS*.16 + frown*7*s;
+        const drop = mo*hS*.22;
+        ctx.beginPath();
+        ctx.moveTo(backX, corner);
+        ctx.quadraticCurveTo(-32*s, yTop - 3*s, frontX, yTop - 2*s);
+        ctx.lineTo(frontX, yTop + 2*s + drop);
+        ctx.quadraticCurveTo(-30*s, yTop + 6*s + drop*1.05, backX, corner);
+        ctx.closePath();
+        const gm = ctx.createLinearGradient(0, yTop, 0, yTop + drop + 6*s);
+        gm.addColorStop(0, "#1c0407"); gm.addColorStop(1, "#5a1219");
+        ctx.fillStyle = gm; ctx.fill();
+        ctx.save(); ctx.clip();
+        ctx.fillStyle = "#ece4d2"; ctx.strokeStyle = "rgba(0,0,0,.45)"; ctx.lineWidth = Math.max(.6, .8*s);
+        for(let i=0;i<5;i++){
+          const tx = -54*s + i*11.5*s, ty = yTop - 3*s + Math.abs(i - 4)*.3*s;
+          ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx + 8*s, ty); ctx.lineTo(tx + 4*s, ty + (6 + (i === 4 ? 3 : 0))*s); ctx.closePath(); ctx.fill(); ctx.stroke();
+        }
+        for(let i=0;i<4;i++){
+          const tx = -48*s + i*12*s, ty = yTop + 3*s + drop;
+          ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx + 8*s, ty); ctx.lineTo(tx + 4*s, ty - 5.5*s); ctx.closePath(); ctx.fill(); ctx.stroke();
+        }
+        ctx.restore();
+        ctx.strokeStyle = "rgba(0,0,0,.55)"; ctx.lineWidth = Math.max(1, 1.6*s); ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(backX, corner); ctx.quadraticCurveTo(-32*s, yTop - 3*s, frontX, yTop - 2*s); ctx.stroke();
+        // jowl fold at the mouth corner
+        ctx.strokeStyle = dark ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.16)";
+        ctx.beginPath(); ctx.moveTo(backX - 4*s, corner - 8*s); ctx.quadraticCurveTo(backX - 10*s, corner, backX - 4*s, corner + 9*s); ctx.stroke();
+      }
+      // Nostril slit near the front.
+      ctx.fillStyle = "rgba(0,0,0,.55)";
+      ctx.beginPath(); ctx.ellipse(-9*s, -hS*.01, 1.4*s, 3.2*s, .2, 0, Math.PI*2); ctx.fill();
+      // Eye, under a heavy brow.
+      // The same eye as the player's (shop eye colours), set close to the front of the face.
+      const erx = 8.6*s*(1 + widen*.16), ery = 13*s*(1 + widen*.16), er = ery;
+      const ex = -14*s + jx, ey = -hS*.15 + jy;
+      drawGuardianEye(ex, ey, erx, ery, s, main, Math.max(0, Math.min(1, open)), squint, slant, pupil, look);
+      {
+        const by = ey - er*.95 - brow*2*s;
+        ctx.fillStyle = paperShade(main, dark ? -.25 : -.2);
+        ctx.beginPath();
+        ctx.moveTo(ex - er*1.5, by + (brow < 0 ? -brow*6*s : 2*s));
+        ctx.quadraticCurveTo(ex - er*.2, by - 7*s, ex + er*1.25, by + Math.max(0, brow)*8*s);
+        ctx.lineTo(ex + er*1.2, by + Math.max(0, brow)*8*s + 4*s);
+        ctx.quadraticCurveTo(ex - er*.2, by - 2*s, ex - er*1.5, by + 6*s);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      // Zs while dozing (drawn unmirrored so the letters read correctly).
+      if(zzz > .02){
+        ctx.save();
+        ctx.fillStyle = rgbaHex(main, 1);
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        for(let i=0;i<3;i++){
+          const ph = (t*.4 + i/3 + (side > 0 ? 0 : .5)) % 1;
+          ctx.globalAlpha = zzz*Math.sin(ph*Math.PI)*.75;
+          ctx.font = `800 ${Math.round((7 + ph*6)*s)}px Inter, system-ui, sans-serif`;
+          ctx.fillText("z", fS.x - side*(30 - ph*10)*s, cyS - hS/2 - (6 + ph*22)*s);
+        }
+        ctx.restore();
+      }
+    }
+    // Impact at the bite: a short burst of lines where the faces slam together.
+    if(info.mode === "crush"){
+      const c = worldToScreen(info.centerX, info.cy);
+      const k = clamp01(info.slamAge/.3);
+      if(k < 1){
+        ctx.save();
+        ctx.lineCap = "round";
+        for(let i=0;i<8;i++){
+          const yy = c.y + (i - 3.5)/3.5*hS*.42, len = (14 + (i % 3)*8 + k*22)*s;
+          ctx.strokeStyle = i % 2 ? `rgba(255,255,255,${.9*(1 - k)})` : rgbaHex(main, .8*(1 - k));
+          ctx.lineWidth = (3 - (i % 2))*(1 - k)*s + .5;
+          for(const sd of [-1, 1]){ctx.beginPath(); ctx.moveTo(c.x + sd*(10 + k*20)*s, yy); ctx.lineTo(c.x + sd*(10 + k*20)*s + sd*len, yy - sd*(i - 3.5)*2*s); ctx.stroke();}
+        }
+        ctx.restore();
+      }
+    } else if(info.mode === "hold" && !editorMode && !dyingHere && state !== "dying" && passK < .5){
+      // How long they stay shut: a small badge over the slot.
+      const c = worldToScreen(info.centerX, info.top);
+      const txt = Math.max(1, Math.ceil(info.holdLeft));
+      ctx.save();
+      ctx.fillStyle = rgbaHex(main, .92);
+      roundRect(ctx, c.x - 15*s, c.y - 24*s, 30*s, 19*s, 9*s); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.font = `800 ${Math.round(11*s)}px Inter, system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(txt), c.x, c.y - 14.5*s);
+      ctx.restore();
+    }
+  }
   function sniperBeamTarget(o){
     if(o._sniperState === "firing") return sniperTargetPoint();
     return o._sniperTarget || sniperTargetPoint();
@@ -20542,7 +20723,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.globalAlpha = 1 - Math.max(0, t-.72)*3.2;
 
     // Still Crusher: the crumple is drawn on top of the jaws by drawCrusherDeathOverlay.
-    if(deathType === "crusher" && deathCulprit?.type === "stillCrusher"){ctx.restore(); return;}
     if(deathType === "electric" && deathCulprit?.type === "slider"){
       // ELECTRIC_LINK_DEATH_V1 (electrocution): the cube is pinned and shaken by the current, flicking
       // between itself and an x-ray frame while arcs crawl over it from the side the link touched;
@@ -21552,7 +21732,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function drawCrusherDeathOverlay(){
     if(state !== "dying" || deathType !== "crusher" || !deathCulprit || deathCulprit.type !== "stillCrusher") return;
     drawStillCrusher(deathCulprit);
-    drawPaperCrushDeath();
   }
 
   function tplClamp(n,min,max){return Math.max(min, Math.min(max, n));}
@@ -22925,7 +23104,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }else if(id==="portalMonster"){
       trapPreviewCircle(g,cx,cy,19,"#090014",violet,5);trapPreviewCircle(g,cx,cy,8,"#000");trapPreviewLine(g,cx-18,cy+11,cx+18,cy+11,4,"#fff",.55);
     }else if(id==="stillCrusher"){
-      trapPreviewRect(g,14,cy-20,18,40,black,null,5);trapPreviewRect(g,w-32,cy-20,18,40,black,null,5);trapPreviewRect(g,cx-7,cy-12,14,24,black,null,4);
+      trapPreviewRect(g,6,cy-16,cx-14,32,black,null,9);trapPreviewRect(g,cx+8,cy-16,w-cx-14,32,black,null,9);
+      trapPreviewCircle(g,cx-20,cy-6,5,"#fff");trapPreviewCircle(g,cx+20,cy-6,5,"#fff");trapPreviewCircle(g,cx-18,cy-5,2.2,black);trapPreviewCircle(g,cx+18,cy-5,2.2,black);
+      trapPreviewLine(g,cx-34,cy+7,cx-12,cy+6,2,"#fff",.75);trapPreviewLine(g,cx+12,cy+6,cx+34,cy+7,2,"#fff",.75);
     }else if(id==="predictiveSniper"){
       trapPreviewCircle(g,w-24,cy,16,black);trapPreviewCircle(g,w-24,cy,7,"#fff");trapPreviewRect(g,w-14,cy-8,12,16,black,null,4);trapPreviewLine(g,8,cy-10,w-38,cy,4,red,.75);trapPreviewLine(g,8,cy+10,w-38,cy,4,red,.75);
     }else if(id==="coverBlock"){
