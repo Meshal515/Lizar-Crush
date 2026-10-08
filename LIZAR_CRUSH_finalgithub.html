@@ -18419,56 +18419,133 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     if(!editorMode){prismSmokeUpdateDraw(o); prismSparksUpdateDraw(o);}
 
-    // Reactors: armoured block, plasma window that swirls brighter with energy, nozzle on the
-    // inner face, vents. They shudder while firing.
+    // ENERGY_GATE_FROGS_V1: the reactors are two square stone frogs. Each frog IS its block (the
+    // body fills the lethal square). Their throat sacs fill with plasma before they fire; the jets
+    // are their tongues lashing out at each other; when the tongues pull back they gulp and puff.
+    // Visual only: collision is still clampBeamData (blocks + segments).
     const shake = (live ? .8 : 0) + charge*.6;
+    const fxg = editorMode ? null : prismSmokeFor(o);
+    const dtg = fxg ? (fxg.dt || 0) : 0;
+    const dyingG = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+    let passK = 0, passT = 0;
+    if(fxg){
+      const target = !dyingG && state !== "dying" && (Number(player.baseY) || 0) < blocks.y - 6 ? 1 : 0;
+      fxg.passK = (fxg.passK || 0) + (target - (fxg.passK || 0))*Math.min(1, dtg*4);
+      if(target){if(fxg.passAt == null) fxg.passAt = time;} else fxg.passAt = null;
+      passK = fxg.passK; passT = fxg.passAt == null ? 0 : time - fxg.passAt;
+      // the gulp-puff when the tongues come back in
+      if(fxg.wasLive && !live && !disabled) fxg.gulpAt = time;
+      fxg.wasLive = live;
+    }
+    const gulpAge = fxg && fxg.gulpAt != null ? time - fxg.gulpAt : 9;
+    if(fxg && gulpAge < .3 && !dyingG){
+      for(const [bxw, sd] of [[blocks.leftX + blocks.size, 1], [blocks.rightX, -1]]) prismSmokeEmitRate(o, bxw + sd*2, o.y - 4, 0, 16*(heavy ? 1 : .5), .4);
+    }
+    const dark = paperIsDark(main);
+    const pcx = player.x, pcy = player.baseY - player.h/2;
     const reactor = (bx, side) => {
+      // side +1: left frog (faces right) / -1: right frog (faces left)
       const jx = bx + (trapHash(tick*1.9 + side*3 + seed) - .5)*2*s*shake;
       const jy = (trapHash(tick*2.3 + side*5 + seed) - .5)*1.4*s*shake;
-      ctx.save();
-      ctx.translate(jx, top + jy);
-      ctx.fillStyle = main;
-      roundRect(ctx, 0, 0, size, size, 10*s);ctx.fill();
-      // Plasma window.
-      const wx = size*.2, wy = size*.2, ww = size*.6, wh = size*.6;
-      ctx.fillStyle = "#06210d";
-      roundRect(ctx, wx, wy, ww, wh, 7*s);ctx.fill();
-      ctx.save();
-      roundRect(ctx, wx, wy, ww, wh, 7*s);ctx.clip();
-      const cxw = wx + ww/2, cyw = wy + wh/2;
-      for(let k=0;k<3;k++){
-        const a = time*(3 + k) + k*2.1 + seed;
-        const r = ww*(.18 + .1*k);
-        const g = ctx.createRadialGradient(cxw + Math.cos(a)*r*.4, cyw + Math.sin(a)*r*.4, 0, cxw, cyw, ww*.7);
-        g.addColorStop(0, P[0]);
-        g.addColorStop(.3, P[1]);
-        g.addColorStop(.7, P[2]);
-        g.addColorStop(1, "rgba(6,33,13,0)");
-        ctx.globalAlpha = (.25 + .75*energy)*(k ? .5 : 1);
-        ctx.fillStyle = g;
-        ctx.fillRect(wx, wy, ww, wh);
+      const breath = Math.sin(time*1.6 + side + seed);
+      // ---- pose ----
+      let open = .9, squint = .15, slant = .2, pupil = .5, mouth = 0, crouch = 0, sac = .15 + .06*breath, sacGlow = .2*energy, laugh = 0;
+      const blinkPh = (time*.29 + side*.37 + seed) % 1;
+      if(blinkPh < .035) open = .08;
+      const eyeWX = side > 0 ? blocks.leftX + blocks.size*.62 : blocks.rightX + blocks.size*.38;
+      const eyeWY = blocks.y + blocks.size*.2;
+      const near = Math.abs(pcy - o.y) < 170;
+      let look = {x:.6, y:.1};
+      if(near){const dx = (pcx - eyeWX)*side, dy = pcy - eyeWY, dl = Math.hypot(dx, dy) || 1; look = {x:Math.max(-1, Math.min(1, dx/dl*1.3)), y:Math.max(-1, Math.min(1, dy/dl*1.3))};}
+      if(charge > 0){sac = .2 + .75*charge + .05*Math.sin(time*30); sacGlow = charge; crouch = charge; squint = .1 + .35*charge; slant = .2 + .5*charge;}
+      if(live){mouth = .35 + .65*info.amount; open = 1; squint = .05; slant = .7; sac = .25*(1 - info.amount) + .1; sacGlow = .6;}
+      if(gulpAge < .35){const k = gulpAge/.35; sac = Math.max(sac, .45*Math.sin(k*Math.PI)); open = Math.min(open, .5 + .5*k);}
+      if(dyingG){const c = Math.abs(Math.sin(deathTimer*20 + side)); laugh = 1; open = .55; squint = .95; slant = .2; mouth = .18 + .35*c; sac = .3 + .45*c; sacGlow = .6;}
+      if(passK > .001){
+        const sleepy = guardSm((passT - 1.5)/1.2);
+        const t2 = {open:1 - .6*sleepy, squint:.1 + .3*sleepy, slant:-.1, look:{x:.1, y:-1 + .8*sleepy}};
+        open += (t2.open - open)*passK; squint += (t2.squint - squint)*passK; slant += (t2.slant - slant)*passK;
+        look = {x:look.x + (t2.look.x - look.x)*passK, y:look.y + (t2.look.y - look.y)*passK};
       }
+      if(fxg){
+        const sm = fxg["f" + side] || (fxg["f" + side] = {});
+        const fresh = !sm.ready || dtg > .2;
+        const f = (k, val, rate) => {if(fresh || !(k in sm)){sm[k] = val; return val;} sm[k] += (val - sm[k])*(1 - Math.exp(-dtg*rate)); return sm[k];};
+        open = f("open", open, 30); squint = f("squint", squint, 14); slant = f("slant", slant, 12); mouth = f("mouth", mouth, 26);
+        crouch = f("crouch", crouch, 12); sac = f("sac", sac, 14); look = {x:f("lx", look.x, 14), y:f("ly", look.y, 14)};
+        sm.ready = true;
+      }
+      // ---- draw ---- (local: origin at the block's top-left, x toward the middle)
+      ctx.save();
+      ctx.translate(jx + (side > 0 ? 0 : size), top + jy);
+      ctx.scale(side, 1);
+      const S = size;
+      // body: a heavy squared frog, crouching a little before it fires
+      const cr = crouch*S*.04;
+      const body = () => {
+        ctx.beginPath();
+        ctx.moveTo(S*.08, S);
+        ctx.lineTo(S*.92, S);
+        ctx.quadraticCurveTo(S, S, S, S*.86);
+        ctx.lineTo(S, S*.3 + cr);
+        ctx.quadraticCurveTo(S, S*.04 + cr, S*.78, S*.04 + cr);
+        ctx.lineTo(S*.22, S*.08 + cr);
+        ctx.quadraticCurveTo(0, S*.1 + cr, 0, S*.32 + cr);
+        ctx.lineTo(0, S*.86);
+        ctx.quadraticCurveTo(0, S, S*.08, S);
+        ctx.closePath();
+      };
+      body(); ctx.fillStyle = main; ctx.fill();
+      ctx.save(); body(); ctx.clip();
+      const g = ctx.createLinearGradient(0, 0, 0, S);
+      g.addColorStop(0, `rgba(255,255,255,${dark ? .16 : .3})`); g.addColorStop(.5, "rgba(255,255,255,0)"); g.addColorStop(1, `rgba(0,0,0,${dark ? .32 : .16})`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+      // stony warts
+      ctx.fillStyle = dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.08)";
+      for(const [wx, wy, wr] of [[.2, .42, .05], [.32, .3, .035], [.14, .64, .04], [.28, .78, .03], [.42, .52, .03]]){ctx.beginPath(); ctx.arc(S*wx, S*wy, S*wr, 0, Math.PI*2); ctx.fill();}
       ctx.restore();
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = rgbaHex(accent, .3);
-      ctx.lineWidth = 1.2*s;
-      roundRect(ctx, wx, wy, ww, wh, 7*s);ctx.stroke();
-      // Vents on the outer side.
-      ctx.fillStyle = rgbaHex(accent, .2);
-      for(let v=0;v<3;v++) ctx.fillRect(side > 0 ? size*.06 : size*.88, size*(.3 + v*.17), size*.06, 2*s);
-      // Nozzle on the inner face.
-      const nx = side > 0 ? size - 2*s : -6*s;
+      // front foot: a fat three-toed foot planted at the front corner
       ctx.fillStyle = main;
-      roundRect(ctx, nx, size/2 - 8*s, 8*s, 16*s, 3*s);ctx.fill();
-      ctx.fillStyle = energy > .05 ? P[1] : rgbaHex(accent, .3);
-      ctx.globalAlpha = .4 + .6*energy;
-      ctx.fillRect(side > 0 ? nx + 5*s : nx, size/2 - 5*s, 3*s, 10*s);
-      ctx.globalAlpha = 1;
-      // Charge crackle on the nozzle.
-      if(charge > 0){
-        const ox = side > 0 ? size + 3*s : -3*s;
-        trapDrawBolt(trapBolt(ox, size/2 - 9*s, ox, size/2 + 9*s, 4*s*charge, 5, tick + side*9 + seed), 1*s, P, charge);
+      for(let k=0;k<3;k++){ctx.beginPath(); ctx.ellipse(S*(.8 + k*.09), S*.99, S*.06, S*.04, 0, 0, Math.PI*2); ctx.fill();}
+      ctx.fillStyle = dark ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.12)";
+      for(let k=0;k<3;k++){ctx.beginPath(); ctx.arc(S*(.8 + k*.09), S*.985, S*.018, 0, Math.PI*2); ctx.fill();}
+      // the eye bulges up out of the head in its own dome, toward the middle
+      const ex = S*.6, ey = S*.1 + cr;
+      ctx.fillStyle = main;
+      ctx.beginPath(); ctx.ellipse(ex, ey + S*.02, S*.21, S*.2, 0, Math.PI*.95, Math.PI*2.05); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${dark ? .12 : .25})`;
+      ctx.beginPath(); ctx.ellipse(ex - S*.07, ey - S*.1, S*.07, S*.035, -.4, 0, Math.PI*2); ctx.fill();
+      drawGuardianEye(ex, ey + S*.01, S*.12, S*.16, s*.8, main, Math.max(0, Math.min(1, open)), squint, slant, pupil, look);
+      // mouth on the inner face, at the height the tongue leaves from
+      const mo = Math.max(0, Math.min(1, mouth));
+      const my = S*.5;
+      ctx.fillStyle = "#08200f";
+      ctx.beginPath();
+      ctx.moveTo(S*.3, my - S*.02);
+      ctx.quadraticCurveTo(S*.7, my - S*.05, S + 1, my - S*.06 - mo*S*.04);
+      ctx.lineTo(S + 1, my + S*.03 + mo*S*.16);
+      ctx.quadraticCurveTo(S*.7, my + S*.04 + mo*S*.1, S*.3, my - S*.02);
+      ctx.closePath(); ctx.fill();
+      // a wide frog lip running the whole face, curling up at the back corner
+      ctx.strokeStyle = "rgba(0,0,0,.65)"; ctx.lineWidth = Math.max(1.2, 1.8*s); ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(S*.05, my - S*.08 - laugh*S*.04); ctx.quadraticCurveTo(S*.14, my - S*.01, S*.3, my - S*.02); ctx.quadraticCurveTo(S*.7, my - S*.05, S, my - S*.06 - mo*S*.04); ctx.stroke();
+      ctx.strokeStyle = dark ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.4)"; ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.beginPath(); ctx.moveTo(S*.08, my - S*.11); ctx.quadraticCurveTo(S*.17, my - S*.045, S*.32, my - S*.055); ctx.quadraticCurveTo(S*.7, my - S*.085, S*.97, my - S*.095); ctx.stroke();
+      // throat sac: swells with plasma before it fires
+      const sw = S*.26*(1 + sac*.45), sh = S*.09*(1 + sac*1.7);
+      const sx = S*.66, sy = S*.74 + sac*S*.03;
+      ctx.fillStyle = paperShade(main, dark ? .1 : -.08);
+      ctx.beginPath(); ctx.ellipse(sx, sy, sw, sh, 0, 0, Math.PI*2); ctx.fill();
+      if(sacGlow > .02 || sac > .3){
+        const sg = ctx.createRadialGradient(sx, sy - sh*.2, 0, sx, sy, sw);
+        const gl = Math.max(sacGlow, (sac - .2)*1.2);
+        sg.addColorStop(0, `rgba(230,255,220,${.9*gl})`); sg.addColorStop(.4, `rgba(80,255,120,${.75*gl})`); sg.addColorStop(1, "rgba(20,120,50,0)");
+        ctx.fillStyle = sg; ctx.beginPath(); ctx.ellipse(sx, sy, sw, sh, 0, 0, Math.PI*2); ctx.fill();
       }
+      ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.beginPath(); ctx.ellipse(sx, sy, sw, sh, 0, 0, Math.PI*2); ctx.stroke();
+      // charge crackle at the lips
+      if(charge > 0) trapDrawBolt(trapBolt(S + 2*s, my - 9*s, S + 2*s, my + 9*s, 4*s*charge, 5, tick + side*9 + seed), 1*s, P, charge);
       ctx.restore();
     };
     reactor(leftX, 1);
