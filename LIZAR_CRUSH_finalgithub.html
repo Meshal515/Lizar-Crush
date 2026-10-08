@@ -12966,6 +12966,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     shake = 0;
     time = 0;
     sessionTime = 0;
+    hitStop = 0;
     deathTimer = 0;
     deathReason = "";
     deathType = "generic";
@@ -14373,6 +14374,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     const slamInfo = stillCrusherState(o, time);
     spawnStillCrusherDust(o, slamInfo);
+    hitStop = .06;
     return startDeath(reason || "The still crusher snapped shut.", "crusher", {worldY:player.baseY - player.h/2}, o);
   }
   function stillCrusherMoved(o, cur, info){
@@ -16615,11 +16617,14 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     cameraLastTargetY = target;
   }
 
+  // HIT_STOP: a few frozen frames on a heavy impact (the guardians' slam). Rendering continues.
+  let hitStop = 0;
   function update(dt){
     if(state === "editor"){
       time += dt;
       return;
     }
+    if(hitStop > 0){hitStop = Math.max(0, hitStop - dt); return;}
     if(!isPlayState() && state !== "menu" && state !== "dying") return;
     const worldDt = dt * worldTimeScale();
     time += worldDt;
@@ -18666,12 +18671,34 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(target){if(fx.passAt == null) fx.passAt = time;} else fx.passAt = null;
       passK = fx.passK; passT = fx.passAt == null ? 0 : time - fx.passAt;
     }
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const holdAge = info.mode === "hold" ? info.local - (info.cfg.open + info.cfg.close) : -1;
+    if(fx && !dyingHere){
+      // They land at the slot with a thud: a puff of dust off both faces (once per cycle).
+      const cyc = Math.floor((time + info.cfg.phase)/Math.max(.001, info.total));
+      if(holdAge >= 0 && holdAge < .12 && fx.thudKey !== cyc){
+        fx.thudKey = cyc;
+        for(const sd of [1, -1]){
+          const ex = sd > 0 ? info.left.x + info.left.w : info.right.x;
+          for(let i=0, n=perfParticleCount(10); i<n; i++) addAshParticle({kind:"dust", x:ex - sd*2, y:info.top + info.cfg.h*(.1 + Math.random()*.8), vx:sd*(10 + Math.random()*40), vy:(Math.random() - .5)*70, life:.25 + Math.random()*.3, size:2 + Math.random()*4, ink:Math.random()});
+        }
+      }
+    }
+    if(fx && info.mode === "crush" && fx.squeezeAt !== o._stillSlamAt){
+      // The slam squeezes dust out of the seam, up and down.
+      fx.squeezeAt = o._stillSlamAt;
+      for(let i=0, n=perfParticleCount(26); i<n; i++){
+        const up = i % 2 ? -1 : 1;
+        addAshParticle({kind:"dust", x:info.centerX + (Math.random() - .5)*10, y:up < 0 ? info.top + 4 : info.top + info.cfg.h - 4, vx:(Math.random() - .5)*70, vy:up*(60 + Math.random()*150), life:.25 + Math.random()*.35, size:2 + Math.random()*5, ink:Math.random()});
+      }
+    }
     for(const side of [1, -1]){
       // side +1: left guardian (faces right); -1: right guardian (faces left).
       const rect = side > 0 ? info.left : info.right;
       let faceX = side > 0 ? rect.x + rect.w : rect.x;
       // In the crush the jaws over-close; visually the faces meet instead of passing through.
       if(info.mode === "crush") faceX = side > 0 ? Math.min(faceX, info.centerX - 2) : Math.max(faceX, info.centerX + 2);
+      if(dT >= .07 && dT < .32) faceX -= side*Math.sin((dT - .07)/.25*Math.PI)*3;      // they rock back from the headbutt
       const bodyW = side > 0 ? faceX : WORLD_W - faceX;
       if(bodyW < 2) continue;
       const fS = worldToScreen(faceX, info.cy);
@@ -18679,6 +18706,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const t = time, seed = side*3.7 + (Number(o.y) || 0)*.011;
       const breath = Math.sin(t*1.4 + seed);
       let open = .5, squint = .2, slant = -.1, pupil = .55, look = {x:1, y:.1}, mouth = .05, frown = 0, brow = 0, widen = 0, chew = 0, tremble = 0, grunt = 0, zzz = 0, yawn = 0;
+      let bulge = 0, nod = 0, pain = 0, stars = 0, grindY = 0, thudJolt = 0;
+      // breathing swells the body, most when they are at rest
+      const relax = info.mode === "open" || info.mode === "opening" ? 1 : .3;
+      bulge += breath*1.3*s*relax;
+      // landing thud at the slot: a quick squash and settle
+      if(holdAge >= 0 && holdAge < .35){const th = Math.exp(-holdAge*11)*Math.cos(holdAge*36); bulge -= th*3*s; thudJolt = th*1.6*s;}
       const m = info.mode, p = info.progress;
       // gaze toward the player, relative to this guardian's eye
       const eyeWX = faceX - side*24, eyeWY = info.cy - info.cfg.h*.17;
@@ -18703,16 +18736,20 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const r = t*7 + seed;
         look = {x:Math.cos(r)*.6*Math.sin(k*Math.PI), y:-.3 + Math.sin(r)*.45*Math.sin(k*Math.PI)};
         mouth = .05; pupil = .5;
+        if(fx && !dyingHere && k < .4) prismSmokeEmitRate(o, faceX - side*9, info.cy - info.cfg.h*.03, 0, 12*(heavy ? 1 : .5), .35);
       }
       if(m === "crush"){
         const a = guardSm(info.slamAge/.06);
         open = 1; widen = a*(1 - guardSm((info.slamAge - .25)/.3)); pupil = .2; slant = .9; brow = 1; look = atYou; mouth = .1;
+        bulge += 3*s*Math.sin(clamp01(info.slamAge/.22)*Math.PI);
       }
       if(dT >= 0){
-        // grinding you between them: jaws chewing, then they spit you out and look pleased
-        // grinding you between them, then a satisfied squint
-        if(dT < .42){chew = guardSm(dT/.08); mouth = .12 + .3*Math.abs(Math.sin(dT*22 + side)); open = .85; squint = .3; slant = .6; widen = 0;}
-        else {open = .5; squint = .85; slant = .3; mouth = .1; frown = -.6; look = {x:.4, y:.6};}
+        // Like two goats: the headbutt hurts them both (eyes screwed shut, grimace, stars), then they
+        // grind what is left between them, and one winks at the other.
+        if(dT < .07){/* the slam itself: eyes wide (crush pose above) */}
+        else if(dT < .32){const k = (dT - .07)/.25; pain = Math.sin(k*Math.PI); open = .07; squint = .95; slant = -.55; brow = -.6; mouth = .04; frown = .85; widen = 0; stars = 1 - k*.3; tremble = .7;}
+        else if(dT < .5){const k = (dT - .32)/.18; chew = 1; mouth = .1 + .28*Math.abs(Math.sin(k*Math.PI*2)); open = .55; squint = .55; slant = .5; grindY = Math.sin(k*Math.PI*4)*2*s*side; widen = 0; stars = .5*(1 - k);}
+        else {open = side > 0 ? .04 : .5; squint = side > 0 ? 1 : .8; slant = .3; mouth = .1; frown = -.7; look = {x:.8, y:.2};}
       }
       if(passK > .001){
         // you got past: they look up at you; then the right one yawns; then both doze off
@@ -18726,6 +18763,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         look = {x:look.x + (up.look.x - look.x)*passK, y:look.y + (up.look.y - look.y)*passK};
         mouth = mouth + ((.05 + .7*yw)*(1 - doze) + (.04 + .03*(.5 + .5*breath))*doze - mouth)*passK;
         zzz = doze*passK;
+        if(passT > 1.9 && passT < 2.9) nod = Math.pow(Math.max(0, Math.sin((passT - 1.9)/.5*Math.PI)), 2)*4*s*passK;
       }
       // ---- smoothing: nothing flips in one frame ----
       if(fx){
@@ -18738,6 +18776,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         pupil = f("pupil", pupil, 12); look = {x:f("lx", look.x, 16), y:f("ly", look.y, 16)};
         mouth = f("mouth", mouth, fast ? 40 : 16); frown = f("frown", frown, 8); brow = f("brow", brow, 10);
         widen = f("widen", widen, 30); tremble = f("tremble", tremble, 8); zzz = f("zzz", zzz, 4);
+        pain = f("pain", pain, 24); stars = f("stars", stars, 18); bulge = f("bulge", bulge, 30);
         sm.ready = true;
       }
       // ---- draw ----
@@ -18754,7 +18793,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.moveTo(-W - 30*s, -hS/2);
         ctx.lineTo(-r, -hS/2);
         ctx.quadraticCurveTo(0, -hS/2, 0, -hS/2 + r);
-        ctx.lineTo(0, hS/2 - r);
+        ctx.quadraticCurveTo(bulge*2, 0, 0, hS/2 - r);
         ctx.quadraticCurveTo(0, hS/2, -r, hS/2);
         ctx.lineTo(-W - 30*s, hS/2);
         ctx.closePath();
@@ -18782,6 +18821,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(let px = -78*s, i = 0; px > -W + 6*s && i < 6; px -= 30*s, i++){
         ctx.beginPath(); ctx.moveTo(px - 6*s, -hS/2 + 1); ctx.lineTo(px - 1*s, -hS/2 - 7*s); ctx.lineTo(px + 4*s, -hS/2 + 1); ctx.closePath(); ctx.fill();
       }
+      ctx.save();
+      ctx.translate(0, nod + grindY + thudJolt);
       // Mouth: low on the face, opening at the front edge (the edge that grinds you).
       {
         const mo = Math.max(0, Math.min(1, mouth));
@@ -18831,6 +18872,31 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.quadraticCurveTo(ex - er*.2, by - 2*s, ex - er*1.5, by + 6*s);
         ctx.closePath(); ctx.fill();
       }
+      if(pain > .02){
+        // pain creases around the screwed-shut eye
+        ctx.strokeStyle = `rgba(0,0,0,${.7*pain})`; ctx.lineWidth = Math.max(.8, 1.3*s); ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(ex + erx*1.3, ey - ery*.5); ctx.lineTo(ex + erx*2.1, ey - ery*.85);
+        ctx.moveTo(ex + erx*1.4, ey); ctx.lineTo(ex + erx*2.3, ey);
+        ctx.moveTo(ex + erx*1.3, ey + ery*.5); ctx.lineTo(ex + erx*2.1, ey + ery*.85);
+        ctx.stroke();
+      }
+      if(stars > .02){
+        // little stars circling the forehead after the headbutt
+        for(let i=0;i<3;i++){
+          const a = time*7 + i*Math.PI*2/3 + side;
+          const sx = ex - 4*s + Math.cos(a)*11*s, sy = ey - ery*1.9 + Math.sin(a)*3.5*s;
+          const z = (2.6 + Math.sin(a)*.8)*s;
+          ctx.save(); ctx.translate(sx, sy); ctx.rotate(a*.5);
+          ctx.globalAlpha = stars*(.65 + .35*Math.sin(a));
+          ctx.fillStyle = "#ffd36a";
+          ctx.beginPath();
+          for(let k=0;k<8;k++){const rr = k % 2 ? z*.38 : z; const aa = k*Math.PI/4; k ? ctx.lineTo(Math.cos(aa)*rr, Math.sin(aa)*rr) : ctx.moveTo(rr, 0);}
+          ctx.closePath(); ctx.fill();
+          ctx.restore();
+        }
+      }
+      ctx.restore();                                        // face features
       ctx.restore();
       // Zs while dozing (drawn unmirrored so the letters read correctly).
       if(zzz > .02){
