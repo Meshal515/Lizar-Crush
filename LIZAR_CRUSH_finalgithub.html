@@ -17390,6 +17390,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // Passed: the receiver drifts off to sleep with a smile; the shooter glares up at you and keeps
     // straining upward to get a shot, snapping its jaws at the top and dropping back, in a loop.
     let tilt = 0, lift = 0, smileK = 0, zzz = 0, flareBoost = 0, squash = 0;
+    kick *= st.shown ?? 1;                                  // no recoil from a beam that is put away
     const passK = st.passK || 0;
     if(st.kill >= 0){
       const T = st.kill, ramp = smooth(clamp01((T - .1)/.15));
@@ -17416,6 +17417,17 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
           else if(L < .68){const k = (L - .54)/.14; up = 1 - k*k;}
           else {const k = (L - .68)/.32; squash = Math.max(0, Math.sin(k*Math.PI*1.5))*(1 - k)*.9; shake = Math.sin(k*Math.PI*6)*(1 - k);}
           up *= power; snap *= power;
+          // the jaws clash: sparks fly off the teeth, up and toward you
+          if(st.o && state !== "editor"){
+            const fx = prismSmokeFor(st.o);
+            const key = shooter ? "snapPrev" : "snapPrevR";
+            if((fx[key] || 0) > .02 && snap <= 0){             // the instant the jaws meet
+              const tl = -(.22 + .42*up) + shake*.09;
+              const wx = x + dir*21*1.18*Math.cos(tl), wy = y + (-up*6*s + 21*s*Math.sin(tl))/p.s;
+              trapSparkCone(st.o, wx, wy, 12, "hot", dir > 0 ? -1.0 : Math.PI + 1.0, .6, 110, 280, .2, .45);
+            }
+            fx[key] = snap;
+          }
           eyeT = {open:1, slant:1, pupil:.32, lookX, lookY, glow:.75};
           openT = snap*.55 + up*.12;
           tiltT = -(.22 + .42*up) + shake*.09;
@@ -17726,8 +17738,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const offFor = active ? 0 : info.local - o.on;
     const untilOn = active ? 0 : info.cycle - info.local;
     const charge = !active && !disabled && untilOn < .6 ? 1 - untilOn/.6 : 0;
-    const fireKick = active && info.local < .2 ? Math.pow(1 - info.local/.2, 2) : 0;
-    const offKick = !active && offFor < .22 ? Math.pow(1 - offFor/.22, 2) : 0;
+    // Recoil envelopes ease in over a few frames and ease out: no single-frame jumps.
+    const env = (t, a, d) => t < 0 ? 0 : t < a ? (t/a)*(t/a)*(3 - 2*t/a) : t < a + d ? Math.pow(1 - (t - a)/d, 2) : 0;
+    const fireKick = active ? env(info.local, .05, .25) : 0;
+    const offKick = !active ? env(offFor, .05, .22) : 0;
     const heat = active ? 1 : (disabled ? 0 : Math.max(0, 1 - offFor/1.4));
     const tick = Math.floor(time*30);
     const seed = (o.phase || 0)*9.1 + o.y*.013;
@@ -17749,6 +17763,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // Once you are past, the beam is put away; once it has cut you, it stops to laugh.
     const shown = (1 - clamp01(passK*2))*(est.kill >= 0 ? 1 - clamp01((est.kill - .1)/.06) : 1);
     est.shown = shown;
+    est.o = o;
     ctx.save();
     ctx.lineCap = "round";
     ctx.globalAlpha = shown;
