@@ -1,0 +1,87 @@
+name: Android APK
+
+# Builds the game into an APK on every push that touches it.
+# Publishing a dev build (a GitHub pre-release tagged build-<N>) that installed apps can update to
+# happens only on pushes to main, or when run by hand with "publish" checked, and only when the
+# signing key secrets exist. Without the key every build would get a throwaway signature and could
+# not update an installed copy, so unsigned runs just upload the APK as a workflow artifact.
+
+on:
+  push:
+    paths:
+      - "LIZAR_CRUSH_finalgithub.html"
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish this build as an update (pre-release)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Restore signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.LIZAR_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/lizar.jks"
+            echo "LIZAR_KEYSTORE_PATH=$RUNNER_TEMP/lizar.jks" >> "$GITHUB_ENV"
+            echo "SIGNED=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No LIZAR_KEYSTORE_BASE64 secret. Building a debug-signed APK that cannot update an installed copy."
+          fi
+
+      - name: Build APK
+        working-directory: android
+        env:
+          LIZAR_KEYSTORE_PASSWORD: ${{ secrets.LIZAR_KEYSTORE_PASSWORD }}
+          LIZAR_KEY_ALIAS: ${{ secrets.LIZAR_KEY_ALIAS }}
+          LIZAR_KEY_PASSWORD: ${{ secrets.LIZAR_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          if [ "$SIGNED" = "1" ]; then
+            ./gradlew --no-daemon assembleRelease -PversionCode=$VERSION_CODE
+            cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/lizar-crush-$VERSION_CODE.apk"
+          else
+            ./gradlew --no-daemon assembleDebug -PversionCode=$VERSION_CODE
+            cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/lizar-crush-$VERSION_CODE-debug.apk"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lizar-crush-${{ env.VERSION_CODE }}
+          path: ${{ runner.temp }}/lizar-crush-*.apk
+          retention-days: 30
+
+      - name: Publish dev build
+        if: env.SIGNED == '1' && (github.ref == 'refs/heads/main' || inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-$VERSION_CODE" "$RUNNER_TEMP/lizar-crush-$VERSION_CODE.apk" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Dev build $VERSION_CODE" \
+            --notes "$(git log -1 --pretty=%s)"

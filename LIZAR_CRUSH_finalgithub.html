@@ -4209,6 +4209,7 @@
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Heavy FX</span><input id="perfFxToggle" type="checkbox" checked=""></label>
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Death Replay</span><input id="replayToggle" type="checkbox" checked=""></label>
 <div class="settingsControlBox" style="border-color: rgba(46, 36, 20, 0.15);"><button id="touchControlCustomizeBtn" type="button">CUSTOM CONTROL</button><small style="color: rgb(115, 100, 78);">Change gameplay hold/release: Button, Full Screen, or Custom touch area.</small></div>
+<div class="settingsControlBox" id="appUpdateBox" style="display:none;"><button id="appUpdateCheckBtn" type="button">CHECK FOR UPDATE</button><small id="appUpdateVersion">App version</small></div>
 <div class="settingsDangerBox" style="border-color: rgba(46, 36, 20, 0.15);">
 <div class="settingsDangerTitle">Reset Data</div>
 <div class="settingsDangerNote">Only resets Shop, Statistics, and Records. Studio levels, Friend Levels, Mods, and official levels stay safe.</div>
@@ -23256,6 +23257,92 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   } 
 
   applyCosmetics(); applyPerformanceSettings({resizeCanvas:true}); applyTouchControlSettings(); renderShop(); renderRecordsPanel(); renderFriendLevelsPanel(); renderSettingsPanel(); renderStudioTemplates(); resetLevel(true);setupLevelButtons();applyStudioLanguage();applyStudioAvailability();OverlayManager.refresh();InputRouter.resolve();UIStateStore.set({gameMode:state,screen:"main"},{source:"bootstrap-complete"});MenuScreenController.sync("main");GamepadNavigation.start();studioAutoSaveTimer = setInterval(studioAutosaveTick, STUDIO_AUTOSAVE_INTERVAL);requestAnimationFrame(loop);
+})();
+</script>
+<!-- APP_UPDATER_V1: only active inside the Android app (window.LizarNative). The web build ignores it. -->
+<style>
+  #lizarUpdateOverlay{position:fixed;inset:0;z-index:2147483000;display:none;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.42);}
+  #lizarUpdateOverlay.open{display:flex;}
+  #lizarUpdateCard{width:min(360px,100%);display:grid;gap:12px;padding:20px;border-radius:22px;background:var(--lc-panel,#fffbf1);color:var(--lc-ui,#111);border:2px solid var(--lc-ui,#111);box-shadow:0 6px 0 var(--lc-ui,#111);font-family:inherit;}
+  #lizarUpdateCard h3{margin:0;font-size:20px;font-weight:900;letter-spacing:.02em;}
+  #lizarUpdateCard p{margin:0;font-size:13px;line-height:1.45;color:var(--lc-muted,#666);white-space:pre-line;max-height:30vh;overflow:auto;}
+  #lizarUpdateBar{height:10px;border-radius:999px;background:var(--lc-chip,rgba(0,0,0,.08));overflow:hidden;display:none;}
+  #lizarUpdateBar i{display:block;height:100%;width:0;background:var(--lc-ui,#111);transition:width .15s;}
+  #lizarUpdateActions{display:flex;gap:10px;}
+  #lizarUpdateActions button{flex:1;height:44px;border-radius:999px;border:2px solid var(--lc-ui,#111);font:800 14px inherit;letter-spacing:.04em;cursor:pointer;}
+  #lizarUpdateGo{background:var(--lc-ui,#111);color:var(--lc-on-chip,#fff);}
+  #lizarUpdateLater{background:transparent;color:var(--lc-ui,#111);}
+  #lizarUpdateActions button:active{transform:translateY(2px);}
+</style>
+<div id="lizarUpdateOverlay" role="dialog" aria-modal="true" aria-labelledby="lizarUpdateTitle">
+  <div id="lizarUpdateCard">
+    <h3 id="lizarUpdateTitle">Update available</h3>
+    <p id="lizarUpdateText"></p>
+    <div id="lizarUpdateBar"><i></i></div>
+    <div id="lizarUpdateActions">
+      <button id="lizarUpdateLater" type="button">LATER</button>
+      <button id="lizarUpdateGo" type="button">UPDATE</button>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  const N = window.LizarNative;
+  if(!N) return;
+  const DISMISS_KEY = "lizar_crush_update_dismissed_v1";
+  const $ = id => document.getElementById(id);
+  const overlay = $("lizarUpdateOverlay"), title = $("lizarUpdateTitle"), text = $("lizarUpdateText");
+  const bar = $("lizarUpdateBar"), fill = bar.querySelector("i"), go = $("lizarUpdateGo"), later = $("lizarUpdateLater");
+  const checkBtn = $("appUpdateCheckBtn"), versionLabel = $("appUpdateVersion");
+  let latest = null, downloading = false;
+  try{ $("appUpdateBox").style.display = ""; versionLabel.textContent = "App version " + N.getVersionName(); }catch(_e){}
+
+  function open(t, body, goLabel, showGo){
+    title.textContent = t; text.textContent = body;
+    go.textContent = goLabel || "UPDATE"; go.style.display = showGo ? "" : "none";
+    later.textContent = showGo ? "LATER" : "OK";
+    bar.style.display = "none"; fill.style.width = "0";
+    overlay.classList.add("open");
+  }
+  function close(){ if(!downloading) overlay.classList.remove("open"); }
+  later.addEventListener("click", () => {
+    if(latest){ try{ localStorage.setItem(DISMISS_KEY, String(latest.latestCode)); }catch(_e){} }
+    close();
+  });
+  go.addEventListener("click", () => {
+    if(!latest || !latest.url || downloading) return;
+    downloading = true;
+    go.style.display = "none"; later.style.display = "none";
+    bar.style.display = "block"; text.textContent = "Downloading…";
+    N.downloadAndInstall(latest.url);
+  });
+  checkBtn?.addEventListener("click", () => {
+    checkBtn.disabled = true; checkBtn.textContent = "CHECKING…";
+    N.checkForUpdate(true);
+  });
+
+  window.LizarUpdate = {
+    onResult(r){
+      if(checkBtn){ checkBtn.disabled = false; checkBtn.textContent = "CHECK FOR UPDATE"; }
+      if(!r || !r.ok){ if(r && r.manual) open("No connection", r && r.error || "Could not check for updates.", "", false); return; }
+      if(!r.available){ if(r.manual) open("You're up to date", "Version " + r.currentName + " is the newest build.", "", false); return; }
+      let dismissed = null; try{ dismissed = localStorage.getItem(DISMISS_KEY); }catch(_e){}
+      if(!r.manual && dismissed === String(r.latestCode)) return;
+      latest = r;
+      const notes = (r.notes || "").trim();
+      open("Update available", r.latestName + "\nYou have " + r.currentName + "." + (notes ? "\n\n" + notes : ""), "UPDATE", true);
+    },
+    onProgress(p){ fill.style.width = Math.max(0, Math.min(100, p)) + "%"; text.textContent = "Downloading… " + p + "%"; if(p >= 100) text.textContent = "Opening installer…"; },
+    onPermission(){ text.textContent = "Allow LIZAR CRUSH to install updates, then come back."; },
+    onError(msg){ downloading = false; later.style.display = ""; open("Update failed", msg || "Something went wrong.", "", false); }
+  };
+  // Quiet check on launch, once the "press to start" screen is gone so the prompt is tappable.
+  // Only speaks up when a newer build exists.
+  const waitForBoot = () => {
+    if(document.body.classList.contains("lcBootActive")){ setTimeout(waitForBoot, 600); return; }
+    setTimeout(() => { try{ N.checkForUpdate(false); }catch(_e){} }, 1200);
+  };
+  waitForBoot();
 })();
 </script>
 
