@@ -17111,75 +17111,61 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
 
 
-  // LASER_BEAM_V3 emitter: back to the original dark generator (same theme as the other traps) with
-  // its heat inside the body and a fountain of fire sparks from the mouth. No halo, no circle, no
-  // shadow outside the body. Kicks back when it fires and when it shuts off.
+
+  // LASER_BEAM_V4: precise industrial emitter. Its heat lives inside the machine;
+  // no fire fountain, circular lens halo, or electricity-style zigzag.
   function drawBeamEmitter(x, y, dir, st){
-    const p = worldToScreen(x, y);
-    const s = p.s;
-    const H = TRAP_SPARK_PALETTES.hot;
+    const p = worldToScreen(x, y), s = p.s;
     const main = trapMain(), accent = trapAccent();
-    const w = 28*s, h = 42*s;
-    const kick = (st.fireKick*-6 + st.offKick*3)*s*dir;
-    const heat = Math.max(st.active ? 1 : 0, st.charge*.8, st.heat*.75);
-    const tick = Math.floor(time*30);
+    const H = TRAP_SPARK_PALETTES.hot;
+    const w = 30*s, h = 40*s;
+    const recoil = dir*(-5*st.fireKick + 2.5*st.offKick)*s;
+    const heat = Math.max(st.active ? 1 : 0, st.charge*.9, st.heat*.72);
     ctx.save();
-    ctx.translate(p.x + kick, p.y);
-    // Generator body.
+    ctx.translate(p.x + recoil, p.y);
+    // Mechanical body: dense and angular, without a decorative external glow.
+    ctx.fillStyle = rgbaHex(main, .18);
+    ctx.fillRect(-w*.35, -h*.63, w*.7, h*1.26);
     ctx.fillStyle = main;
-    roundRect(ctx, -w/2, -h/2, w, h, 6*s);ctx.fill();
-    // Heat glowing inside the body, strongest at the mouth (clipped to the body).
-    if(heat > .02){
-      ctx.save();
-      roundRect(ctx, -w/2, -h/2, w, h, 6*s);ctx.clip();
-      const mx = dir*w*.5;
-      const g = ctx.createRadialGradient(mx, 0, 0, mx, 0, w*1.05);
-      g.addColorStop(0, `rgba(255,214,90,${.95*heat})`);
-      g.addColorStop(.35, `rgba(255,110,20,${.75*heat})`);
-      g.addColorStop(.75, `rgba(150,30,5,${.4*heat})`);
-      g.addColorStop(1, "rgba(80,10,0,0)");
-      ctx.fillStyle = g;
-      ctx.fillRect(-w/2, -h/2, w, h);
-      ctx.restore();
-    }
-    ctx.strokeStyle = rgbaHex(accent, st.active ? .42 : .26);
-    ctx.lineWidth = 1.45*s;
-    roundRect(ctx, -w/2 + 5*s, -h/2 + 5*s, w - 10*s, h - 10*s, 4*s);ctx.stroke();
-    // Mouth slot on the beam side: glows from dull ember to white-hot.
-    const sx = dir > 0 ? w/2 - 4*s : -w/2;
-    ctx.fillStyle = heat > .05 ? (heat > .7 ? H[0] : H[1]) : "rgba(0,0,0,.55)";
-    ctx.globalAlpha = heat > .05 ? .5 + .5*heat : 1;
-    ctx.fillRect(sx, -6*s, 4*s, 12*s);
-    ctx.globalAlpha = 1;
-    // Fire fountain spraying from the mouth: always sputtering a little, roaring while live.
-    const roar = st.active ? 1 : Math.max(st.charge*.7, st.heat*.35);
-    if(roar > .03){
-      const n = Math.round(6 + 12*roar);
-      ctx.lineCap = "round";
-      for(let i=0;i<n;i++){
-        const ph = (time*(4 + 5*roar) + i*.37 + trapHash(i*3.1)) % 1;
-        const spread = (trapHash(i*7.7 + Math.floor(time*2)) - .5)*1.7;
-        const len = (6 + ph*22 + roar*10)*s;
-        const ex = dir*(w/2 + Math.cos(spread)*len), ey = Math.sin(spread)*len + ph*ph*8*s;
-        const bx = dir*(w/2 + Math.cos(spread)*len*.35), by = Math.sin(spread)*len*.35;
-        // Solid bright streaks that glow on their own (the glow comes from the spark, not a halo).
-        const cols = ["#fff1a8", "#ffb12a", "#ff5a12", "#d91f00"];
-        ctx.globalAlpha = Math.min(1, (1.15 - ph)*(.6 + .4*roar));
-        ctx.strokeStyle = cols[i % 4];
-        ctx.shadowColor = "#ff5a12";
-        ctx.shadowBlur = (3 + 5*roar)*s;
-        ctx.lineWidth = Math.max(1.1, (1.9 - ph*1)*s);
-        ctx.beginPath();ctx.moveTo(bx, by);ctx.lineTo(ex, ey);ctx.stroke();
-        if(i % 3 === 0){ctx.fillStyle = cols[(i + 1) % 4]; ctx.beginPath(); ctx.arc(ex, ey, (1.2 + (1 - ph)*1.3)*s, 0, Math.PI*2); ctx.fill();}
+    roundRect(ctx, -w/2, -h/2, w, h, 4*s); ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, .44);
+    ctx.lineWidth = 1.25*s;
+    roundRect(ctx, -w/2 + 3*s, -h/2 + 3*s, w - 6*s, h - 6*s, 2*s); ctx.stroke();
+    // Functional cooling fins. Their orange inner reflection communicates temperature.
+    for(let i=0;i<3;i++){
+      const fy = (-10 + i*10)*s;
+      ctx.fillStyle = rgbaHex(accent, .18);
+      ctx.fillRect(-w*.32, fy - 1.5*s, w*.57, 3*s);
+      if(heat > .04){
+        ctx.fillStyle = heat > .62 ? H[2] : "#983b16";
+        ctx.globalAlpha = .14 + .24*heat;
+        ctx.fillRect(-w*.30, fy - 1*s, w*.25, 2*s);
+        ctx.globalAlpha = 1;
       }
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
     }
-    // Arrow mark pointing at the beam.
-    ctx.fillStyle = accent;
+    // Recessed slit aperture; only this opening becomes white-hot.
+    const mouthX = dir > 0 ? w/2 - 6*s : -w/2;
+    ctx.fillStyle = "#131318";
+    ctx.fillRect(mouthX, -6*s, 6*s, 12*s);
+    ctx.fillStyle = st.active ? H[0] : heat > .38 ? H[1] : heat > .06 ? H[2] : "#34353a";
+    ctx.globalAlpha = st.active ? 1 : (.38 + heat*.58);
+    ctx.fillRect(dir > 0 ? w/2 - 3*s : -w/2, -3.7*s, 3*s, 7.4*s);
+    ctx.globalAlpha = 1;
+    // Slim metallic muzzle lip; no detached fantasy muzzle decoration.
+    ctx.strokeStyle = rgbaHex(accent, .64);
+    ctx.lineWidth = 1.4*s;
     ctx.beginPath();
-    ctx.moveTo(dir*w*.06, -4*s);ctx.lineTo(dir*w*.24, 0);ctx.lineTo(dir*w*.06, 4*s);
-    ctx.closePath();ctx.fill();
+    ctx.moveTo(dir*w/2, -8*s); ctx.lineTo(dir*w/2, 8*s); ctx.stroke();
+    // Brief, infrequent thermal spitting instead of continuous fire.
+    if(st.active && st.fireKick > .15){
+      for(let i=0;i<3;i++){
+        const a = trapHash(i*11.3 + Math.floor(time*32)) - .5;
+        const px = dir*(w/2 + 2*s + i*2*s);
+        ctx.strokeStyle = i === 0 ? H[0] : H[2];
+        ctx.lineWidth = Math.max(1, (1.6 - i*.2)*s);
+        ctx.beginPath();ctx.moveTo(px, a*5*s);ctx.lineTo(px + dir*(4 + i*2)*s, a*8*s);ctx.stroke();
+      }
+    }
     ctx.restore();
   }
 
@@ -17280,135 +17266,95 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     ctx.restore();
   }
+
   function drawBeam(o){
-    // LASER_BEAM_V3: dark beam with a white-hot core and thin heated edges, power dashes flowing,
-    // crackle and a faint heat shimmer. Fire fountains at both mouths. It charges (mouths start to
-    // sputter, guide flickers), fires from both ends to meet, kicks back, then collapses and the
-    // generators stay hot. No glow bands, no circles. Visual only: isBeamActive + beamHitThickness.
+    // LASER_BEAM_V4: instant full-span, razor-straight beam matching the active hitbox.
+    // Core = brilliant white, cutting surface = amber, and a restrained heat edge.
+    // No traveling halves, zigzag arcs or colored power dashes that resemble plasma.
     const info = beamCycleInfo(o);
-    const active = info.active;
-    const bx = o.x ?? 0;
-    const bw = o.w ?? WORLD_W;
-    const p1 = worldToScreen(bx, o.y);
-    const p2 = worldToScreen(bx + bw, o.y);
-    const s = p1.s;
+    const active = info.active, disabled = obstacleDisabledByPower(o);
+    const bx = o.x ?? 0, bw = o.w ?? WORLD_W;
+    const p1 = worldToScreen(bx, o.y), p2 = worldToScreen(bx + bw, o.y);
+    const s = p1.s, cy = p1.y;
     const editorMode = state === "editor";
-    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const heavy = !!perfSettings?.heavyFx && perfSettings?.mode !== "battery";
     const H = TRAP_SPARK_PALETTES.hot;
-    const main = trapMain(), accent = trapAccent();
-    if(!editorMode) prismFxBeginFrame(o);
-    const core = Math.max(3.4*s, beamHitThickness(o)*s);
-    const innerL = p1.x + 16*s, innerR = p2.x - 16*s;
-    const mid = (innerL + innerR)/2;
-    const disabled = obstacleDisabledByPower(o);
-    const offFor = active ? 0 : info.local - o.on;
+    const accent = trapAccent();
+    const width = Math.max(1, beamHitThickness(o)*s);
+    const left = p1.x + 15*s, right = p2.x - 15*s;
+    const offAge = active ? 0 : Math.max(0, info.local - o.on);
     const untilOn = active ? 0 : info.cycle - info.local;
     const charge = !active && !disabled && untilOn < .5 ? 1 - untilOn/.5 : 0;
-    const fireKick = active && info.local < .2 ? Math.pow(1 - info.local/.2, 2) : 0;
-    const offKick = !active && offFor < .22 ? Math.pow(1 - offFor/.22, 2) : 0;
-    const heat = active ? 1 : (disabled ? 0 : Math.max(0, 1 - offFor/1.4));
-    const tick = Math.floor(time*30);
-    const seed = (o.phase || 0)*9.1 + o.y*.013;
+    const fireKick = active && info.local < .13 ? Math.pow(1 - info.local/.13, 2) : 0;
+    const offKick = !active && offAge < .17 ? Math.pow(1 - offAge/.17, 2) : 0;
+    const heat = active ? 1 : (disabled ? 0 : Math.max(0, 1 - offAge/1.1));
     const est = {active, charge, fireKick, offKick, heat};
+    if(!editorMode) prismFxBeginFrame(o);
+
+    // The guide is informational only; dangerous light exists strictly while active.
     ctx.save();
-    ctx.lineCap = "round";
+    ctx.lineCap = "butt";
     if(active){
-      const enter = easeOutCubic(info.onT);
-      const lEnd = innerL + (mid - innerL)*enter, rStart = innerR - (innerR - mid)*enter;
-      const wob = 1 + .06*Math.sin(time*47 + seed);
-      const bh = core*(1 + fireKick*.6)*wob;
-      const half = (xa, xb) => {
-        if(Math.abs(xb - xa) < 1) return;
-        ctx.strokeStyle = main;
-        ctx.lineWidth = bh;
-        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
-        // Heated edges.
-        ctx.strokeStyle = H[2];
-        ctx.lineWidth = Math.max(1, bh*.16);
-        ctx.beginPath();ctx.moveTo(xa, p1.y - bh*.42);ctx.lineTo(xb, p1.y - bh*.42);ctx.stroke();
-        ctx.beginPath();ctx.moveTo(xa, p1.y + bh*.42);ctx.lineTo(xb, p1.y + bh*.42);ctx.stroke();
-        // White-hot core.
-        ctx.strokeStyle = H[1];
-        ctx.lineWidth = Math.max(1, bh*.34);
-        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
-        ctx.strokeStyle = H[0];
-        ctx.lineWidth = Math.max(1, bh*.16);
-        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
+      const pulse = 1 + .025*Math.sin(time*56 + o.y*.02);
+      const stroke = (color, lw, alpha=1) => {
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color; ctx.lineWidth = lw;
+        ctx.beginPath();ctx.moveTo(left, cy);ctx.lineTo(right, cy);ctx.stroke();
       };
-      half(innerL, lEnd);
-      half(innerR, rStart);
-      // Power dashes flowing in from both generators.
-      ctx.setLineDash([bh*2.2, bh*3.2]);
-      ctx.strokeStyle = accent;
-      ctx.globalAlpha = .85;
-      ctx.lineWidth = Math.max(1, bh*.3);
-      ctx.lineDashOffset = -time*520*s;
-      ctx.beginPath();ctx.moveTo(innerL, p1.y);ctx.lineTo(lEnd, p1.y);ctx.stroke();
-      ctx.lineDashOffset = time*520*s;
-      ctx.beginPath();ctx.moveTo(innerR, p1.y);ctx.lineTo(rStart, p1.y);ctx.stroke();
-      ctx.setLineDash([]);
+      // Faint hot air around a sharply bounded, fully visible active hit corridor.
+      stroke(H[2], width*1.55, .12);
+      stroke(H[2], width, .94);
+      stroke(H[1], Math.max(1, width*.66*pulse));
+      stroke(H[0], Math.max(1, width*.34*pulse));
+      // The ignition is a white snap across the whole gap, not an animated
+      // half-beam: gameplay collision is instantaneous when the cycle becomes live.
+      if(info.local < .055) stroke(H[0], width*.91, (1 - info.local/.055)*.57);
       ctx.globalAlpha = 1;
-      // Crackle along the core.
-      const pts = trapBolt(innerL, p1.y, enter >= 1 ? innerR : lEnd, p1.y, bh*.45, 18, seed + tick*2.3);
-      trapStrokePts(pts, Math.max(.7, bh*.12), H[0], .8);
-      // Faint heat shimmer above.
+      // Very light heat-refraction over the beam, only on higher quality settings.
       if(heavy){
-        ctx.globalAlpha = .22;
-        ctx.strokeStyle = H[2];
-        ctx.lineWidth = .9*s;
+        const flick = Math.sin(time*10 + o.y*.017);
+        ctx.strokeStyle = H[2];ctx.globalAlpha = .08;
+        ctx.lineWidth = Math.max(.7, s*.8);
         ctx.beginPath();
-        for(let i=0;i<=18;i++){
-          const xx = innerL + (innerR - innerL)*i/18;
-          const yy = p1.y - bh*1.6 + Math.sin(i*1.3 + time*10)*1.8*s;
-          i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy);
-        }
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+        ctx.moveTo(left + 7*s, cy - width*1.25 + flick*s);
+        ctx.lineTo(right - 7*s, cy - width*1.25 + flick*s);
+        ctx.stroke();ctx.globalAlpha = 1;
       }
-      // Physical sparks: from both mouths, and a burst where the halves meet.
+      // A few ejecta at the real muzzle, not a continuous flame fountain.
       if(!editorMode){
         const st = prismSmokeFor(o);
-        const want = (heavy ? 30 : 14)*st.dt;
-        const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+        const rate = (heavy ? 8 : 4)*st.dt;
+        const n = Math.floor(rate) + (Math.random() < rate%1 ? 1 : 0);
         for(let i=0;i<n;i++){
-          const left = Math.random() < .5;
-          trapSparkBurst(o, left ? bx + 16 : bx + bw - 16, o.y, 1, "hot", .7, left ? .7 : -.7, -.6);
+          const fromLeft = Math.random() < .5;
+          trapSparkBurst(o, fromLeft ? bx + 15 : bx + bw - 15, o.y, 1, "hot", .45, fromLeft ? .6 : -.6, -.2);
         }
-        if(enter >= 1 && info.local < .12 && !st.meetBurst){st.meetBurst = true; trapSparkBurst(o, bx + bw/2, o.y, 22, "hot", 1.1, 0, -.4);}
       }
-    } else {
-      if(!editorMode) prismSmokeFor(o).meetBurst = false;
-      const melt = info.meltT;
-      if(!disabled && melt < 1){
-        // Shutdown: collapses to a white-hot thread that breaks apart.
-        const pieces = 12;
-        for(let i=0;i<pieces;i++){
-          const a = i/pieces, b = (i + .7 - melt*.4)/pieces;
-          ctx.globalAlpha = (1 - melt)*(.9 - (i % 3)*.15);
-          ctx.strokeStyle = i % 2 ? H[1] : main;
-          ctx.lineWidth = Math.max(1, core*(.7 - melt*.4));
-          const dy = Math.sin(i*2.1 + time*12)*melt*4*s;
-          ctx.beginPath();ctx.moveTo(innerL + (innerR - innerL)*a, p1.y + dy);ctx.lineTo(innerL + (innerR - innerL)*b, p1.y - dy*.5);ctx.stroke();
-        }
+    }else{
+      // Graceful cooling to a thin ember, never a full-width visible lethal beam.
+      if(!disabled && info.meltT < 1){
+        ctx.globalAlpha = (1 - info.meltT)*.47;
+        ctx.strokeStyle = H[2];ctx.lineWidth = Math.max(1, width*.3);
+        ctx.beginPath();ctx.moveTo(left, cy);ctx.lineTo(right, cy);ctx.stroke();
         ctx.globalAlpha = 1;
       }
-      // Idle guide, flickering hot while charging.
-      ctx.setLineDash([10*s, 8*s]);
-      const flick = charge > 0 ? (Math.floor(time*(10 + charge*22)) % 2 ? 1 : .35) : 1;
-      ctx.globalAlpha = charge > 0 ? (.35 + .55*charge)*flick : .5;
-      ctx.strokeStyle = charge > 0 ? H[2] : rgbaHex(trapIdle(), .9);
-      ctx.lineWidth = Math.max(1.5*s, core*.36*(1 + charge*.6));
-      ctx.beginPath();ctx.moveTo(innerL, p1.y);ctx.lineTo(innerR, p1.y);ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-      // Hot generators let off a little smoke as they cool.
-      if(!editorMode && heat > .3) for(const ex of [bx + 8, bx + bw - 8]) prismSmokeEmitRate(o, ex, o.y - 20, 0, 2*heat*(heavy ? 1 : .45), heat*.5);
+      // Neutral dashed aim guide; gets brighter during its final charging window.
+      ctx.setLineDash([8*s, 11*s]);
+      ctx.strokeStyle = charge > 0 ? H[2] : rgbaHex(trapIdle(), .85);
+      ctx.globalAlpha = charge > 0 ? .22 + charge*.53 : .32;
+      ctx.lineWidth = Math.max(1, 1.15*s);
+      ctx.beginPath();ctx.moveTo(left, cy);ctx.lineTo(right, cy);ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      if(!editorMode && heat > .22)
+        for(const ex of [bx + 8, bx + bw - 8])
+          prismSmokeEmitRate(o, ex, o.y - 19, 0, 1.3*heat*(heavy ? 1 : .4), heat*.4);
     }
     ctx.restore();
-    if(!editorMode){prismSmokeUpdateDraw(o); prismSparksUpdateDraw(o);}
+    if(!editorMode){prismSmokeUpdateDraw(o);prismSparksUpdateDraw(o);}
     drawBeamEmitter(bx, o.y, 1, est);
     drawBeamEmitter(bx + bw, o.y, -1, est);
   }
+
   function drawOrbitSaw(o){
     // ORBIT_SAW_POLISH_V1: visual only. Collision still uses orbitSawState + o.sawR.
     const saw = orbitSawState(o, time);
