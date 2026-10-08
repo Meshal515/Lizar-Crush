@@ -17448,23 +17448,25 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
     ctx.save();
 
-    // Lane: inspection gate with rails and measuring ticks.
-    ctx.fillStyle = rgbaHex(main, .025 + alarm*.07*strobe);
+    // Lane: no box. A soft light curtain around the beam, corner marks at the lane ends.
+    const curtain = ctx.createLinearGradient(0, bandY, 0, bandY + bandH);
+    const coreA = safe ? .045 : .07 + alarm*.10*strobe;
+    curtain.addColorStop(0, rgbaHex(main, 0));
+    curtain.addColorStop(.5, rgbaHex(main, coreA));
+    curtain.addColorStop(1, rgbaHex(main, 0));
+    ctx.fillStyle = curtain;
     ctx.fillRect(bandX, bandY, bandW, bandH);
-    ctx.strokeStyle = rgbaHex(main, .18 + alarm*.45);
+    const cm = 9*s;
+    ctx.strokeStyle = rgbaHex(main, safe ? .22 : .45 + .35*strobe);
     ctx.lineWidth = 1.6*s;
+    ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.moveTo(bandX, bandY);ctx.lineTo(bandX + bandW, bandY);
-    ctx.moveTo(bandX, bandY + bandH);ctx.lineTo(bandX + bandW, bandY + bandH);
-    ctx.stroke();
-    ctx.strokeStyle = rgbaHex(main, .12 + alarm*.2);
-    ctx.lineWidth = 1*s;
-    ctx.beginPath();
-    for(let tx = bandX + 18*s; tx < bandX + bandW - 60*s; tx += 22*s){
-      ctx.moveTo(tx, bandY);ctx.lineTo(tx, bandY + 5*s);
-      ctx.moveTo(tx, bandY + bandH);ctx.lineTo(tx, bandY + bandH - 5*s);
+    for(const [ex, dir] of [[bandX + 8*s, 1], [bandX + bandW - 64*s, -1]]){
+      ctx.moveTo(ex + dir*cm, bandY + 3*s);ctx.lineTo(ex, bandY + 3*s);ctx.lineTo(ex, bandY + 3*s + cm);
+      ctx.moveTo(ex + dir*cm, bandY + bandH - 3*s);ctx.lineTo(ex, bandY + bandH - 3*s);ctx.lineTo(ex, bandY + bandH - 3*s - cm);
     }
     ctx.stroke();
+    ctx.lineCap = "butt";
 
     // Guard turret mounted on the right wall.
     const guardSize = 42*s;
@@ -17474,16 +17476,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const lensY = p.y;
     const rx = bandX + 22*s;
 
-    // Sweep line travelling from the guard toward the receiver.
-    const sweepK = (time*(safe ? .42 : 1.55)) % 1;
-    const sweepX = lensX - 16*s - sweepK*(lensX - 16*s - (rx + 22*s));
-    if(safe){
-      ctx.setLineDash([4*s,5*s]);
-      ctx.strokeStyle = rgbaHex(idle, .9);
-      ctx.lineWidth = 1.6*s;
-      ctx.beginPath();ctx.moveTo(sweepX, bandY + 6*s);ctx.lineTo(sweepX, bandY + bandH - 6*s);ctx.stroke();
-      ctx.setLineDash([]);
-    } else {
+    // Alarm only: a hard sweep line racing across the lane.
+    if(!safe){
+      const sweepK = (time*1.55) % 1;
+      const sweepX = lensX - 16*s - sweepK*(lensX - 16*s - (rx + 22*s));
       const wake = 30*s;
       const g = ctx.createLinearGradient(sweepX, 0, sweepX + wake, 0);
       g.addColorStop(0, rgbaHex(main, .30));
@@ -17496,31 +17492,35 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.fillRect(sweepX - .5*s, bandY + 4*s, 1*s, bandH - 8*s);
     }
 
-    // Receiver post.
-    ctx.lineWidth = 2.6*s;
-    ctx.strokeStyle = safe ? idle : main;
-    if(safe) ctx.setLineDash([6*s,5*s]);
-    roundRect(ctx, rx, bandY + 9*s, 14*s, bandH - 18*s, 7*s);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    if(!safe){
-      ctx.fillStyle = rgbaHex(main, .35 + .5*strobe);
-      roundRect(ctx, rx, bandY + 9*s, 14*s, bandH - 18*s, 7*s);
-      ctx.fill();
-    }
-    ctx.fillStyle = safe ? idle : accent;
-    ctx.beginPath();ctx.arc(rx + 7*s, p.y, 2.2*s, 0, Math.PI*2);ctx.fill();
+    // Receiver: a small solid emitter block on the left wall.
+    ctx.fillStyle = safe ? rgbaHex(main, .16) : rgbaHex(main, .55 + .4*strobe);
+    roundRect(ctx, rx, p.y - 13*s, 12*s, 26*s, 6*s);
+    ctx.fill();
+    ctx.fillStyle = safe ? rgbaHex(main, .45) : accent;
+    roundRect(ctx, rx + 4*s, p.y - 6*s, 4*s, 12*s, 2*s);
+    ctx.fill();
 
     // Scan beam from the lens to the receiver.
-    const beamStart = lensX - 10*s, beamEnd = rx + 16*s;
+    const beamStart = lensX - 10*s, beamEnd = rx + 12*s;
     if(safe){
-      ctx.setLineDash([8*s,8*s]);
-      ctx.lineDashOffset = -time*24*s;
-      ctx.strokeStyle = idle;
-      ctx.lineWidth = 2.4*s;
+      // Thin solid beam with a soft highlight travelling along it.
+      ctx.lineCap = "round";
+      ctx.strokeStyle = rgbaHex(main, .10);
+      ctx.lineWidth = 6*s;
       ctx.beginPath();ctx.moveTo(beamStart, p.y);ctx.lineTo(beamEnd, p.y);ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.lineDashOffset = 0;
+      ctx.strokeStyle = rgbaHex(main, .38);
+      ctx.lineWidth = 1.6*s;
+      ctx.beginPath();ctx.moveTo(beamStart, p.y);ctx.lineTo(beamEnd, p.y);ctx.stroke();
+      const len = beamStart - beamEnd;
+      const hx = beamStart - ((time*.55) % 1)*len;
+      const hg = ctx.createLinearGradient(hx + 40*s, 0, hx - 40*s, 0);
+      hg.addColorStop(0, rgbaHex(main, 0));
+      hg.addColorStop(.5, rgbaHex(main, .55));
+      hg.addColorStop(1, rgbaHex(main, 0));
+      ctx.strokeStyle = hg;
+      ctx.lineWidth = 2.4*s;
+      ctx.beginPath();ctx.moveTo(Math.min(beamStart, hx + 40*s), p.y);ctx.lineTo(Math.max(beamEnd, hx - 40*s), p.y);ctx.stroke();
+      ctx.lineCap = "butt";
     } else {
       ctx.lineCap = "round";
       ctx.strokeStyle = rgbaHex(main, .16 + .12*strobe);
