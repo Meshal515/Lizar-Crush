@@ -17325,6 +17325,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     return trapHash(Math.round(o.y)*.137 + 2.9) < .5 ? 1 : -1;
   }
   function drawBeamCreature(x, y, dir, shooter, st){
+    const baseM = ctx.getTransform();
     const p = worldToScreen(x, y);
     const s = p.s*1.18;
     const main = trapMain();
@@ -17400,24 +17401,46 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       shakeAmt *= 1 - ramp;
     } else if(passK > .001){
       if(shooter){
-        // 1.5s loop: strain up (rising, head tilting to you) → three jaw snaps at the top → drop
-        // back with a squash → angry head shake.
-        const L = (time/1.5 + trapHash(seed)) % 1;
-        let up = 0, snap = 0, shake = 0;
-        if(L < .34) up = smooth(L/.34);
-        else if(L < .54){up = 1; snap = Math.max(0, Math.sin((L - .34)/.2*Math.PI*3));}
-        else if(L < .68){const k = (L - .54)/.14; up = 1 - k*k;}
-        else {const k = (L - .68)/.32; squash = Math.max(0, Math.sin(k*Math.PI*1.5))*(1 - k)*.9; shake = Math.sin(k*Math.PI*6)*(1 - k);}
-        // gaze locked on the player
+        // Three tries (1.4s each, each a little weaker): strain up toward you, snap the jaws at the
+        // top, drop back with a squash, shake the head. Then it gives up with a sigh, droops,
+        // and falls asleep beside the other one.
+        const T = st.passT || 0, TRY = 1.4, N = 3, giveUp = TRY*N, sleepAt = giveUp + 1.1;
         const pp = worldToScreen(player.x, (Number(player.baseY) || 0) - (player.h || 46)*.5);
         const dx = (pp.x - p.x)*dir, dy = pp.y - p.y, dl = Math.hypot(dx, dy) || 1;
-        const glare = {open:1, slant:1, pupil:.32, lookX:Math.max(-1, Math.min(1, dx/dl*1.4)), lookY:Math.max(-1, Math.min(1, dy/dl*1.4)), glow:.75};
-        eye = creatureEyeMix(eye, glare, passK);
-        open = open*(1 - passK) + (snap*.55 + up*.12)*passK;
-        tilt = (-(.22 + .42*up) + shake*.09)*passK;
+        const lookX = Math.max(-1, Math.min(1, dx/dl*1.4)), lookY = Math.max(-1, Math.min(1, dy/dl*1.4));
+        let up = 0, snap = 0, shake = 0, tiltT, eyeT, openT;
+        if(T < giveUp){
+          const n = Math.floor(T/TRY), L = (T % TRY)/TRY, power = 1 - n*.22;
+          if(L < .34) up = smooth(L/.34);
+          else if(L < .54){up = 1; snap = Math.max(0, Math.sin((L - .34)/.2*Math.PI*3));}
+          else if(L < .68){const k = (L - .54)/.14; up = 1 - k*k;}
+          else {const k = (L - .68)/.32; squash = Math.max(0, Math.sin(k*Math.PI*1.5))*(1 - k)*.9; shake = Math.sin(k*Math.PI*6)*(1 - k);}
+          up *= power; snap *= power;
+          eyeT = {open:1, slant:1, pupil:.32, lookX, lookY, glow:.75};
+          openT = snap*.55 + up*.12;
+          tiltT = -(.22 + .42*up) + shake*.09;
+          flareBoost = snap*.45;
+        } else {
+          // defeat: head sinks, eye loses its anger, a sigh, then sleep
+          const d = smooth(clamp01((T - giveUp)/1.1));
+          const sl = smooth(clamp01((T - sleepAt)/.6));
+          const sigh = T > giveUp + .35 && T < giveUp + .75 ? Math.sin((T - giveUp - .35)/.4*Math.PI) : 0;
+          const br = Math.sin(time*2.1 + seed + 1.3);
+          const sad = {open:.5, squint:.1, slant:-.45, pupil:.6, lookX:.4, lookY:.35, glow:.15};
+          eyeT = creatureEyeMix(sad, {open:0, squint:.1, slant:-.2, pupil:.6}, sl);
+          openT = sigh*.22;
+          tiltT = -.22*(1 - d) + .14*d + br*.02*sl;
+          gulp = (br*.5 + .5)*.5*sl;
+          zzz = sl;
+          teethHeat *= 1 - d; tongueHeat *= 1 - d;
+        }
+        eye = creatureEyeMix(eye, eyeT, passK);
+        open = open*(1 - passK) + openT*passK;
+        tilt = tiltT*passK;
         lift = -up*6*s*passK;
-        flareBoost = snap*.45*passK;
+        flareBoost *= passK;
         shakeAmt = shakeAmt*(1 - passK) + up*.6*passK;
+        mouthHeat *= 1 - passK*.7;
       } else {
         const br = Math.sin(time*2.1 + seed);
         open *= 1 - passK;
@@ -17562,20 +17585,28 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.fillStyle = g;
         ctx.fillRect(-30*s, -30*s, 60*s, 60*s);
       }
-      // The beam itself, coming up out of the throat (shooter) or pouring down it (receiver).
+      // The beam itself, coming up out of the throat (shooter) or pouring down it (receiver). Its
+      // outer end is pinned to the real beam outside (mapped into the shaking head's frame every
+      // frame), so the two always read as one unbroken beam however the head moves.
+      const x0 = hingeX + 1*s;
+      const toLocal = (sx, sy) => ctx.getTransform().inverse().transformPoint(baseM.transformPoint(new DOMPoint(sx, sy)));
+      const far = toLocal(p.x + dir*44*p.s, p.y);
+      const bAng = Math.atan2(far.y, far.x - x0), bLen = Math.hypot(far.x - x0, far.y);
       const ib = st.inBeam ? st.inBeam[shooter ? 0 : 1] : 0;
       if(ib > .5){
         const HP = TRAP_SPARK_PALETTES.hot;
-        const x0 = hingeX + 1*s, x1 = 32*s;
+        ctx.save();
+        ctx.translate(x0, 0); ctx.rotate(bAng);
         ctx.lineCap = "butt";
         ctx.strokeStyle = main; ctx.lineWidth = ib;
-        ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(bLen, 0); ctx.stroke();
         ctx.strokeStyle = HP[2]; ctx.lineWidth = Math.max(1, ib*.16);
-        ctx.beginPath(); ctx.moveTo(x0, -ib*.42); ctx.lineTo(x1, -ib*.42); ctx.moveTo(x0, ib*.42); ctx.lineTo(x1, ib*.42); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, -ib*.42); ctx.lineTo(bLen, -ib*.42); ctx.moveTo(0, ib*.42); ctx.lineTo(bLen, ib*.42); ctx.stroke();
         ctx.strokeStyle = HP[1]; ctx.lineWidth = Math.max(1, ib*.34);
-        ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(bLen, 0); ctx.stroke();
         ctx.strokeStyle = HP[0]; ctx.lineWidth = Math.max(1, ib*.16);
-        ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(bLen, 0); ctx.stroke();
+        ctx.restore();
         // white-hot where it meets the throat
         const tg = ctx.createRadialGradient(x0 + 2*s, 0, 0, x0 + 2*s, 0, 7*s);
         tg.addColorStop(0, "rgba(255,255,240,.95)");
@@ -17583,6 +17614,27 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         tg.addColorStop(1, "rgba(255,90,20,0)");
         ctx.fillStyle = tg;
         ctx.fillRect(x0 - 6*s, -8*s, 16*s, 16*s);
+      }
+      // Shooter's flare, born in the throat where the beam starts and fanning out along it,
+      // inside the mouth (behind the teeth). No blur, no halo.
+      if(shooter){
+        const P = Math.max((st.active ? 1 : st.charge*.5)*(st.shown ?? 1), flareBoost);
+        if(P > .02){
+          const tk = Math.floor(time*40);
+          for(let i=0;i<7;i++){
+            const a = bAng + (i - 3)*.11 + (trapHash(tk*1.3 + i*7.1) - .5)*.32;
+            const len = (st.active ? 12 + trapHash(tk + i*3.3)*16 + st.fireKick*10 : 5 + trapHash(tk + i)*8)*s*(i === 3 ? 1.25 : 1);
+            const w0 = (1.4 + trapHash(i*5.5 + tk)*1.4)*s*Math.max(.5, P);
+            const ex = x0 + Math.cos(a)*len, ey = Math.sin(a)*len;
+            const nx = -Math.sin(a)*w0, ny = Math.cos(a)*w0;
+            const g = ctx.createLinearGradient(x0, 0, ex, ey);
+            g.addColorStop(0, `rgba(255,255,236,${.95*P})`);
+            g.addColorStop(.4, `rgba(255,196,80,${.85*P})`);
+            g.addColorStop(1, "rgba(255,90,10,0)");
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.moveTo(x0 + nx, ny); ctx.lineTo(ex, ey); ctx.lineTo(x0 - nx, -ny); ctx.closePath(); ctx.fill();
+          }
+        }
       }
       ctx.restore();
     }
@@ -17630,25 +17682,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.beginPath(); ctx.ellipse(17*s, -7*s, 1.5*s, .8*s, -.45, 0, Math.PI*2); ctx.fill();   // nostril
     drawCreatureEye(ctx, -3*s, -11*s, 6.8*s, eye);
     ctx.restore();
-    // Shooter's muzzle flare at the lips: crisp spikes fanning forward, white-hot at the root.
-    // No blur, no halo. A faint sputter while charging, a full flare while firing.
-    if(shooter && ((st.active || st.charge > .05) && passK < .5 || flareBoost > .02)){
-      const P = Math.max((st.active ? 1 : st.charge*.5)*(st.shown ?? 1), flareBoost);
-      const fx0 = 19*s, tk = Math.floor(time*40);
-      for(let i=0;i<7;i++){
-        const a = (i - 3)*.16 + (trapHash(tk*1.3 + i*7.1) - .5)*.5;
-        const len = (st.active ? 7 + trapHash(tk + i*3.3)*13 + st.fireKick*10 : 2 + trapHash(tk + i)*6)*s*(i === 3 ? 1.3 : 1);
-        const w0 = (1.2 + trapHash(i*5.5 + tk)*1.2)*s*Math.max(.5, P);
-        const ex = fx0 + Math.cos(a)*len, ey = Math.sin(a)*len;
-        const nx = -Math.sin(a)*w0, ny = Math.cos(a)*w0;
-        const g = ctx.createLinearGradient(fx0, 0, ex, ey);
-        g.addColorStop(0, `rgba(255,255,236,${.95*P})`);
-        g.addColorStop(.35, `rgba(255,196,80,${.85*P})`);
-        g.addColorStop(1, "rgba(255,90,10,0)");
-        ctx.fillStyle = g;
-        ctx.beginPath(); ctx.moveTo(fx0 + nx, ny); ctx.lineTo(ex, ey); ctx.lineTo(fx0 - nx, -ny); ctx.closePath(); ctx.fill();
-      }
-    }
     if(smileK > .02){
       // a contented curl at the corner of the mouth
       ctx.strokeStyle = paperIsDark(main) ? `rgba(255,255,255,${.5*smileK})` : `rgba(0,0,0,${.55*smileK})`;
@@ -17707,6 +17740,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const target = state !== "dying" && (Number(player.baseY) || 0) < o.y - beamHitThickness(o) - 6 ? 1 : 0;
       fst.passK = (fst.passK || 0) + (target - (fst.passK || 0))*Math.min(1, (fst.dt || 0)*5);
       passK = fst.passK;
+      if(target){if(fst.passAt == null) fst.passAt = time;} else fst.passAt = null;
+      est.passT = fst.passAt == null ? 0 : time - fst.passAt;
+      // the shooter's sigh of defeat: a puff from the nostrils
+      if(est.passT > 4.55 && est.passT < 4.75) prismSmokeEmitRate(o, (dir > 0 ? bx : bx + bw) + dir*20, o.y - 12, 0, 40*(heavy ? 1 : .5), .5);
     }
     est.passK = passK;
     // Once you are past, the beam is put away; once it has cut you, it stops to laugh.
@@ -17774,7 +17811,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const shootWX = dir > 0 ? bx + 16 : bx + bw - 16, eatWX = dir > 0 ? bx + bw - 16 : bx + 16;
         // Embers drip from the shooter's lips (right where the beam leaves the mouth, not ahead of
         // it): slow, a little forward, then gravity takes them. The receiver spits a few red ones.
-        const lipWX = (dir > 0 ? bx : bx + bw) + dir*22, lipEat = (dir > 0 ? bx + bw : bx) - dir*22;
+        const lipWX = (dir > 0 ? bx : bx + bw) - dir*6, lipEat = (dir > 0 ? bx + bw : bx) - dir*22;   // shooter: from the throat
         const fwd = dir > 0 ? 0 : Math.PI;
         for(let i=0;i<n;i++){
           // shooter: sparks jet out along the beam, then gravity arcs them down
