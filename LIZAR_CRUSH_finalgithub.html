@@ -18014,33 +18014,34 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.beginPath();ctx.arc(pivot.x,pivot.y,orbitR,a0,a1,dir > 0);ctx.stroke();
     }
 
-    // Tapered arm from the hub to the blade axle.
-    const ax = head.x - pivot.x, ay = head.y - pivot.y;
-    const al = Math.max(1, Math.hypot(ax, ay));
-    const nx = -ay/al, ny = ax/al;
-    ctx.fillStyle = rgbaHex(main, .82);
-    ctx.beginPath();
-    ctx.moveTo(pivot.x + nx*4.2*s, pivot.y + ny*4.2*s);
-    ctx.lineTo(head.x + nx*2.2*s, head.y + ny*2.2*s);
-    ctx.lineTo(head.x - nx*2.2*s, head.y - ny*2.2*s);
-    ctx.lineTo(pivot.x - nx*4.2*s, pivot.y - ny*4.2*s);
-    ctx.closePath();ctx.fill();
-    ctx.strokeStyle = rgbaHex(accent, .28);
-    ctx.lineWidth = 1*s;
-    ctx.beginPath();ctx.moveTo(pivot.x, pivot.y);ctx.lineTo(head.x, head.y);ctx.stroke();
-
-    // Hub: bolted housing that turns with the arm.
-    ctx.fillStyle = main;
-    ctx.beginPath();ctx.arc(pivot.x,pivot.y,9*s,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = rgbaHex(accent, .45);
-    ctx.lineWidth = 1.3*s;
-    ctx.beginPath();ctx.arc(pivot.x,pivot.y,6*s,0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle = accent;
-    for(let i=0;i<3;i++){
-      const a = saw.ang + i*Math.PI*2/3;
-      ctx.beginPath();ctx.arc(pivot.x + Math.cos(a)*6*s, pivot.y + Math.sin(a)*6*s, 1.2*s, 0, Math.PI*2);ctx.fill();
+    // ORBIT_SAW_CREATURE_V1: the saw itself is the creature — a living buzzsaw whose face stays
+    // upright while its teeth whirl — tethered by a sinew to a small clawed knot at the pivot (the
+    // knot is harmless, so it stays small). Visual only: collision is still orbitSawState + sawR.
+    const darkO = paperIsDark(main);
+    {
+      const ax = head.x - pivot.x, ay = head.y - pivot.y, al = Math.max(1, Math.hypot(ax, ay));
+      const ux = ax/al, uy = ay/al, nx = -uy, ny = ux;
+      const N = 10, L = [], R = [];
+      for(let i=0;i<=N;i++){
+        const u = i/N, w = (3.8 - 1.6*u)*s, wob = Math.sin(u*Math.PI)*Math.sin(time*9)*1.2*s;
+        const px = pivot.x + ax*u + nx*wob, py = pivot.y + ay*u + ny*wob;
+        L.push({x:px + nx*w, y:py + ny*w}); R.push({x:px - nx*w, y:py - ny*w});
+      }
+      ctx.beginPath(); L.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); for(let i=R.length - 1;i>=0;i--) ctx.lineTo(R[i].x, R[i].y); ctx.closePath();
+      ctx.fillStyle = main; ctx.fill();
+      ctx.strokeStyle = darkO ? "rgba(255,255,255,.14)" : "rgba(0,0,0,.14)"; ctx.lineWidth = 1*s;
+      for(let i=1;i<N;i++){ctx.beginPath(); ctx.moveTo(L[i].x, L[i].y); ctx.lineTo(R[i].x, R[i].y); ctx.stroke();}
+      // the knot at the pivot: three claws gripping the sinew
+      ctx.fillStyle = main;
+      ctx.beginPath(); ctx.arc(pivot.x, pivot.y, 6.5*s, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = main; ctx.lineWidth = 2.6*s; ctx.lineCap = "round";
+      for(let i=0;i<3;i++){
+        const a0 = saw.ang + Math.PI + (i - 1)*.9;
+        ctx.beginPath(); ctx.moveTo(pivot.x + Math.cos(a0)*5*s, pivot.y + Math.sin(a0)*5*s);
+        ctx.quadraticCurveTo(pivot.x + Math.cos(a0)*10*s, pivot.y + Math.sin(a0)*10*s, pivot.x + Math.cos(a0 + .9*Math.sign(i - 1 || 1))*9*s, pivot.y + Math.sin(a0 + .9*Math.sign(i - 1 || 1))*9*s);
+        ctx.stroke();
+      }
     }
-    ctx.beginPath();ctx.arc(pivot.x,pivot.y,2*s,0,Math.PI*2);ctx.fill();
 
     // Sparks thrown off the leading edge.
     if(heavy){
@@ -18075,25 +18076,67 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     ctx.closePath();ctx.fill();
     ctx.beginPath();ctx.arc(0,0,sawR*.9,0,Math.PI*2);ctx.fill();
-    // Spin blur rings + vent holes.
-    ctx.strokeStyle = rgbaHex(accent, heavy ? .22 : .16);
-    ctx.lineWidth = 1.2*s;
-    ctx.beginPath();ctx.arc(0,0,sawR*.66,0,Math.PI*2);ctx.stroke();
-    if(heavy){
-      ctx.strokeStyle = rgbaHex(accent, .12);
-      ctx.lineWidth = 2*s;
-      ctx.beginPath();ctx.arc(0,0,sawR*.78,0,Math.PI*.9);ctx.stroke();
-      ctx.beginPath();ctx.arc(0,0,sawR*.78,Math.PI,Math.PI*1.9);ctx.stroke();
+    // bone-tipped teeth catching the light
+    ctx.fillStyle = "#ece4d2";
+    for(let i=0;i<teeth;i++){
+      const a = i*step + step*.42*dir;
+      ctx.beginPath(); ctx.arc(Math.cos(a)*sawR*1.12, Math.sin(a)*sawR*1.12, Math.max(.8, sawR*.06), 0, Math.PI*2); ctx.fill();
     }
-    ctx.fillStyle = rgbaHex(accent, .26);
-    for(let i=0;i<4;i++){
-      const a = i*Math.PI/2 + Math.PI/4;
-      ctx.beginPath();ctx.arc(Math.cos(a)*sawR*.42, Math.sin(a)*sawR*.42, Math.max(1.2*s, sawR*.11), 0, Math.PI*2);ctx.fill();
+    ctx.restore();                                         // leave the spinning blade frame
+    ctx.save();
+    // The face: upright, never spinning.
+    {
+      const fxo = state === "editor" ? null : prismSmokeFor(o);
+      if(fxo) prismFxBeginFrame(o);
+      const dto = fxo ? (fxo.dt || 0) : 0;
+      const dyingO = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+      let passK = 0, passT = 0;
+      if(fxo){
+        const target = !dyingO && state !== "dying" && (Number(player.baseY) || 0) < o.y - o.orbitR - o.sawR - 4 ? 1 : 0;
+        fxo.passK = (fxo.passK || 0) + (target - (fxo.passK || 0))*Math.min(1, dto*4);
+        if(target){if(fxo.passAt == null) fxo.passAt = time;} else fxo.passAt = null;
+        passK = fxo.passK; passT = fxo.passAt == null ? 0 : time - fxo.passAt;
+      }
+      const tvx = -Math.sin(saw.ang)*dir, tvy = Math.cos(saw.ang)*dir;      // direction of travel
+      const dx = player.x - saw.x, dy = player.baseY - player.h/2 - saw.y, dl = Math.hypot(dx, dy) || 1;
+      const near = dl < o.orbitR*2.2;
+      let look = near ? {x:Math.max(-1, Math.min(1, dx/dl*1.3)), y:Math.max(-1, Math.min(1, dy/dl*1.3))} : {x:tvx*.8, y:tvy*.8};
+      let open = 1, squint = .12, slant = near ? .6 : .35, pupil = near ? .5 : .65, mouth = near ? .45 : .2, grin = near ? 1 : .6;
+      if(((time*.33 + o.phase) % 1) < .03) open = .1;
+      if(dyingO){const c = Math.abs(Math.sin(deathTimer*22)); open = .5; squint = .95; slant = .3; mouth = .4 + .45*c; grin = 1;}
+      if(passK > .001){
+        // you got away: all that spinning catches up with it — dizzy, eyes swirling
+        const dz = guardSm(passT/.8);
+        const sw = time*9;
+        open += (.85 - open)*passK; squint += (.2 - squint)*passK; slant += (-.3 - slant)*passK; mouth += (.15 - mouth)*passK; grin += (-.2 - grin)*passK;
+        look = {x:look.x + (Math.cos(sw)*.7*dz - look.x)*passK, y:look.y + (Math.sin(sw)*.6*dz - look.y)*passK};
+      }
+      if(fxo){
+        const sm = fxo.face || (fxo.face = {});
+        const fresh = !sm.ready || dto > .2;
+        const f = (k, val, rate) => {if(fresh || !(k in sm)){sm[k] = val; return val;} sm[k] += (val - sm[k])*(1 - Math.exp(-dto*rate)); return sm[k];};
+        open = f("open", open, 30); squint = f("squint", squint, 14); slant = f("slant", slant, 12); mouth = f("mouth", mouth, 24); grin = f("grin", grin, 10);
+        if(passK < .5){look = {x:f("lx", look.x, 16), y:f("ly", look.y, 16)};} else {sm.lx = look.x; sm.ly = look.y;}
+        sm.ready = true;
+      }
+      ctx.save();
+      ctx.translate(head.x, head.y);
+      const Rf = sawR*.84;
+      const fg = ctx.createRadialGradient(-Rf*.35, -Rf*.45, Rf*.1, 0, 0, Rf);
+      fg.addColorStop(0, `rgba(255,255,255,${darkO ? .2 : .32})`); fg.addColorStop(.6, "rgba(255,255,255,0)"); fg.addColorStop(1, `rgba(0,0,0,${darkO ? .3 : .14})`);
+      ctx.fillStyle = fg; ctx.beginPath(); ctx.arc(0, 0, Rf, 0, Math.PI*2); ctx.fill();
+      const mo = Math.max(0, Math.min(1, mouth));
+      ctx.fillStyle = "#1a0510";
+      ctx.beginPath();
+      ctx.moveTo(-Rf*.6, Rf*.28 - grin*Rf*.18);
+      ctx.quadraticCurveTo(0, Rf*.42, Rf*.6, Rf*.28 - grin*Rf*.18);
+      ctx.quadraticCurveTo(0, Rf*.5 + mo*Rf*.4, -Rf*.6, Rf*.28 - grin*Rf*.18);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#f1eadb";
+      for(let k=0;k<4;k++){const tx = -Rf*.46 + k*Rf*.26; ctx.beginPath(); ctx.moveTo(tx, Rf*.33); ctx.lineTo(tx + Rf*.18, Rf*.33); ctx.lineTo(tx + Rf*.09, Rf*.47); ctx.closePath(); ctx.fill();}
+      drawGuardianEye(0, -Rf*.18, Rf*.32, Rf*.45, s*.6, main, Math.max(0, Math.min(1, open)), squint, slant, pupil, look);
+      ctx.restore();
     }
-    ctx.fillStyle = accent;
-    ctx.beginPath();ctx.arc(0,0,Math.max(2.4*s, sawR*.16),0,Math.PI*2);ctx.fill();
-    ctx.fillStyle = main;
-    ctx.beginPath();ctx.arc(0,0,Math.max(1*s, sawR*.06),0,Math.PI*2);ctx.fill();
     ctx.restore();
   }
   function drawScanner(o){
