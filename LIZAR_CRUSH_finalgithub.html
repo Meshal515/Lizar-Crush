@@ -12682,6 +12682,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(type === "electric" && deathCulprit.type === "slider") return 1.0;
       if(type === "laser" && deathCulprit.type === "beam") return .95;
       if(type === "fan" && deathCulprit.type === "sideSweeper") return 1.0;
+      if(type === "crusher" && deathCulprit.type === "stillCrusher") return 1.0;
     }
     if(type === "gate") return 1.0;
     if(type === "ink") return 1.95;
@@ -16055,7 +16056,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function spawnDeathParticles(type){
     // Prism Pulse draws its own sparks, exit spray and smoke in its melt death.
     if(type === "prismPulse" || type === "gate") return;
-    if(deathCulprit && ((type === "electric" && deathCulprit.type === "slider") || (type === "laser" && deathCulprit.type === "beam") || (type === "fan" && deathCulprit.type === "sideSweeper"))) return;
+    if(deathCulprit && ((type === "electric" && deathCulprit.type === "slider") || (type === "laser" && deathCulprit.type === "beam") || (type === "fan" && deathCulprit.type === "sideSweeper") || (type === "crusher" && deathCulprit.type === "stillCrusher") || (type === "saw" && deathCulprit.type === "orbitSaw"))) return;
     const rect = playerRect();
     if(type === "ink"){spawnInkDeathParticles();spawnInkDeathParticles();return;}
     if(type === "shockMine"){
@@ -18741,10 +18742,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const c = document.createElement("canvas");
     c.width = Math.max(4, Math.ceil(w)); c.height = Math.max(4, Math.ceil(h));
     const g = c.getContext("2d");
-    const rad = Math.max(7*s, cube.radius*s);
-    g.fillStyle = cubeBodyPaint(g, 0, 0, w, h, cube);
-    roundRect(g, 0, 0, w, h, rad); g.fill();
-    strokeCustomCubeOutline(g, 0, 0, w, h, rad, s, cube);
+    drawPaperBody(g, 0, 0, w, h, s, cube, normalH, {});
     const eyeY = Math.min(h - 12*s, Math.min(h*.48, normalH*.50*s) - 1.1*s);
     g.save();
     g.translate(w/2, eyeY);
@@ -19574,10 +19572,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const art = document.createElement("canvas");
     art.width = W; art.height = H;
     const g = art.getContext("2d");
-    const rad = Math.max(7*s, cube.radius*s);
-    g.fillStyle = cubeBodyPaint(g, 0, 0, w, h, cube);
-    roundRect(g, 0, 0, w, h, rad); g.fill();
-    strokeCustomCubeOutline(g, 0, 0, w, h, rad, s, cube);
+    drawPaperBody(g, 0, 0, w, h, s, cube, normalH, {});
     const eyeY = Math.min(h - 12*s, Math.min(h*.48, normalH*.50*s) - 1.1*s);
     g.save();
     g.translate(w/2, eyeY);
@@ -19707,6 +19702,257 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     return front >= B.maxD;
   }
+  // PAPER_CHARACTER_V1: the cube is a sheet of premium cut paper. Purely visual: playerRect,
+  // stretch, release and all physics are untouched. Colours still come from the shop skin.
+  //  - folded dog-ear on the top corner that flaps on release and settles with a spring;
+  //  - crisp cut edge catching the light;
+  //  - while stretched it unfolds like an accordion: alternating mountain/valley bands, zig-zag
+  //    sides at each crease, creases flattening the further it is pulled;
+  //  - top edge trembles when the eye senses danger.
+  const paperFx = {lastH:0, lastT:0, flap:1, flapV:0};
+  function paperShade(hex, amt){
+    const c = hexToRgbObj(safeHex(hex, "#111111"));
+    const mix = (v) => Math.round(amt >= 0 ? v + (255 - v)*amt : v*(1 + amt));
+    return `rgb(${mix(c.r)},${mix(c.g)},${mix(c.b)})`;
+  }
+  function paperIsDark(hex){
+    try{return luminanceForHex(safeHex(hex, "#111111")) < .45;}catch(_e){return true;}
+  }
+  // Builds the sheet outline (with dog-ear cut and accordion zig-zag) as the current path.
+  function paperSheetPath(g, x, y, w, h, s, o){
+    const r = Math.min(o.r, w*.3, h*.3);
+    const d = o.ear;            // dog-ear size
+    const folds = o.folds, zig = o.zig, wob = o.wob || 0;
+    const sideX = (side, k) => {
+      // zig-zag offset at crease k (alternating in/out)
+      return (k % 2 ? -1 : 1)*zig*side;
+    };
+    g.beginPath();
+    g.moveTo(x + r, y + wob*.3);
+    // top edge with a slight live curl
+    g.quadraticCurveTo(x + (w - d)/2, y - wob, x + w - d, y);
+    // dog-ear cut
+    g.lineTo(x + w, y + d);
+    // right side, zig-zag at creases
+    for(let k=1;k<folds;k++){
+      const yy = y + h*k/folds;
+      if(yy > y + d) g.lineTo(x + w + sideX(1, k), yy);
+    }
+    g.lineTo(x + w, y + h - r);
+    g.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    g.lineTo(x + r, y + h);
+    g.quadraticCurveTo(x, y + h, x, y + h - r);
+    for(let k=folds - 1;k>=1;k--){
+      const yy = y + h*k/folds;
+      g.lineTo(x - sideX(1, k), yy);
+    }
+    g.lineTo(x, y + r);
+    g.quadraticCurveTo(x, y, x + r, y + wob*.3);
+    g.closePath();
+  }
+  // Draws the paper body. Returns nothing; leaves no path state relied on by callers.
+  function drawPaperBody(g, x, y, w, h, s, cube, normalH, opts={}){
+    const stretch = clamp01((h/Math.max(1, normalH*s) - 1)/1.2);
+    const foldUnit = normalH*s*.62;
+    const folds = h > normalH*s*1.06 ? Math.max(2, Math.round(h/foldUnit)) : 1;
+    const zig = folds > 1 ? 2.4*s*(1 - stretch*.55) : 0;
+    const ear = Math.min(w, normalH*s)*.24*(opts.flap ?? 1);
+    const r = Math.max(2*s, Math.min(cube.radius*s, 6*s));
+    const o = {r, ear: Math.max(2*s, ear), folds, zig, wob:opts.wob || 0};
+    const body = cube?.body || "#111111";
+    const dark = paperIsDark(body);
+    g.save();
+    paperSheetPath(g, x, y, w, h, s, o);
+    g.fillStyle = cubeBodyPaint(g, x, y, w, h, cube);
+    g.fill();
+    g.clip();
+    // Accordion bands: mountain folds catch light, valley folds fall into shade.
+    if(folds > 1){
+      for(let k=0;k<folds;k++){
+        const y0 = y + h*k/folds, y1 = y + h*(k + 1)/folds;
+        const gr = g.createLinearGradient(0, y0, 0, y1);
+        if(k % 2){gr.addColorStop(0, `rgba(0,0,0,${dark ? .2 : .1})`); gr.addColorStop(1, "rgba(0,0,0,0)");}
+        else {gr.addColorStop(0, `rgba(255,255,255,${dark ? .12 : .35})`); gr.addColorStop(1, "rgba(255,255,255,0)");}
+        g.fillStyle = gr;
+        g.fillRect(x - 4*s, y0, w + 8*s, y1 - y0);
+        // crease line
+        g.strokeStyle = k % 2 ? `rgba(0,0,0,${dark ? .5 : .2})` : `rgba(255,255,255,${dark ? .22 : .6})`;
+        g.lineWidth = Math.max(.8, .9*s);
+        g.beginPath(); g.moveTo(x - 4*s, y0); g.lineTo(x + w + 4*s, y0); g.stroke();
+      }
+    } else {
+      // A single soft centre crease: the sheet was folded once, not a flat block.
+      const gr = g.createLinearGradient(x, 0, x + w, 0);
+      gr.addColorStop(0, `rgba(255,255,255,${dark ? .07 : .25})`);
+      gr.addColorStop(.5, "rgba(255,255,255,0)");
+      gr.addColorStop(.52, `rgba(0,0,0,${dark ? .14 : .06})`);
+      gr.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = gr;
+      g.fillRect(x, y, w, h);
+    }
+    g.restore();
+    // Cut edge catching the light along the top and left.
+    g.save();
+    g.strokeStyle = dark ? "rgba(255,255,255,.22)" : "rgba(0,0,0,.18)";
+    g.lineWidth = Math.max(.8, 1*s);
+    g.beginPath();
+    g.moveTo(x + 1*s, y + h - o.r);
+    g.lineTo(x + 1*s, y + o.r);
+    g.quadraticCurveTo(x + 1*s, y + 1*s, x + o.r, y + 1*s + (o.wob*.3));
+    g.lineTo(x + w - o.ear - 1*s, y + 1*s);
+    g.stroke();
+    g.restore();
+    // Dog-ear: the folded-over corner showing the paper's other side.
+    const e = o.ear;
+    const flap = opts.flap ?? 1;
+    const tipX = x + w - e + e*(1 - flap)*.9, tipY = y + e - e*(1 - flap)*.9;
+    g.save();
+    g.fillStyle = paperShade(body, dark ? .22 : -.12);
+    g.beginPath(); g.moveTo(x + w - e, y); g.lineTo(x + w, y + e); g.lineTo(tipX, tipY); g.closePath(); g.fill();
+    g.strokeStyle = dark ? "rgba(255,255,255,.35)" : "rgba(0,0,0,.25)";
+    g.lineWidth = Math.max(.8, 1*s);
+    g.beginPath(); g.moveTo(x + w - e, y); g.lineTo(x + w, y + e); g.stroke();
+    g.restore();
+    strokeCustomCubeOutline(g, x, y, w, h, o.r, s, cube);
+  }
+  // Steps the dog-ear spring from the live player (called once per frame by drawPlayer).
+  function paperCharacterStep(h){
+    const dt = Math.min(.05, Math.max(0, time - paperFx.lastT));
+    paperFx.lastT = time;
+    const dh = h - (paperFx.lastH || h);
+    paperFx.lastH = h;
+    if(dt > 0){
+      // A fast collapse (release) flicks the corner open; stretching tugs it a little.
+      if(dh < -3) paperFx.flapV -= Math.min(30, -dh*.5);
+      if(dh > 1) paperFx.flapV -= dh*.05;
+      paperFx.flapV += (1 - paperFx.flap)*260*dt;
+      paperFx.flapV *= Math.pow(.02, dt);
+      paperFx.flap = Math.max(-.2, Math.min(1.15, paperFx.flap + paperFx.flapV*dt));
+    }
+    return paperFx.flap;
+  }
+  // PAPER_CRUMPLE_V1: crumpled paper drawn as a real faceted mesh. Each triangle of a jittered grid
+  // gets its own light/shade, so it reads as crushed paper, not a texture.
+  function drawCrumpledPaper(cx, cy, w, h, c, rot, cube, s, seed){
+    const cols = 5, rows = 5;
+    const body = cube?.body || "#111111";
+    const dark = paperIsDark(body);
+    const jit = c*Math.min(w, h)*.32;
+    const P = [];
+    for(let j=0;j<=rows;j++){
+      for(let i=0;i<=cols;i++){
+        const u = i/cols - .5, v = j/rows - .5;
+        const edge = (i === 0 || i === cols || j === 0 || j === rows);
+        // Crumpling pulls the sheet into a lumpy ball: edges curl inward.
+        const pull = 1 - c*.28*(edge ? 1 : .5);
+        const jx = (trapHash(seed + i*7.1 + j*13.7) - .5)*jit*(edge ? 1.3 : 1);
+        const jy = (trapHash(seed + i*3.3 + j*5.9 + 9) - .5)*jit*(edge ? 1.3 : 1);
+        P.push([u*w*pull + jx, v*h*pull + jy]);
+      }
+    }
+    const at = (i, j) => P[j*(cols + 1) + i];
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    ctx.lineJoin = "round";
+    for(let j=0;j<rows;j++){
+      for(let i=0;i<cols;i++){
+        const a = at(i, j), b = at(i + 1, j), d = at(i, j + 1), e = at(i + 1, j + 1);
+        const tris = (i + j) % 2 ? [[a, b, e], [a, e, d]] : [[a, b, d], [b, e, d]];
+        tris.forEach((tri, k) => {
+          ctx.beginPath(); ctx.moveTo(tri[0][0], tri[0][1]); ctx.lineTo(tri[1][0], tri[1][1]); ctx.lineTo(tri[2][0], tri[2][1]); ctx.closePath();
+          ctx.fillStyle = body; ctx.fill();
+          const sh = trapHash(seed*1.7 + i*11 + j*17 + k*5) - .5;
+          const amt = Math.abs(sh)*c*(dark ? .5 : .32);
+          ctx.fillStyle = sh > 0 ? `rgba(255,255,255,${amt})` : `rgba(0,0,0,${amt*1.2})`;
+          ctx.fill();
+          // Crease highlight along facet edges once it is properly crumpled.
+          if(c > .25){ctx.strokeStyle = dark ? `rgba(255,255,255,${.18*c})` : `rgba(0,0,0,${.14*c})`; ctx.lineWidth = Math.max(.6, .7*s); ctx.stroke();}
+        });
+      }
+    }
+    ctx.restore();
+  }
+  // Still Crusher death, drawn on top of the jaws (from drawCrusherDeathOverlay).
+  function drawPaperCrushDeath(){
+    const p = deathRenderRect();
+    const sc = worldToScreen(p.x, p.y);
+    const s = sc.s;
+    const w = p.w*s, h = p.h*s;
+    const t = clamp01(deathTimer / deathDuration(deathType));
+    const T = deathTimer;
+    const cube = cubeSkin(), eyeTone = eyeSkin();
+    const baseX = sc.x + w/2, floorY = sc.y + h;
+    const seed = 41.7;
+    let cw, ch, c, cy, rot = 0, eyeK = 0, dizzy = 0;
+    if(T < .08){
+      // Slam: squeezed into a thin crumpled strip.
+      const k = easeOutCubic(T/.08);
+      cw = w*(1 - .82*k); ch = h*(1 + .22*k); c = .9*k;
+      cy = floorY - ch/2;
+    } else if(T < .56){
+      // Held in the jaws, trembling.
+      cw = w*.18; ch = h*1.22; c = .9;
+      cy = floorY - ch/2;
+      rot = (trapHash(Math.floor(time*40)) - .5)*.08;
+    } else if(T < .78){
+      // Pops out as a crumpled ball, hops and spins.
+      const k = (T - .56)/.22;
+      const ball = Math.min(w, h)*.78;
+      cw = w*.18 + (ball - w*.18)*easeOutCubic(Math.min(1, k*2));
+      ch = h*1.22 + (ball - h*1.22)*easeOutCubic(Math.min(1, k*2));
+      c = 1;
+      cy = floorY - ch/2 - Math.sin(k*Math.PI)*h*.9;
+      rot = k*Math.PI*1.4;
+    } else {
+      // Lands and springs back flat, still creased, eye dizzy.
+      const k = clamp01((T - .78)/.16);
+      const sp = 1 + Math.sin(k*Math.PI*2.4)*(1 - k)*.25;
+      const ball = Math.min(w, h)*.78;
+      cw = ball + (w*1.12 - ball)*easeOutCubic(k)*sp;
+      ch = ball + (h*.82 - ball)*easeOutCubic(k);
+      c = 1 - .62*easeOutCubic(k);
+      cy = floorY - ch/2;
+      rot = Math.PI*1.4*(1 - easeOutCubic(k));
+      eyeK = k; dizzy = 1;
+    }
+    const fade = 1 - Math.max(0, t - .9)*10;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    drawCrumpledPaper(baseX, cy, cw, ch, c, rot, cube, s, seed);
+    if(eyeK > 0){
+      // Dizzy eye: squashed, pupil circling.
+      ctx.save();
+      ctx.translate(baseX, cy - ch*.08);
+      ctx.scale(1, .55 + .45*eyeK);
+      ctx.fillStyle = eyeTone.color;
+      ctx.beginPath(); ctx.ellipse(0, 0, 6*s, 8*s, 0, 0, Math.PI*2); ctx.fill();
+      strokeCustomEyeOutline(ctx, 0, 0, 6*s, 8*s, s, eyeTone);
+      ctx.fillStyle = eyeTone.pupil;
+      const a = time*14;
+      ctx.beginPath(); ctx.arc(Math.cos(a)*2.4*s, Math.sin(a)*3*s, 1.4*s, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+    // Paper scraps squeezed out of the jaws at the slam.
+    if(T < .5){
+      const body = cube?.body || "#111111";
+      for(let i=0;i<8;i++){
+        const side = i % 2 ? 1 : -1;
+        const k = T/.5;
+        const sx = baseX + side*(4 + k*40*(.5 + trapHash(i*3.1)))*s;
+        const sy = floorY - h*(.2 + .7*trapHash(i*5.7)) - k*18*s + k*k*30*s;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(k*8*(trapHash(i) - .5));
+        ctx.globalAlpha = fade*(1 - k);
+        ctx.fillStyle = body;
+        const z = (2 + trapHash(i*9.1)*3)*s;
+        ctx.beginPath(); ctx.moveTo(-z, -z*.6); ctx.lineTo(z, -z*.3); ctx.lineTo(z*.2, z*.7); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
   // Same eye as the generic death pass, drawable inside a moving/clipped death piece.
   function drawDeathEyeAt(ex, ey, s, close, eyeTone){
     const k = clamp01(close);
@@ -19738,6 +19984,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.save();
     ctx.globalAlpha = 1 - Math.max(0, t-.72)*3.2;
 
+    // Still Crusher: the crumple is drawn on top of the jaws by drawCrusherDeathOverlay.
+    if(deathType === "crusher" && deathCulprit?.type === "stillCrusher"){ctx.restore(); return;}
     if(deathType === "electric" && deathCulprit?.type === "slider"){
       // ELECTRIC_LINK_DEATH_V1 (electrocution): the cube is pinned and shaken by the current, flicking
       // between itself and an x-ray frame while arcs crawl over it from the side the link touched;
@@ -20146,61 +20394,99 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
       return;
     } else if(deathType === "saw" && deathCulprit?.type === "orbitSaw" && Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y)){
-      // ORBIT_SAW_DEATH_V1: the blade passes straight through and the cube splits in two along its path.
-      const fade = ctx.globalAlpha;
-      const main = trapMain(), accent = trapAccent();
-      const rad = Math.max(7*s, cube.radius*s);
+      // ORBIT_SAW_DEATH_V2 (paper tear): the blade rips the sheet along its path with a jagged,
+      // fibrous tear plus a branching side tear. Torn edges show pale paper fibres. The pieces
+      // flutter down like paper (drag, sway, slow spin) and small scraps drift away.
+      ctx.globalAlpha = 1;
+      const key = deathPlayerSnapshot || deathCulprit;
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.22, 1.1);
+      const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
       const imp = worldToScreen(deathImpact.x, deathImpact.y);
-      let nx = cx - imp.x, ny = cy - imp.y;
-      const nl = Math.hypot(nx, ny) || 1;
-      nx /= nl; ny /= nl;
-      const px = -ny, py = nx;
-      const L = w + h + 80*s;
-      const split = easeOutCubic(clamp01(t/.3))*10*s + t*16*s;
-      const drop = t*t*70*s;
-      const eyeCY = Math.min(y + h - 12*s, y + Math.min(h*.48, normalH*.50*s) - 1.1*s);
-      for(const side of [-1, 1]){
-        ctx.save();
-        ctx.translate(cx + px*side*split, cy + py*side*split + drop*(side > 0 ? 1 : .8));
-        ctx.rotate(side*t*.7);
-        ctx.translate(-cx, -cy);
+      let dxs = (x + w/2) - imp.x, dys = (y + h/2) - imp.y;
+      const dl = Math.hypot(dxs, dys) || 1; dxs /= dl; dys /= dl;     // tear runs from the saw through the sheet
+      const pxs = -dys, pys = dxs;                                    // pieces part sideways from the tear
+      const L = (w + h)*1.2;
+      const lcx = w/2, lcy = h/2;
+      // Jagged tear line in cube-local px (deterministic).
+      const tear = [];
+      for(let i=0;i<=16;i++){
+        const u = i/16*2 - 1;
+        const amp = (trapHash(i*7.3 + 1.1) - .5)*Math.min(w, h)*.16 + (i % 2 ? 1 : -1)*Math.min(w, h)*.03;
+        tear.push([lcx + dxs*u*L*.5 + pxs*amp, lcy + dys*u*L*.5 + pys*amp]);
+      }
+      const far = (sgn) => [[tear[16][0] + pxs*L*sgn, tear[16][1] + pys*L*sgn], [tear[0][0] + pxs*L*sgn, tear[0][1] + pys*L*sgn]];
+      const polyA = tear.concat(far(1)), polyB = tear.concat(far(-1));
+      // Branch tear splitting piece B in two, starting near the middle of the main tear.
+      const br0 = tear[8 + Math.floor(trapHash(3.3)*3)];
+      const bdx = dxs*.4 - pxs*.92, bdy = dys*.4 - pys*.92;
+      const branch = [br0];
+      for(let i=1;i<=7;i++){
+        const u = i/7*L*.6;
+        const amp = (trapHash(i*5.9 + 4) - .5)*Math.min(w, h)*.12;
+        branch.push([br0[0] + bdx*u - bdy*amp, br0[1] + bdy*u + bdx*amp]);
+      }
+      const T = t;
+      const sep = easeOutCubic(clamp01(T/.25))*8*s + T*22*s;
+      const fall = T*T*90*s;
+      const sway = (k) => Math.sin(T*7 + k*2.1)*6*s*T;
+      const fibre = (pts) => {
+        // pale fibres along a torn edge, with tiny whiskers
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "rgba(255,252,244,.85)";
+        ctx.lineWidth = Math.max(.8, 1.3*s);
+        ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
+        ctx.lineWidth = Math.max(.5, .6*s);
         ctx.beginPath();
-        ctx.moveTo(cx + nx*L, cy + ny*L);
-        ctx.lineTo(cx - nx*L, cy - ny*L);
-        ctx.lineTo(cx - nx*L + px*side*L, cy - ny*L + py*side*L);
-        ctx.lineTo(cx + nx*L + px*side*L, cy + ny*L + py*side*L);
-        ctx.closePath();
+        for(let i=1;i<pts.length;i++){
+          const q = pts[i];
+          const a = trapHash(i*9.7)*Math.PI*2;
+          ctx.moveTo(q[0], q[1]); ctx.lineTo(q[0] + Math.cos(a)*2.2*s, q[1] + Math.sin(a)*2.2*s);
+        }
+        ctx.stroke();
+      };
+      const piece = (poly, dx, dy, rot, edges) => {
+        let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
+        ctx.save();
+        ctx.translate(x + mx + dx, y + my + dy);
+        ctx.rotate(rot);
+        ctx.translate(-mx, -my);
+        ctx.beginPath(); poly.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
         ctx.clip();
-        ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-        roundRect(ctx, x, y, w, h, rad);ctx.fill();
-        strokeCustomCubeOutline(ctx, x, y, w, h, rad, s, cube);
-        drawDeathEyeAt(cx, eyeCY, s, clamp01(t/.5), eyeTone);
-        // Fresh cut face, kept inside the body.
-        roundRect(ctx, x, y, w, h, rad);ctx.clip();
-        ctx.strokeStyle = rgbaHex(accent, .7);
-        ctx.lineWidth = 2.4*s;
-        ctx.beginPath();ctx.moveTo(cx + nx*L, cy + ny*L);ctx.lineTo(cx - nx*L, cy - ny*L);ctx.stroke();
+        ctx.drawImage(art, 0, 0);
+        for(const e of edges) fibre(e);
+        ctx.restore();
+      };
+      // Piece A (one side of the tear).
+      piece(polyA, pxs*sep + sway(0), fall*.8, T*.5 + Math.sin(T*5)*.12, [tear]);
+      // Piece B split by the branch into B1/B2, clipped twice.
+      const sideB = (sgn) => {
+        const bfar = [[branch[7][0] + (bdx*0 + pxs*0) + dxs*L*sgn, branch[7][1] + dys*L*sgn], [br0[0] + dxs*L*sgn, br0[1] + dys*L*sgn]];
+        return branch.concat(bfar);
+      };
+      ctx.save();
+      ctx.translate(-pxs*sep*.6 + sway(1), fall);
+      ctx.beginPath(); polyB.forEach((q, i) => i ? ctx.lineTo(x + q[0], y + q[1]) : ctx.moveTo(x + q[0], y + q[1])); ctx.closePath();
+      ctx.clip();
+      piece(sideB(1), -pxs*sep*.5 + dxs*sep*.5, fall*.2, -T*.7, [tear, branch]);
+      piece(sideB(-1), -pxs*sep*.3 - dxs*sep*.6, fall*.35, T*.9 + Math.sin(T*6)*.15, [tear, branch]);
+      ctx.restore();
+      // Scraps of paper drifting off the tear.
+      if(!fx.burst && deathCulprit){fx.burst = true; trapSparkBurst(deathCulprit, p.x + p.w/2, p.y + p.h/2, 14, "metal", .9, -dxs, -dys);}
+      const body = cube?.body || "#111111";
+      for(let i=0;i<10;i++){
+        const a = Math.atan2(pys, pxs)*(i % 2 ? 1 : -1) + (trapHash(i*4.4) - .5)*1.6;
+        const d = (10 + trapHash(i*2.2)*36)*s*easeOutCubic(T);
+        const sx = x + w/2 + Math.cos(a)*d + Math.sin(T*8 + i)*4*s, sy = y + h/2 + Math.sin(a)*d + T*T*60*s;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(T*6*(trapHash(i*1.3) - .5) + Math.sin(T*9 + i)*.4);
+        ctx.globalAlpha = 1 - Math.max(0, T - .5)*2;
+        const z = (1.8 + trapHash(i*7.7)*2.8)*s;
+        ctx.fillStyle = body;
+        ctx.beginPath(); ctx.moveTo(-z, -z*.5); ctx.lineTo(z*.8, -z*.7); ctx.lineTo(z, z*.4); ctx.lineTo(-z*.4, z*.7); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = "rgba(255,252,244,.7)"; ctx.lineWidth = Math.max(.5, .6*s); ctx.stroke();
         ctx.restore();
       }
-      // Cut flash along the blade path.
-      if(t < .35){
-        const k = 1 - t/.35;
-        const ext = Math.max(w, h)*.75;
-        ctx.globalAlpha = fade*k;
-        ctx.lineCap = "round";
-        ctx.strokeStyle = main;
-        ctx.lineWidth = 5*s*k;
-        ctx.beginPath();ctx.moveTo(cx - nx*ext, cy - ny*ext);ctx.lineTo(cx + nx*ext, cy + ny*ext);ctx.stroke();
-        ctx.strokeStyle = accent;
-        ctx.lineWidth = 1.6*s*k;
-        ctx.beginPath();ctx.moveTo(cx - nx*ext, cy - ny*ext);ctx.lineTo(cx + nx*ext, cy + ny*ext);ctx.stroke();
-      }
-      // Blade swipe arc.
-      ctx.globalAlpha = fade*clamp01(1 - t*2.2);
-      ctx.strokeStyle = main;
-      ctx.lineWidth = 2*s;
-      const ang = Math.atan2(ny, nx);
-      ctx.beginPath();ctx.arc(cx, cy, Math.max(w, h)*.6 + t*14*s, ang - .9, ang + .9);ctx.stroke();
       ctx.restore();
       return;
     } else if(deathType === "prismPulse"){
@@ -20596,11 +20882,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.transform(1, 0, skew, Math.max(.78, 1 - gripDizzy*.16), 0, 0);
       ctx.translate(-cx, -cy);
     }
-    ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-    const cubeRound = Math.max(7*s, cube.radius*s);
-    roundRect(ctx, x, y, w, h, cubeRound);
-    ctx.fill();
-    strokeCustomCubeOutline(ctx, x, y, w, h, cubeRound, s, cube);
+    // PAPER_CHARACTER_V1 body (see drawPaperBody).
+    const paperFlap = paperCharacterStep(h);
+    const paperWob = eye.mood === "danger" ? Math.sin(time*42)*1.3*s*Math.max(.4, eye.danger || 0) : Math.sin(time*2.2)*.5*s;
+    drawPaperBody(ctx, x, y, w, h, s, cube, player.normalH, {flap:paperFlap, wob:paperWob});
 
     const blinkT = eye.blinkProgress > 0 ? 1 - Math.abs((eye.blinkProgress / eye.blinkDuration) - .5) * 2 : 0;
     let openScale = Math.max(.08, 1 - blinkT);
@@ -20695,6 +20980,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function drawCrusherDeathOverlay(){
     if(state !== "dying" || deathType !== "crusher" || !deathCulprit || deathCulprit.type !== "stillCrusher") return;
     drawStillCrusher(deathCulprit);
+    drawPaperCrushDeath();
   }
 
   function tplClamp(n,min,max){return Math.max(min, Math.min(max, n));}
