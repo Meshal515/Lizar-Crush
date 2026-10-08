@@ -3,7 +3,9 @@ package com.lizarcrush.game;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.view.Display;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.WindowManager;
@@ -44,6 +46,7 @@ public class MainActivity extends ComponentActivity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        requestHighRefreshRate();
 
         webView = new WebView(this);
         webView.setBackgroundColor(0xFFF3F3EE);
@@ -118,6 +121,33 @@ public class MainActivity extends ComponentActivity {
 
         if (savedInstanceState != null) webView.restoreState(savedInstanceState);
         else webView.loadUrl(GAME_URL);
+    }
+
+    /**
+     * Ask for the display's fastest refresh rate (90/120/144 Hz) at the current resolution. Many
+     * phones keep apps at 60 Hz unless the window asks. The game loop is dt-based and uncapped on
+     * "Auto", so it simply renders more frames; gameplay timing does not change.
+     */
+    private void requestHighRefreshRate() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        try {
+            Display display = getWindowManager().getDefaultDisplay();
+            Display.Mode current = display.getMode();
+            Display.Mode best = current;
+            for (Display.Mode m : display.getSupportedModes()) {
+                if (m.getPhysicalWidth() == current.getPhysicalWidth()
+                        && m.getPhysicalHeight() == current.getPhysicalHeight()
+                        && m.getRefreshRate() > best.getRefreshRate()) {
+                    best = m;
+                }
+            }
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.preferredDisplayModeId = best.getModeId();
+            lp.preferredRefreshRate = best.getRefreshRate();
+            getWindow().setAttributes(lp);
+        } catch (RuntimeException ignored) {
+            // Some OEM displays refuse mode changes; the default rate is fine.
+        }
     }
 
     private void hideSystemBars() {
