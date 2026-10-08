@@ -12679,6 +12679,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(type === "ink") return 1.95;
     if(type === "electric") return .82;
     if(type === "laser") return .72;
+    if(type === "prismPulse") return .72;
     if(type === "scanner") return .95;
     if(type === "saw") return .68;
     if(type === "gate") return .78;
@@ -16061,7 +16062,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     for(let i=0;i<count;i++){
       const ang = Math.random()*Math.PI*2;
       const speed = type === "crusher" ? 55 + Math.random()*155 : (type === "gate" ? 90 + Math.random()*90 : 70 + Math.random()*210);
-      const kind = type === "crusher" ? "dust" : (type === "electric" ? "spark" : (type === "saw" || type === "laser" || type === "fan" ? "shard" : "ash"));
+      const kind = type === "crusher" ? "dust" : (type === "electric" || type === "prismPulse" ? "spark" : (type === "saw" || type === "laser" || type === "fan" ? "shard" : "ash"));
       addAshParticle({
         kind,
         x:rect.x + Math.random()*rect.w,
@@ -16407,7 +16408,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         }
       }
       if(o.type === "wheel"){const x = wavePosition(o, time);if(circleRectCollide(x, o.y, o.r, p)) return startDeath("The wheel hit you.", "wheel", null, o);}
-      if(o.type === "orbitSaw"){const saw = orbitSawState(o, time);if(circleRectCollide(saw.x, saw.y, o.sawR, p)) return startDeath("The orbit saw sliced you.", "saw", null, o);}
+      if(o.type === "orbitSaw"){const saw = orbitSawState(o, time);if(circleRectCollide(saw.x, saw.y, o.sawR, p)) return startDeath("The orbit saw sliced you.", "saw", {x:saw.x, y:saw.y, ang:saw.ang}, o);}
       if(o.type === "twinStutterSaws"){const st = twinStutterSawsState(o, time); for(const saw of st.saws){if(circleRectCollide(saw.x, saw.y, st.c.sawR, p)) return startDeath("The stutter saw sliced you.", "saw", null, o);}}
       if(o.type === "scanner"){const band = {x:0, y:o.y - o.h/2, w:WORLD_W, h:o.h};if(rectsOverlap(p, band) && cur.h > scannerLimit(o)){return startDeath("You were too tall for the scanner guard.", "scanner", null, o);}}
       if(o.type === "clamp"){const info = clampBeamData(o);const br = info.blocks;const left = {x:br.leftX, y:br.y, w:br.size, h:br.size};const right = {x:br.rightX, y:br.y, w:br.size, h:br.size};if(rectsOverlap(p,left) || rectsOverlap(p,right)){return startDeath("The energy core burned you.", "gate", null, o);}if(info.progress > .12){if((info.leftSeg.w > 0 && rectsOverlap(p,info.leftSeg)) || (info.rightSeg.w > 0 && rectsOverlap(p,info.rightSeg))){return startDeath("The energy gate crushed you with light.", "gate", null, o);}}}
@@ -17309,182 +17310,319 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     drawBeamEmitter(bx + bw,o.y,-1,active,heat);
   }
   function drawOrbitSaw(o){
+    // ORBIT_SAW_POLISH_V1: visual only. Collision still uses orbitSawState + o.sawR.
     const saw = orbitSawState(o, time);
     const pivot = worldToScreen(o.cx, o.y);
     const head = worldToScreen(saw.x, saw.y);
     const s = pivot.s;
+    const main = trapMain();
+    const accent = trapAccent();
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const dir = (Number(o.speed) || 0) < 0 ? -1 : 1;
+    const orbitR = o.orbitR*s;
+    const sawR = o.sawR*s;
     ctx.save();
-    ctx.setLineDash([8*s,8*s]);
-    ctx.strokeStyle = "rgba(0,0,0,.18)";
-    ctx.lineWidth = 2*s;
-    ctx.beginPath();ctx.arc(pivot.x,pivot.y,o.orbitR*s,0,Math.PI*2);ctx.stroke();
+
+    // Orbit track.
+    ctx.setLineDash([6*s,9*s]);
+    ctx.strokeStyle = rgbaHex(main, .16);
+    ctx.lineWidth = 1.6*s;
+    ctx.beginPath();ctx.arc(pivot.x,pivot.y,orbitR,0,Math.PI*2);ctx.stroke();
     ctx.setLineDash([]);
-    ctx.strokeStyle = "rgba(0,0,0,.15)";
-    ctx.lineWidth = 3*s;
-    ctx.beginPath();ctx.moveTo(pivot.x,pivot.y);ctx.lineTo(head.x,head.y);ctx.stroke();
-    ctx.fillStyle = trapMain();
-    ctx.beginPath();ctx.arc(pivot.x,pivot.y,6*s,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle = trapAccent();
-    ctx.beginPath();ctx.arc(pivot.x,pivot.y,1.7*s,0,Math.PI*2);ctx.fill();
-    ctx.translate(head.x,head.y);
-    ctx.rotate(time*5.6 + saw.ang);
-    ctx.fillStyle = "rgba(0,0,0,.15)";
-    ctx.beginPath();ctx.arc(0,0,o.sawR*1.2*s,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle = trapMain();
-    ctx.beginPath();ctx.arc(0,0,o.sawR*s,0,Math.PI*2);ctx.fill();
-    for(let i=0;i<10;i++){
-      ctx.save();
-      ctx.rotate(i * Math.PI/5);
-      ctx.beginPath();
-      ctx.moveTo(o.sawR*.26*s,-4.2*s);
-      ctx.lineTo(o.sawR*1.16*s,0);
-      ctx.lineTo(o.sawR*.26*s,4.2*s);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
+
+    // Motion trail behind the blade: reads direction and speed at a glance.
+    const trail = Math.min(1.3, .45 + Math.abs(Number(o.speed)||0)*.22);
+    for(let i=0;i<6;i++){
+      const a0 = saw.ang - dir*trail*(i/6);
+      const a1 = saw.ang - dir*trail*((i+1)/6);
+      ctx.strokeStyle = rgbaHex(main, .17*(1 - i/6));
+      ctx.lineWidth = sawR*1.15*(1 - i/8);
+      ctx.beginPath();ctx.arc(pivot.x,pivot.y,orbitR,a0,a1,dir > 0);ctx.stroke();
     }
-    ctx.strokeStyle = rgbaHex(trapAccent(), .22);
-    ctx.lineWidth = 1.5*s;
-    ctx.beginPath();ctx.arc(0,0,o.sawR*.58*s,0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle = trapAccent();
-    ctx.beginPath();ctx.arc(0,0,2.1*s,0,Math.PI*2);ctx.fill();
+
+    // Tapered arm from the hub to the blade axle.
+    const ax = head.x - pivot.x, ay = head.y - pivot.y;
+    const al = Math.max(1, Math.hypot(ax, ay));
+    const nx = -ay/al, ny = ax/al;
+    ctx.fillStyle = rgbaHex(main, .82);
+    ctx.beginPath();
+    ctx.moveTo(pivot.x + nx*4.2*s, pivot.y + ny*4.2*s);
+    ctx.lineTo(head.x + nx*2.2*s, head.y + ny*2.2*s);
+    ctx.lineTo(head.x - nx*2.2*s, head.y - ny*2.2*s);
+    ctx.lineTo(pivot.x - nx*4.2*s, pivot.y - ny*4.2*s);
+    ctx.closePath();ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, .28);
+    ctx.lineWidth = 1*s;
+    ctx.beginPath();ctx.moveTo(pivot.x, pivot.y);ctx.lineTo(head.x, head.y);ctx.stroke();
+
+    // Hub: bolted housing that turns with the arm.
+    ctx.fillStyle = main;
+    ctx.beginPath();ctx.arc(pivot.x,pivot.y,9*s,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, .45);
+    ctx.lineWidth = 1.3*s;
+    ctx.beginPath();ctx.arc(pivot.x,pivot.y,6*s,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle = accent;
+    for(let i=0;i<3;i++){
+      const a = saw.ang + i*Math.PI*2/3;
+      ctx.beginPath();ctx.arc(pivot.x + Math.cos(a)*6*s, pivot.y + Math.sin(a)*6*s, 1.2*s, 0, Math.PI*2);ctx.fill();
+    }
+    ctx.beginPath();ctx.arc(pivot.x,pivot.y,2*s,0,Math.PI*2);ctx.fill();
+
+    // Sparks thrown off the leading edge.
+    if(heavy){
+      const tx = -Math.sin(saw.ang)*dir, ty = Math.cos(saw.ang)*dir;
+      const ox = Math.cos(saw.ang), oy = Math.sin(saw.ang);
+      ctx.lineCap = "round";
+      for(let k=0;k<5;k++){
+        const ph = (time*3.4 + k*.21) % 1;
+        const spread = Math.sin(k*12.9898)*.55;
+        const vx = -tx + ox*.6 + ty*spread, vy = -ty + oy*.6 - tx*spread;
+        const sx = head.x + ox*sawR*1.05 + vx*ph*26*s;
+        const sy = head.y + oy*sawR*1.05 + vy*ph*26*s + ph*ph*10*s;
+        ctx.strokeStyle = rgbaHex(accent, .75*(1 - ph));
+        ctx.lineWidth = 1.4*s*(1 - ph*.6);
+        ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx - vx*5*s*(1-ph), sy - vy*5*s*(1-ph));ctx.stroke();
+      }
+    }
+
+    // Blade.
+    ctx.translate(head.x, head.y);
+    ctx.fillStyle = "rgba(0,0,0,.14)";
+    ctx.beginPath();ctx.arc(1.6*s, 2.6*s, sawR*1.12, 0, Math.PI*2);ctx.fill();
+    ctx.rotate(time*7.2*dir + saw.ang);
+    const teeth = 12, step = Math.PI*2/teeth;
+    ctx.fillStyle = main;
+    ctx.beginPath();
+    for(let i=0;i<teeth;i++){
+      const a = i*step;
+      const inner = sawR*.84, tip = sawR*1.2;
+      const p0 = a, p1 = a + step*.42*dir, p2 = a + step*.58*dir;
+      if(i === 0) ctx.moveTo(Math.cos(p0)*inner, Math.sin(p0)*inner); else ctx.lineTo(Math.cos(p0)*inner, Math.sin(p0)*inner);
+      ctx.lineTo(Math.cos(p1)*tip, Math.sin(p1)*tip);
+      ctx.lineTo(Math.cos(p2)*inner*.96, Math.sin(p2)*inner*.96);
+    }
+    ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.arc(0,0,sawR*.9,0,Math.PI*2);ctx.fill();
+    // Spin blur rings + vent holes.
+    ctx.strokeStyle = rgbaHex(accent, heavy ? .22 : .16);
+    ctx.lineWidth = 1.2*s;
+    ctx.beginPath();ctx.arc(0,0,sawR*.66,0,Math.PI*2);ctx.stroke();
+    if(heavy){
+      ctx.strokeStyle = rgbaHex(accent, .12);
+      ctx.lineWidth = 2*s;
+      ctx.beginPath();ctx.arc(0,0,sawR*.78,0,Math.PI*.9);ctx.stroke();
+      ctx.beginPath();ctx.arc(0,0,sawR*.78,Math.PI,Math.PI*1.9);ctx.stroke();
+    }
+    ctx.fillStyle = rgbaHex(accent, .26);
+    for(let i=0;i<4;i++){
+      const a = i*Math.PI/2 + Math.PI/4;
+      ctx.beginPath();ctx.arc(Math.cos(a)*sawR*.42, Math.sin(a)*sawR*.42, Math.max(1.2*s, sawR*.11), 0, Math.PI*2);ctx.fill();
+    }
+    ctx.fillStyle = accent;
+    ctx.beginPath();ctx.arc(0,0,Math.max(2.4*s, sawR*.16),0,Math.PI*2);ctx.fill();
+    ctx.fillStyle = main;
+    ctx.beginPath();ctx.arc(0,0,Math.max(1*s, sawR*.06),0,Math.PI*2);ctx.fill();
     ctx.restore();
   }
   function drawScanner(o){
+    // SCANNER_GUARD_POLISH_V1: visual only. Collision still uses scannerLimit(o) and the o.h band.
     const safe = scannerSafe(o);
     const limit = scannerLimit(o);
     const p = worldToScreen(WORLD_W/2, o.y);
     const s = p.s;
-    const charge = (player.h - player.normalH) / (player.maxH - player.normalH);
+    const main = trapMain();
+    const accent = trapAccent();
+    const idle = trapIdle();
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const span = Math.max(1, player.maxH - player.normalH);
+    const charge = clamp01((player.h - player.normalH) / span);
+    const limitPct = clamp01((limit - player.normalH) / span);
     const bandX = p.x - WORLD_W*s/2;
     const bandY = p.y - o.h*s/2;
     const bandW = WORLD_W*s;
     const bandH = o.h*s;
+    // Alarm grows as a too-tall cube gets close. Visual only.
+    const near = clamp01(1 - Math.abs((player.baseY - player.h*.5) - o.y) / 360);
+    const alarm = safe ? 0 : .35 + .65*near;
+    const strobe = alarm ? .5 + .5*Math.sin(time*24) : 0;
 
     ctx.save();
 
-    ctx.fillStyle = "rgba(0,0,0,.025)";
-    roundRect(ctx, bandX, bandY, bandW, bandH, 18*s);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,.06)";
+    // Lane: inspection gate with rails and measuring ticks.
+    ctx.fillStyle = rgbaHex(main, .025 + alarm*.07*strobe);
+    ctx.fillRect(bandX, bandY, bandW, bandH);
+    ctx.strokeStyle = rgbaHex(main, .18 + alarm*.45);
+    ctx.lineWidth = 1.6*s;
+    ctx.beginPath();
+    ctx.moveTo(bandX, bandY);ctx.lineTo(bandX + bandW, bandY);
+    ctx.moveTo(bandX, bandY + bandH);ctx.lineTo(bandX + bandW, bandY + bandH);
+    ctx.stroke();
+    ctx.strokeStyle = rgbaHex(main, .12 + alarm*.2);
     ctx.lineWidth = 1*s;
-    roundRect(ctx, bandX, bandY, bandW, bandH, 18*s);
+    ctx.beginPath();
+    for(let tx = bandX + 18*s; tx < bandX + bandW - 60*s; tx += 22*s){
+      ctx.moveTo(tx, bandY);ctx.lineTo(tx, bandY + 5*s);
+      ctx.moveTo(tx, bandY + bandH);ctx.lineTo(tx, bandY + bandH - 5*s);
+    }
     ctx.stroke();
 
-    // Scanner guard: a cube with one eye, placed very far to the right.
+    // Guard turret mounted on the right wall.
     const guardSize = 42*s;
     const guardX = bandX + bandW - guardSize - 12*s;
     const guardY = p.y - guardSize/2;
-    const eyeCX = guardX + guardSize*.42;
-    const eyeCY = guardY + guardSize*.48;
+    const lensX = guardX + guardSize*.40;
+    const lensY = p.y;
+    const rx = bandX + 22*s;
 
-    // Receiver post on the left, like an inspection lane.
-    const rx = bandX + 24*s;
-    ctx.strokeStyle = safe ? trapIdle() : trapMain();
-    ctx.lineWidth = 3*s;
-    if(safe) ctx.setLineDash([7*s,7*s]);
-    roundRect(ctx, rx, bandY + 10*s, 14*s, bandH - 20*s, 7*s);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Scan beam from guard eye to the lane.
-    const scanStartX = eyeCX - 5*s;
-    const scanEndX = rx + 18*s;
-    const beamY = p.y;
-
+    // Sweep line travelling from the guard toward the receiver.
+    const sweepK = (time*(safe ? .42 : 1.55)) % 1;
+    const sweepX = lensX - 16*s - sweepK*(lensX - 16*s - (rx + 22*s));
     if(safe){
-      ctx.setLineDash([8*s,8*s]);
-      ctx.strokeStyle = trapIdle();
-      ctx.lineWidth = 3*s;
-      ctx.beginPath();
-      ctx.moveTo(scanStartX, beamY);
-      ctx.lineTo(scanEndX, beamY);
-      ctx.stroke();
+      ctx.setLineDash([4*s,5*s]);
+      ctx.strokeStyle = rgbaHex(idle, .9);
+      ctx.lineWidth = 1.6*s;
+      ctx.beginPath();ctx.moveTo(sweepX, bandY + 6*s);ctx.lineTo(sweepX, bandY + bandH - 6*s);ctx.stroke();
       ctx.setLineDash([]);
     } else {
-      ctx.lineCap = "round";
-      ctx.strokeStyle = rgbaHex(trapMain(), .18);
-      ctx.lineWidth = 11*s;
-      ctx.beginPath();
-      ctx.moveTo(scanStartX, beamY);
-      ctx.lineTo(scanEndX, beamY);
-      ctx.stroke();
-
-      ctx.strokeStyle = trapMain();
-      ctx.lineWidth = 6*s;
-      ctx.beginPath();
-      ctx.moveTo(scanStartX, beamY);
-      ctx.lineTo(scanEndX, beamY);
-      ctx.stroke();
-
-      ctx.strokeStyle = trapAccent();
-      ctx.lineWidth = 1.4*s;
-      ctx.beginPath();
-      ctx.moveTo(scanStartX, beamY);
-      ctx.lineTo(scanEndX, beamY);
-      ctx.stroke();
+      const wake = 30*s;
+      const g = ctx.createLinearGradient(sweepX, 0, sweepX + wake, 0);
+      g.addColorStop(0, rgbaHex(main, .30));
+      g.addColorStop(1, rgbaHex(main, 0));
+      ctx.fillStyle = g;
+      ctx.fillRect(sweepX, bandY + 2*s, wake, bandH - 4*s);
+      ctx.fillStyle = main;
+      ctx.fillRect(sweepX - 1.4*s, bandY + 2*s, 2.8*s, bandH - 4*s);
+      ctx.fillStyle = accent;
+      ctx.fillRect(sweepX - .5*s, bandY + 4*s, 1*s, bandH - 8*s);
     }
 
-    // Guard cube body.
-    ctx.fillStyle = rgbaHex(trapMain(), .14);
-    roundRect(ctx, guardX-3*s, guardY-3*s, guardSize+6*s, guardSize+6*s, 11*s);
-    ctx.fill();
-    ctx.fillStyle = trapMain();
-    roundRect(ctx, guardX, guardY, guardSize, guardSize, 10*s);
-    ctx.fill();
-
-    // Guard eye: follows the player and gets angry if the cube is too tall.
-    const eyeOpen = safe ? 1 : 1.25 + Math.sin(time*18)*.08;
-    ctx.fillStyle = trapAccent();
-    ctx.beginPath();
-    ctx.ellipse(eyeCX, eyeCY, 9*s, Math.max(1.4*s, 6*s*eyeOpen), 0, 0, Math.PI*2);
-    ctx.fill();
-
-    ctx.fillStyle = trapMain();
-    ctx.beginPath();
-    ctx.arc(eyeCX - 2.2*s, eyeCY, safe ? 1.6*s : 2.2*s, 0, Math.PI*2);
-    ctx.fill();
-
+    // Receiver post.
+    ctx.lineWidth = 2.6*s;
+    ctx.strokeStyle = safe ? idle : main;
+    if(safe) ctx.setLineDash([6*s,5*s]);
+    roundRect(ctx, rx, bandY + 9*s, 14*s, bandH - 18*s, 7*s);
+    ctx.stroke();
+    ctx.setLineDash([]);
     if(!safe){
-      ctx.strokeStyle = trapAccent();
-      ctx.lineWidth = 1.6*s;
-      ctx.beginPath();
-      ctx.moveTo(eyeCX - 8*s, eyeCY - 10*s);
-      ctx.lineTo(eyeCX - 1*s, eyeCY - 12*s);
-      ctx.moveTo(eyeCX + 8*s, eyeCY - 10*s);
-      ctx.lineTo(eyeCX + 1*s, eyeCY - 12*s);
-      ctx.stroke();
+      ctx.fillStyle = rgbaHex(main, .35 + .5*strobe);
+      roundRect(ctx, rx, bandY + 9*s, 14*s, bandH - 18*s, 7*s);
+      ctx.fill();
+    }
+    ctx.fillStyle = safe ? idle : accent;
+    ctx.beginPath();ctx.arc(rx + 7*s, p.y, 2.2*s, 0, Math.PI*2);ctx.fill();
+
+    // Scan beam from the lens to the receiver.
+    const beamStart = lensX - 10*s, beamEnd = rx + 16*s;
+    if(safe){
+      ctx.setLineDash([8*s,8*s]);
+      ctx.lineDashOffset = -time*24*s;
+      ctx.strokeStyle = idle;
+      ctx.lineWidth = 2.4*s;
+      ctx.beginPath();ctx.moveTo(beamStart, p.y);ctx.lineTo(beamEnd, p.y);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+    } else {
+      ctx.lineCap = "round";
+      ctx.strokeStyle = rgbaHex(main, .16 + .12*strobe);
+      ctx.lineWidth = 12*s;
+      ctx.beginPath();ctx.moveTo(beamStart, p.y);ctx.lineTo(beamEnd, p.y);ctx.stroke();
+      ctx.strokeStyle = main;
+      ctx.lineWidth = 5.5*s;
+      ctx.beginPath();ctx.moveTo(beamStart, p.y);ctx.lineTo(beamEnd, p.y);ctx.stroke();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.4*s;
+      ctx.beginPath();ctx.moveTo(beamStart, p.y);ctx.lineTo(beamEnd, p.y);ctx.stroke();
+      ctx.fillStyle = accent;
+      for(let k=0;k<3;k++){
+        const ph = (time*2.6 + k/3) % 1;
+        ctx.beginPath();ctx.arc(beamStart + (beamEnd - beamStart)*ph, p.y, 1.8*s, 0, Math.PI*2);ctx.fill();
+      }
+      ctx.lineCap = "butt";
     }
 
-    // Gauge: must stay at 30% charge or less.
-    const gaugeY = p.y + bandH/2 + 11*s;
-    ctx.strokeStyle = "rgba(0,0,0,.14)";
-    ctx.lineWidth = 2*s;
-    ctx.beginPath();
-    ctx.moveTo(p.x - 58*s, gaugeY);
-    ctx.lineTo(p.x + 58*s, gaugeY);
-    ctx.stroke();
+    // Turret body: wall bracket, housing, visor, status light.
+    const shake = alarm ? Math.sin(time*60)*.8*s*alarm : 0;
+    ctx.fillStyle = rgbaHex(main, .5);
+    ctx.fillRect(guardX + guardSize - 2*s, p.y - 7*s, bandX + bandW - (guardX + guardSize) + 2*s, 14*s);
+    ctx.fillStyle = rgbaHex(main, .14);
+    roundRect(ctx, guardX - 3*s + shake, guardY - 3*s, guardSize + 6*s, guardSize + 6*s, 12*s);
+    ctx.fill();
+    ctx.fillStyle = main;
+    roundRect(ctx, guardX + shake, guardY, guardSize, guardSize, 10*s);
+    ctx.fill();
+    ctx.fillStyle = rgbaHex(accent, .12);
+    roundRect(ctx, guardX + 5*s + shake, p.y - 11*s, guardSize - 10*s, 22*s, 8*s);
+    ctx.fill();
+    const ledOn = safe ? (time % 1.6) < .12 : strobe > .5;
+    ctx.fillStyle = ledOn ? accent : rgbaHex(accent, .25);
+    ctx.beginPath();ctx.arc(guardX + guardSize - 8*s + shake, guardY + 7*s, 2*s, 0, Math.PI*2);ctx.fill();
 
-    const fill = Math.max(0, Math.min(1, charge));
-    ctx.strokeStyle = safe ? trapIdle() : trapMain();
-    ctx.lineWidth = 4*s;
+    // Lens with an iris: relaxed when safe, snaps shut when too tall.
+    const lx = lensX + shake;
+    const lookY = Math.max(-2.2, Math.min(2.2, ((player.baseY - player.h*.5) - o.y) / 90)) * s;
+    ctx.fillStyle = accent;
+    ctx.beginPath();ctx.arc(lx, lensY, 9*s, 0, Math.PI*2);ctx.fill();
+    ctx.fillStyle = main;
+    ctx.beginPath();ctx.arc(lx, lensY + lookY*.5, 7*s, 0, Math.PI*2);ctx.fill();
+    const open = safe ? 4.2*s + Math.sin(time*2.2)*.5*s : (2.2 - strobe*.8)*s;
+    ctx.save();
+    ctx.translate(lx - 1.2*s, lensY + lookY);
+    ctx.rotate(time*(safe ? .6 : 3.2));
+    ctx.fillStyle = accent;
     ctx.beginPath();
-    ctx.moveTo(p.x - 58*s, gaugeY);
-    ctx.lineTo(p.x - 58*s + 116*s*fill, gaugeY);
-    ctx.stroke();
+    for(let i=0;i<6;i++){
+      const a = i*Math.PI/3;
+      const px = Math.cos(a)*open, py = Math.sin(a)*open;
+      if(i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = main;
+    ctx.beginPath();ctx.arc(lx - 1.2*s, lensY + lookY, Math.max(.8*s, open*.36), 0, Math.PI*2);ctx.fill();
 
-    const markX = p.x - 58*s + 116*s*.30;
-    ctx.strokeStyle = trapMain();
-    ctx.lineWidth = 1.5*s;
+    // Height meter under the lane: segments above the limit are the danger zone.
+    const segs = 12, meterW = 120*s, gap = 2*s;
+    const meterX = p.x - meterW/2, meterY = bandY + bandH + 9*s, segH = 5*s;
+    const segW = (meterW - gap*(segs-1)) / segs;
+    for(let i=0;i<segs;i++){
+      const mid = (i + .5) / segs;
+      const lit = mid <= charge + .001;
+      const danger = mid > limitPct;
+      const sx = meterX + i*(segW + gap);
+      ctx.lineWidth = 1.1*s;
+      ctx.strokeStyle = danger ? rgbaHex(main, .55) : rgbaHex(idle, .9);
+      roundRect(ctx, sx, meterY, segW, segH, 1.6*s);
+      ctx.stroke();
+      if(lit){
+        ctx.fillStyle = danger ? (strobe > .5 ? accent : main) : rgbaHex(main, .45);
+        roundRect(ctx, sx, meterY, segW, segH, 1.6*s);
+        ctx.fill();
+      }
+    }
+    const markX = meterX + meterW*limitPct;
+    ctx.fillStyle = main;
     ctx.beginPath();
-    ctx.moveTo(markX, gaugeY - 5*s);
-    ctx.lineTo(markX, gaugeY + 5*s);
-    ctx.stroke();
+    ctx.moveTo(markX - 4*s, meterY - 6*s);ctx.lineTo(markX + 4*s, meterY - 6*s);ctx.lineTo(markX, meterY - 1.5*s);
+    ctx.closePath();ctx.fill();
 
-    ctx.fillStyle = themeSkin().muted;
-    ctx.font = `${9*s}px Inter, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText(safe ? "30% OR LESS" : "TOO TALL", p.x, bandY - 10*s);
+    // Limit tag above the lane, from the real Inspector value.
+    const label = safe ? `MAX ${Math.round(limitPct*100)}%` : "TOO TALL";
+    ctx.font = `700 ${9*s}px Inter, sans-serif`;
+    const tw = ctx.measureText(label).width;
+    const pillW = tw + 24*s, pillH = 15*s;
+    const pillX = rx - 2*s, pillY = bandY - pillH - 6*s;
+    ctx.fillStyle = safe ? rgbaHex(main, .07) : (strobe > .5 ? main : rgbaHex(main, .82));
+    roundRect(ctx, pillX, pillY, pillW, pillH, pillH/2);
+    ctx.fill();
+    // Tiny stretched-cube glyph with an up arrow.
+    const gx = pillX + 9*s, gy = pillY + pillH/2;
+    ctx.fillStyle = safe ? main : accent;
+    roundRect(ctx, gx - 2.5*s, gy - 4*s, 5*s, 8*s, 1.4*s);
+    ctx.fill();
+    ctx.fillStyle = safe ? main : accent;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, gx + 6*s, gy + .5*s);
 
     ctx.restore();
   }
@@ -18317,6 +18455,54 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
     }
 
+    // PRISM_PULSE_POLISH_V1: aim telegraph. Each beam paints its exact path shortly before it fires.
+    // Visual only; prismPulseTimeline still decides when a beam can hit.
+    const AIM_LEAD = .62;
+    let charging = 0;
+    if(!editorMode){
+      for(const b of tl.beams){
+        if(b.active || b.mode === "disabled" || b.visible > 0) continue;
+        let lead = b.start - tl.t;
+        if(lead < 0) lead += tl.cycle;
+        if(lead > AIM_LEAD) continue;
+        const k = 1 - lead/AIM_LEAD;
+        charging = Math.max(charging, k);
+        const flick = .6 + .4*Math.sin(time*42 + b.index*1.7);
+        for(const seg of b.path){
+          drawWorldLine(seg.a, seg.b, Math.max(1.4, c.beamThickness*.2), (.08 + .34*k)*flick, hot.orange, true);
+          if(seg.bounce) drawDot(seg.b, 2 + 3*k, hot.orange, .18 + .3*k);
+        }
+        drawDot({x:c.x + Math.cos(b.angle)*(22 + 6*k), y:c.y + Math.sin(b.angle)*(22 + 6*k)}, 1.6 + 3.4*k, hot.pale, .3 + .6*k);
+      }
+    }
+
+    // Wall impact: hot slit on the wall plus sparks spraying back into the room.
+    const drawWallImpact = (pt, alpha, seed) => {
+      if(alpha <= .05) return;
+      const hp = worldToScreen(pt.x, pt.y);
+      const side = pt.x < WORLD_W/2 ? 1 : -1;
+      ctx.save();
+      ctx.globalAlpha = alpha*.75;
+      ctx.fillStyle = hot.orange;
+      ctx.fillRect(hp.x - (side > 0 ? 0 : 3*hp.s), hp.y - 9*hp.s, 3*hp.s, 18*hp.s);
+      ctx.fillStyle = hot.white;
+      ctx.fillRect(hp.x - (side > 0 ? 0 : 1.4*hp.s), hp.y - 5*hp.s, 1.4*hp.s, 10*hp.s);
+      if(heavy){
+        ctx.lineCap = "round";
+        for(let k=0;k<5;k++){
+          const ph = (time*4.2 + k*.2 + seed*.37) % 1;
+          const ang = Math.sin(k*91.7 + seed*3.1)*1.05;
+          const vx = side*Math.cos(ang), vy = Math.sin(ang) - .25;
+          const sx = hp.x + vx*ph*24*hp.s, sy = hp.y + vy*ph*24*hp.s + ph*ph*8*hp.s;
+          ctx.globalAlpha = alpha*(1 - ph);
+          ctx.strokeStyle = k%2 ? hot.pale : hot.yellow;
+          ctx.lineWidth = 1.5*hp.s*(1 - ph*.5);
+          ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx - vx*5*hp.s, sy - vy*5*hp.s);ctx.stroke();
+        }
+      }
+      ctx.restore();
+    };
+
     // Active sequential thermal traveling beams.
     for(const b of tl.beams){
       const visibleSegs = prismPulseSegmentsToLength(b.path, b.visible);
@@ -18325,6 +18511,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(const seg of visibleSegs){
         drawThermalBeam(seg.a, seg.b, c.beamThickness, alpha, b.index + seg.len*.01);
         if(seg.bounce && b.mode !== "shutdown") drawDot(seg.b, Math.max(4.5, c.beamThickness*.46), hot.yellow, alpha*.72);
+        if(!editorMode && (seg.bounce || seg.b.x <= .5 || seg.b.x >= WORLD_W - .5)) drawWallImpact(seg.b, alpha, b.index);
       }
       const headSeg = visibleSegs[visibleSegs.length-1];
       if(headSeg){
@@ -18338,7 +18525,24 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.translate(p.x, p.y);
     const pulse = .5 + .5*Math.sin(time*9 + c.phase);
     const live = tl.beams.some(b => b.active);
-    const r = (17 + (live ? 3*pulse : 0))*s;
+    // Recoil kick for a moment after each beam fires.
+    let kick = 0;
+    for(const b of tl.beams){const since = tl.t - b.start; if(since >= 0 && since < .16) kick = Math.max(kick, 1 - since/.16);}
+    const r = (17 + (live ? 3*pulse : 0) + kick*4 - charging*1.5)*s;
+    // Charging facets close in around the core before firing.
+    if(!editorMode && (charging > 0 || kick > 0)){
+      const k = Math.max(charging, kick);
+      ctx.save();
+      ctx.rotate(-time*2.4);
+      ctx.globalAlpha = .25 + .6*k;
+      ctx.fillStyle = kick > 0 ? hot.yellow : hot.orange;
+      const fr = r*(2.3 - charging*.6 + kick*.5);
+      for(let i=0;i<3;i++){
+        ctx.rotate(Math.PI*2/3);
+        ctx.beginPath();ctx.moveTo(fr, 0);ctx.lineTo(fr + 6*s, -4*s);ctx.lineTo(fr + 6*s, 4*s);ctx.closePath();ctx.fill();
+      }
+      ctx.restore();
+    }
     ctx.rotate((time*.45 + c.phase*.05) % (Math.PI*2));
     ctx.globalAlpha = live ? .20 + .12*pulse : .10;
     ctx.fillStyle = hot.orange;
@@ -18582,6 +18786,17 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const y = Number.isFinite(+snap.rectY) ? +snap.rectY : (Number.isFinite(+snap.renderY) ? +snap.renderY : (Number.isFinite(+snap.topY) ? +snap.topY : baseY - h));
     return {x,y,w,h};
   }
+  // Same eye as the generic death pass, drawable inside a moving/clipped death piece.
+  function drawDeathEyeAt(ex, ey, s, close, eyeTone){
+    const k = clamp01(close);
+    const rx = Math.max(1.25*s, 6.2*s*(1 - k*.80));
+    const ry = Math.max(5.4*s, 9.4*s*(1 - k*.16));
+    ctx.fillStyle = eyeTone.color;
+    ctx.beginPath();ctx.ellipse(ex, ey, rx, ry, 0, 0, Math.PI*2);ctx.fill();
+    strokeCustomEyeOutline(ctx, ex, ey, rx, ry, s, eyeTone);
+    ctx.fillStyle = eyeTone.pupil;
+    ctx.beginPath();ctx.arc(ex, ey, Math.max(.7*s, 1.8*s*(1 - k)), 0, Math.PI*2);ctx.fill();
+  }
   function drawTrapDeathPlayer(){
     if(portalEffect.active && portalEffect.hidePlayer) return;
     const p = deathRenderRect();
@@ -18694,31 +18909,199 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx + (Math.random()-.5)*22*s, sy + (Math.random()-.5)*18*s);ctx.stroke();
       }
     } else if(deathType === "scanner"){
-      const burn = easeOutCubic(t);
-      ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-      roundRect(ctx, x, y, w, h, Math.max(7*s, cube.radius*s));
-      ctx.fill();
-      ctx.fillStyle = `rgba(0,0,0,${.18 + burn*.42})`;
-      roundRect(ctx, x, y, w, h, Math.max(7*s, cube.radius*s));
-      ctx.fill();
-      ctx.strokeStyle = trapMain();
-      ctx.lineWidth = 2*s;
-      for(let i=0;i<5;i++){
-        const yy = y + ((time*80 + i*13) % Math.max(1,h));
-        ctx.beginPath();ctx.moveTo(x-8*s, yy);ctx.lineTo(x+w+8*s, yy);ctx.stroke();
+      // SCANNER_DEATH_V2: the scan line reads the cube top to bottom and deletes it slice by slice.
+      const fade = ctx.globalAlpha;
+      const main = trapMain(), accent = trapAccent();
+      const rad = Math.max(7*s, cube.radius*s);
+      const scanY = y + h*easeOutCubic(clamp01(t/.5));
+      const eyeCY = Math.min(y + h - 12*s, y + Math.min(h*.48, normalH*.50*s) - 1.1*s);
+      // Not scanned yet: the solid cube below the line.
+      if(scanY < y + h){
+        ctx.save();
+        ctx.beginPath();ctx.rect(x - 30*s, scanY, w + 60*s, y + h - scanY + 30*s);ctx.clip();
+        ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
+        roundRect(ctx, x, y, w, h, rad);ctx.fill();
+        strokeCustomCubeOutline(ctx, x, y, w, h, rad, s, cube);
+        if(eyeCY > scanY) drawDeathEyeAt(cx, eyeCY, s, t*.5, eyeTone);
+        ctx.restore();
       }
-      ctx.save();
-      ctx.translate(cx, y - 12*s);
-      ctx.rotate(-.12 + Math.sin(time*18)*.02);
-      ctx.strokeStyle = trapMain();
-      ctx.lineWidth = 2*s;
-      roundRect(ctx, -24*s, -9*s, 48*s, 18*s, 3*s);ctx.stroke();
-      ctx.fillStyle = trapMain();
-      ctx.font = `${9*s}px Inter, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("FAIL", 0, 1*s);
+      // Scanned: horizontal slices slide out sideways and vanish.
+      const slices = Math.max(6, Math.min(16, Math.round(h/(7*s))));
+      const sliceH = h/slices;
+      ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
+      for(let i=0;i<slices;i++){
+        const sy = y + i*sliceH;
+        if(sy + sliceH > scanY) break;
+        const age = clamp01((scanY - (sy + sliceH)) / (h*.5) + Math.max(0, t - .5)*1.6);
+        const side = i % 2 ? 1 : -1;
+        const off = easeOutCubic(age)*(16 + (i % 3)*12)*s*side;
+        ctx.globalAlpha = fade*(1 - age);
+        ctx.fillRect(x + off + w*age*.18, sy + sliceH*.12, w*(1 - age*.36), sliceH*(1 - age*.55));
+      }
+      // Ghost outline where the cube was measured.
+      ctx.globalAlpha = fade*.5*(1 - t);
+      ctx.strokeStyle = main;
+      ctx.lineWidth = 1.4*s;
+      ctx.setLineDash([4*s,3*s]);
+      roundRect(ctx, x, y, w, h, rad);ctx.stroke();
+      ctx.setLineDash([]);
+      // The scan line.
+      if(t < .62){
+        ctx.globalAlpha = fade*(1 - Math.max(0, t - .45)/.17);
+        ctx.fillStyle = rgbaHex(main, .18);
+        ctx.fillRect(x - 16*s, scanY - 6*s, w + 32*s, 12*s);
+        ctx.fillStyle = main;
+        ctx.fillRect(x - 16*s, scanY - 1.5*s, w + 32*s, 3*s);
+        ctx.fillStyle = accent;
+        ctx.fillRect(x - 16*s, scanY - .5*s, w + 32*s, 1*s);
+      }
+      // Height bracket: the measurement that failed.
+      ctx.globalAlpha = fade*clamp01(1 - t*1.2);
+      ctx.strokeStyle = main;
+      ctx.lineWidth = 1.5*s;
+      const bx = x + w + 9*s;
+      ctx.beginPath();
+      ctx.moveTo(bx - 3*s, y);ctx.lineTo(bx + 3*s, y);
+      ctx.moveTo(bx, y);ctx.lineTo(bx, y + h);
+      ctx.moveTo(bx - 3*s, y + h);ctx.lineTo(bx + 3*s, y + h);
+      ctx.stroke();
       ctx.restore();
+      return;
+    } else if(deathType === "saw" && deathCulprit?.type === "orbitSaw" && Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y)){
+      // ORBIT_SAW_DEATH_V1: the blade passes straight through and the cube splits in two along its path.
+      const fade = ctx.globalAlpha;
+      const main = trapMain(), accent = trapAccent();
+      const rad = Math.max(7*s, cube.radius*s);
+      const imp = worldToScreen(deathImpact.x, deathImpact.y);
+      let nx = cx - imp.x, ny = cy - imp.y;
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const px = -ny, py = nx;
+      const L = w + h + 80*s;
+      const split = easeOutCubic(clamp01(t/.3))*10*s + t*16*s;
+      const drop = t*t*70*s;
+      const eyeCY = Math.min(y + h - 12*s, y + Math.min(h*.48, normalH*.50*s) - 1.1*s);
+      for(const side of [-1, 1]){
+        ctx.save();
+        ctx.translate(cx + px*side*split, cy + py*side*split + drop*(side > 0 ? 1 : .8));
+        ctx.rotate(side*t*.7);
+        ctx.translate(-cx, -cy);
+        ctx.beginPath();
+        ctx.moveTo(cx + nx*L, cy + ny*L);
+        ctx.lineTo(cx - nx*L, cy - ny*L);
+        ctx.lineTo(cx - nx*L + px*side*L, cy - ny*L + py*side*L);
+        ctx.lineTo(cx + nx*L + px*side*L, cy + ny*L + py*side*L);
+        ctx.closePath();
+        ctx.clip();
+        ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
+        roundRect(ctx, x, y, w, h, rad);ctx.fill();
+        strokeCustomCubeOutline(ctx, x, y, w, h, rad, s, cube);
+        drawDeathEyeAt(cx, eyeCY, s, clamp01(t/.5), eyeTone);
+        // Fresh cut face, kept inside the body.
+        roundRect(ctx, x, y, w, h, rad);ctx.clip();
+        ctx.strokeStyle = rgbaHex(accent, .7);
+        ctx.lineWidth = 2.4*s;
+        ctx.beginPath();ctx.moveTo(cx + nx*L, cy + ny*L);ctx.lineTo(cx - nx*L, cy - ny*L);ctx.stroke();
+        ctx.restore();
+      }
+      // Cut flash along the blade path.
+      if(t < .35){
+        const k = 1 - t/.35;
+        const ext = Math.max(w, h)*.75;
+        ctx.globalAlpha = fade*k;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = main;
+        ctx.lineWidth = 5*s*k;
+        ctx.beginPath();ctx.moveTo(cx - nx*ext, cy - ny*ext);ctx.lineTo(cx + nx*ext, cy + ny*ext);ctx.stroke();
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 1.6*s*k;
+        ctx.beginPath();ctx.moveTo(cx - nx*ext, cy - ny*ext);ctx.lineTo(cx + nx*ext, cy + ny*ext);ctx.stroke();
+      }
+      // Blade swipe arc.
+      ctx.globalAlpha = fade*clamp01(1 - t*2.2);
+      ctx.strokeStyle = main;
+      ctx.lineWidth = 2*s;
+      const ang = Math.atan2(ny, nx);
+      ctx.beginPath();ctx.arc(cx, cy, Math.max(w, h)*.6 + t*14*s, ang - .9, ang + .9);ctx.stroke();
+      ctx.restore();
+      return;
+    } else if(deathType === "prismPulse"){
+      // PRISM_PULSE_DEATH_V1: superheated at the hit line, then shatters into three hot shards.
+      const fade = ctx.globalAlpha;
+      const HOT = {white:"#fffdf0", yellow:"#ffd34a", orange:"#ff7a00"};
+      const rad = Math.max(7*s, cube.radius*s);
+      const iy0 = Number.isFinite(deathImpact?.worldY) ? worldToScreen(player.x, deathImpact.worldY).y : y + h*.5;
+      const iy = Math.max(y + 8*s, Math.min(y + h - 8*s, iy0));
+      const heatT = clamp01(t/.22);
+      const burst = clamp01((t - .2)/.8);
+      const cool = clamp01((t - .3)/.6);
+      const eyeCY = Math.min(y + h - 12*s, y + Math.min(h*.48, normalH*.50*s) - 1.1*s);
+      if(burst <= 0){
+        ctx.save();
+        ctx.translate(cx, iy);ctx.scale(1 + heatT*.06, 1 + heatT*.03);ctx.translate(-cx, -iy);
+        ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
+        roundRect(ctx, x, y, w, h, rad);ctx.fill();
+        strokeCustomCubeOutline(ctx, x, y, w, h, rad, s, cube);
+        const k = (iy - y)/h;
+        const g = ctx.createLinearGradient(0, y, 0, y + h);
+        g.addColorStop(0, "rgba(255,122,0,0)");
+        g.addColorStop(clamp01(k - .45*heatT), "rgba(255,122,0,0)");
+        g.addColorStop(k, `rgba(255,211,74,${.85*heatT})`);
+        g.addColorStop(clamp01(k + .45*heatT), "rgba(255,122,0,0)");
+        g.addColorStop(1, "rgba(255,122,0,0)");
+        ctx.fillStyle = g;
+        roundRect(ctx, x, y, w, h, rad);ctx.fill();
+        ctx.globalAlpha = fade*heatT;
+        ctx.fillStyle = HOT.white;
+        ctx.fillRect(x - 4*s, iy - 1.2*s, w + 8*s, 2.4*s);
+        ctx.globalAlpha = fade;
+        drawDeathEyeAt(cx, eyeCY, s, heatT*.3, eyeTone);
+        ctx.restore();
+      } else {
+        const notch = iy + Math.min(h*.06, 10*s);
+        const shards = [
+          {pts:[[x,y],[x+w,y],[x+w,iy],[cx,notch],[x,iy]], dx:0, dy:-1, rot:-.6, eye:eyeCY < iy},
+          {pts:[[x,iy],[cx,notch],[cx,y+h],[x,y+h]], dx:-1, dy:.45, rot:-1.1, eye:eyeCY >= iy},
+          {pts:[[cx,notch],[x+w,iy],[x+w,y+h],[cx,y+h]], dx:1, dy:.45, rot:1.1, eye:false}
+        ];
+        const fly = easeOutCubic(burst);
+        const trace = pts => {ctx.beginPath(); pts.forEach((q,j) => j ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();};
+        for(const sh of shards){
+          let mx = 0, my = 0;
+          for(const q of sh.pts){mx += q[0]; my += q[1];}
+          mx /= sh.pts.length; my /= sh.pts.length;
+          ctx.save();
+          ctx.globalAlpha = fade*(1 - burst*.85);
+          ctx.translate(mx + sh.dx*fly*34*s, my + sh.dy*fly*30*s + burst*burst*40*s);
+          ctx.rotate(sh.rot*fly);
+          ctx.translate(-mx, -my);
+          ctx.save();
+          trace(sh.pts);ctx.clip();
+          ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
+          roundRect(ctx, x, y, w, h, rad);ctx.fill();
+          ctx.fillStyle = `rgba(255,122,0,${.55*(1 - cool)})`;
+          ctx.fillRect(x - 2*s, y - 2*s, w + 4*s, h + 4*s);
+          if(sh.eye) drawDeathEyeAt(cx, eyeCY, s, .4 + burst*.6, eyeTone);
+          ctx.restore();
+          trace(sh.pts);
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = HOT.yellow;
+          ctx.globalAlpha = fade*(1 - burst*.85)*(1 - cool*.75);
+          ctx.lineWidth = 2*s;
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      // Hot ring at the hit line.
+      if(t < .5){
+        const k = t/.5;
+        ctx.globalAlpha = fade*(1 - k);
+        ctx.strokeStyle = HOT.orange;
+        ctx.lineWidth = 3*s*(1 - k);
+        ctx.beginPath();ctx.ellipse(cx, iy, w*.5 + k*40*s, (6 + k*14)*s, 0, 0, Math.PI*2);ctx.stroke();
+      }
+      ctx.restore();
+      return;
     } else if(deathType === "saw"){
       const pieces = 9;
       ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
