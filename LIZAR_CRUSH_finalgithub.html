@@ -17111,78 +17111,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
 
 
-  // LASER_BEAM_V3 emitter: back to the original dark generator (same theme as the other traps) with
-  // its heat inside the body and a fountain of fire sparks from the mouth. No halo, no circle, no
-  // shadow outside the body. Kicks back when it fires and when it shuts off.
-  function drawBeamEmitter(x, y, dir, st){
-    const p = worldToScreen(x, y);
-    const s = p.s;
-    const H = TRAP_SPARK_PALETTES.hot;
-    const main = trapMain(), accent = trapAccent();
-    const w = 28*s, h = 42*s;
-    const kick = (st.fireKick*-6 + st.offKick*3)*s*dir;
-    const heat = Math.max(st.active ? 1 : 0, st.charge*.8, st.heat*.75);
-    const tick = Math.floor(time*30);
-    ctx.save();
-    ctx.translate(p.x + kick, p.y);
-    // Generator body.
-    ctx.fillStyle = main;
-    roundRect(ctx, -w/2, -h/2, w, h, 6*s);ctx.fill();
-    // Heat glowing inside the body, strongest at the mouth (clipped to the body).
-    if(heat > .02){
-      ctx.save();
-      roundRect(ctx, -w/2, -h/2, w, h, 6*s);ctx.clip();
-      const mx = dir*w*.5;
-      const g = ctx.createRadialGradient(mx, 0, 0, mx, 0, w*1.05);
-      g.addColorStop(0, `rgba(255,214,90,${.95*heat})`);
-      g.addColorStop(.35, `rgba(255,110,20,${.75*heat})`);
-      g.addColorStop(.75, `rgba(150,30,5,${.4*heat})`);
-      g.addColorStop(1, "rgba(80,10,0,0)");
-      ctx.fillStyle = g;
-      ctx.fillRect(-w/2, -h/2, w, h);
-      ctx.restore();
-    }
-    ctx.strokeStyle = rgbaHex(accent, st.active ? .42 : .26);
-    ctx.lineWidth = 1.45*s;
-    roundRect(ctx, -w/2 + 5*s, -h/2 + 5*s, w - 10*s, h - 10*s, 4*s);ctx.stroke();
-    // Mouth slot on the beam side: glows from dull ember to white-hot.
-    const sx = dir > 0 ? w/2 - 4*s : -w/2;
-    ctx.fillStyle = heat > .05 ? (heat > .7 ? H[0] : H[1]) : "rgba(0,0,0,.55)";
-    ctx.globalAlpha = heat > .05 ? .5 + .5*heat : 1;
-    ctx.fillRect(sx, -6*s, 4*s, 12*s);
-    ctx.globalAlpha = 1;
-    // Fire fountain spraying from the mouth: always sputtering a little, roaring while live.
-    const roar = st.active ? 1 : Math.max(st.charge*.7, st.heat*.35);
-    if(roar > .03){
-      const n = Math.round(6 + 12*roar);
-      ctx.lineCap = "round";
-      for(let i=0;i<n;i++){
-        const ph = (time*(4 + 5*roar) + i*.37 + trapHash(i*3.1)) % 1;
-        const spread = (trapHash(i*7.7 + Math.floor(time*2)) - .5)*1.7;
-        const len = (6 + ph*22 + roar*10)*s;
-        const ex = dir*(w/2 + Math.cos(spread)*len), ey = Math.sin(spread)*len + ph*ph*8*s;
-        const bx = dir*(w/2 + Math.cos(spread)*len*.35), by = Math.sin(spread)*len*.35;
-        // Solid bright streaks that glow on their own (the glow comes from the spark, not a halo).
-        const cols = ["#fff1a8", "#ffb12a", "#ff5a12", "#d91f00"];
-        ctx.globalAlpha = Math.min(1, (1.15 - ph)*(.6 + .4*roar));
-        ctx.strokeStyle = cols[i % 4];
-        ctx.shadowColor = "#ff5a12";
-        ctx.shadowBlur = (3 + 5*roar)*s;
-        ctx.lineWidth = Math.max(1.1, (1.9 - ph*1)*s);
-        ctx.beginPath();ctx.moveTo(bx, by);ctx.lineTo(ex, ey);ctx.stroke();
-        if(i % 3 === 0){ctx.fillStyle = cols[(i + 1) % 4]; ctx.beginPath(); ctx.arc(ex, ey, (1.2 + (1 - ph)*1.3)*s, 0, Math.PI*2); ctx.fill();}
-      }
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
-    }
-    // Arrow mark pointing at the beam.
-    ctx.fillStyle = accent;
-    ctx.beginPath();
-    ctx.moveTo(dir*w*.06, -4*s);ctx.lineTo(dir*w*.24, 0);ctx.lineTo(dir*w*.06, 4*s);
-    ctx.closePath();ctx.fill();
-    ctx.restore();
-  }
-
   function drawSlider(o){
     // ELECTRIC_LINK_V2: two moving Tesla nodes with a live, crackling, forking arc between them.
     // The arc lags a touch behind the motion, nodes jolt when the link reverses, sparks drop off the
@@ -17280,11 +17208,297 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     ctx.restore();
   }
+  // CREATURE_EYE_V1: the eye family every creature trap shares. One almond eye; the upper lid is the
+  // creature's own skin, the iris and pupil track a target, it blinks on its own clock. Moods are
+  // made from the same few controls so every creature reads as one family but can differ:
+  //   open   0..1  upper lid (0 = shut)        squint 0..1  lower lid rising (pain, effort)
+  //   slant -1..1  + angry (inner corner down), - afraid (outer corner down)
+  //   pupil  .2..1 pupil size (focus/fear shrink it)   red 0..1 bloodshot / heated
+  //   lookX/lookY  -1..1 gaze                          glow 0..1 iris lit from inside
+  function creatureBlink(seed){
+    const period = 3.1 + trapHash(seed)*2.6;
+    const ph = (time + trapHash(seed + 1.7)*period) % period;
+    return ph < .14 ? Math.sin(ph/.14*Math.PI) : 0;
+  }
+  function drawCreatureEye(g, x, y, r, e){
+    const open = clamp01(e.open ?? 1), squint = clamp01(e.squint || 0);
+    const slant = Math.max(-1, Math.min(1, e.slant || 0));
+    const red = clamp01(e.red || 0), glow = clamp01(e.glow || 0);
+    const pupil = Math.max(.18, Math.min(1, e.pupil ?? .6));
+    const lid = e.lid || "#111111";
+    const k = 1.45; // almond control height: peak = r*k/2
+    const almond = () => {g.beginPath(); g.moveTo(-r, 0); g.quadraticCurveTo(0, -r*k, r, 0); g.quadraticCurveTo(0, r*k, -r, 0); g.closePath();};
+    g.save();
+    g.translate(x, y);
+    // Socket: a dark rim the eye sits in.
+    g.save();
+    g.scale(1.22, 1.3);
+    almond();
+    g.fillStyle = "rgba(0,0,0,.55)";
+    g.fill();
+    g.restore();
+    almond();
+    g.save();
+    g.clip();
+    // Sclera, heating toward red.
+    const rr = Math.round(243 + (255 - 243)*red), gg = Math.round(238 - 170*red), bb = Math.round(228 - 180*red);
+    g.fillStyle = `rgb(${rr},${gg},${bb})`;
+    g.fillRect(-r, -r, r*2, r*2);
+    if(red > .25){
+      g.strokeStyle = `rgba(190,10,10,${(red - .25)*.9})`;
+      g.lineWidth = Math.max(.5, r*.07);
+      g.beginPath();
+      for(let i=0;i<5;i++){
+        const a = trapHash(i*3.7 + (e.seed || 0))*Math.PI*2;
+        g.moveTo(Math.cos(a)*r, Math.sin(a)*r*.7);
+        g.lineTo(Math.cos(a + .3)*r*.45, Math.sin(a + .3)*r*.3);
+      }
+      g.stroke();
+    }
+    // Iris + pupil.
+    const ix = (e.lookX || 0)*r*.4, iy = (e.lookY || 0)*r*.22;
+    const ir = r*.56;
+    const iris = e.iris || "#2a2a2a";
+    g.fillStyle = iris;
+    g.beginPath(); g.arc(ix, iy, ir, 0, Math.PI*2); g.fill();
+    if(glow > .02){
+      const gr = g.createRadialGradient(ix, iy, 0, ix, iy, ir);
+      if(e.glowRed){gr.addColorStop(0, `rgba(255,220,210,${glow})`); gr.addColorStop(.5, `rgba(255,30,20,${glow*.9})`); gr.addColorStop(1, `rgba(110,0,0,${glow*.4})`);}
+      else {gr.addColorStop(0, `rgba(255,236,170,${glow})`); gr.addColorStop(.5, `rgba(255,120,20,${glow*.9})`); gr.addColorStop(1, `rgba(120,20,0,${glow*.4})`);}
+      g.fillStyle = gr;
+      g.beginPath(); g.arc(ix, iy, ir, 0, Math.PI*2); g.fill();
+    }
+    g.strokeStyle = "rgba(0,0,0,.45)";
+    g.lineWidth = Math.max(.6, r*.08);
+    g.beginPath(); g.arc(ix, iy, ir*.96, 0, Math.PI*2); g.stroke();
+    g.fillStyle = "#050505";
+    g.beginPath(); g.arc(ix, iy, ir*pupil*.78, 0, Math.PI*2); g.fill();
+    g.fillStyle = "rgba(255,255,255,.92)";
+    g.beginPath(); g.arc(ix - ir*.32, iy - ir*.34, Math.max(.6, ir*.2), 0, Math.PI*2); g.fill();
+    // Upper lid (skin), slanted for anger/fear; lower lid rises when squinting.
+    const sIn = Math.max(0, slant)*r*.75, sOut = Math.max(0, -slant)*r*.75;
+    const cU = -r*k + (1 - open)*r*k*2 + (sIn + sOut)*.5;
+    g.fillStyle = lid;
+    g.beginPath();
+    g.moveTo(-r - 1, -r*2); g.lineTo(r + 1, -r*2); g.lineTo(r + 1, sIn); g.quadraticCurveTo(0, cU, -r - 1, sOut); g.closePath();
+    g.fill();
+    const cL = r*k - squint*r*k*1.15;
+    g.beginPath();
+    g.moveTo(-r - 1, r*2); g.lineTo(r + 1, r*2); g.lineTo(r + 1, 0); g.quadraticCurveTo(0, cL, -r - 1, 0); g.closePath();
+    g.fill();
+    // Lid edges.
+    g.strokeStyle = "rgba(0,0,0,.7)";
+    g.lineWidth = Math.max(.8, r*.16);
+    g.beginPath(); g.moveTo(r + 1, sIn); g.quadraticCurveTo(0, cU, -r - 1, sOut); g.stroke();
+    g.restore();
+    g.strokeStyle = "rgba(0,0,0,.8)";
+    g.lineWidth = Math.max(.7, r*.12);
+    almond(); g.stroke();
+    // Stress creases when it hurts.
+    if((e.pain || 0) > .05){
+      g.strokeStyle = `rgba(0,0,0,${.6*e.pain})`;
+      g.lineWidth = Math.max(.7, r*.12);
+      g.lineCap = "round";
+      g.beginPath();
+      g.moveTo(-r*.9, -r*.95); g.lineTo(-r*.35, -r*.7);
+      g.moveTo(-r*.6, -r*1.25); g.lineTo(-r*.05, -r*.9);
+      g.stroke();
+    }
+    g.restore();
+  }
+
+  // LASER_BEAM_CREATURE_V1: the Laser Beam is two creatures facing each other across the gap, eyes
+  // and toothed jaws on both. The shooter's mouth heats up, its eye narrows and locks on, and it
+  // spits the beam across; the receiver has to swallow it. Its eye goes wide while the shooter
+  // charges, then squeezes in pain as it gulps the beam, its body glowing red and trembling; when
+  // the beam stops it lets off smoke and slowly cools. The eyes only ever show the real cycle.
+  // Visual only: isBeamActive + beamHitThickness still decide the hit over the same span.
+  function beamShooterDir(o){
+    if(o.shootFrom === "left") return 1;
+    if(o.shootFrom === "right") return -1;
+    return trapHash(Math.round(o.y)*.137 + 2.9) < .5 ? 1 : -1;
+  }
+  function drawBeamCreature(x, y, dir, shooter, st){
+    const p = worldToScreen(x, y);
+    const s = p.s*1.18;
+    const main = trapMain();
+    const seed = st.seed + (shooter ? 0 : 50);
+    const live = st.active ? 1 : 0;
+    let open, eye, shakeAmt, red = 0, kick = 0, gulp = 0, mouthHeat;
+    if(shooter){
+      open = st.active ? .9 + .08*Math.sin(time*38) : Math.max(st.charge*.38, st.heat*.1);
+      kick = (-st.fireKick*5 + st.offKick*2)*s;
+      shakeAmt = st.charge*1.4 + live*.5;
+      mouthHeat = Math.max(live, st.charge, st.heat*.6);
+      const focus = Math.max(st.charge, live);
+      eye = {open:(.66 + .16*focus)*(1 - creatureBlink(seed)*(1 - focus)), slant:.25 + .6*focus, pupil:.64 - .36*focus, lookX:.95, glow:focus*.9};
+    } else {
+      red = st.active ? Math.min(1, .45 + st.onFor*1.6) : st.heat*.85;
+      open = st.active ? .78 + .1*Math.sin(time*24) : st.charge*.25;
+      gulp = st.active ? Math.max(0, Math.sin(time*13)) : 0;
+      shakeAmt = st.charge*1.1 + live*1.7 + st.heat*.35;
+      mouthHeat = st.active ? 1 : st.heat*.5;
+      if(st.active) eye = {open:.74 + .08*Math.sin(time*19), squint:.42, slant:-.3, pupil:.3, lookX:.25, red, pain:1, glow:.95, glowRed:true};
+      else if(st.charge > 0) eye = {open:1, slant:-.6*st.charge, pupil:.6 - .38*st.charge, lookX:.95, lookY:-.1*st.charge};
+      else eye = {open:(.85 - .2*st.heat)*(1 - creatureBlink(seed)), slant:-.15 - .25*st.heat, squint:.25*st.heat, pupil:.55, lookX:.75, red:red*.7, pain:st.heat*.6, glow:st.heat*.5, glowRed:true};
+    }
+    // Skin colour: the shop trap colour, scorched toward red on the receiver.
+    const mc = hexToRgbObj(safeHex(main, "#111111"));
+    const rk = red*.78;
+    const skin = `rgb(${Math.round(mc.r + (176 - mc.r)*rk)},${Math.round(mc.g + (22 - mc.g)*rk)},${Math.round(mc.b + (12 - mc.b)*rk)})`;
+    eye.lid = skin;
+    eye.iris = shooter ? "#3a2a1a" : "#1f2a33";
+    eye.seed = seed;
+    const shx = (trapHash(Math.floor(time*36) + seed) - .5)*shakeAmt*2*s;
+    const shy = (trapHash(Math.floor(time*36)*1.3 + seed + 5) - .5)*shakeAmt*2*s;
+    const upA = -open*.34, loA = open*.62;
+    const hingeX = -9*s;
+    const upperPath = () => {
+      ctx.beginPath();
+      ctx.moveTo(-22*s, 2*s);
+      ctx.bezierCurveTo(-24*s, -12*s, -16*s, -21*s, -6*s, -20*s);
+      ctx.bezierCurveTo(-1*s, -23.5*s, 6*s, -21.5*s, 8*s, -15*s);     // brow ridge over the eye
+      ctx.bezierCurveTo(11*s, -11*s, 18*s, -9.5*s, 22*s, -4*s);       // long snout
+      ctx.lineTo(22*s, -1*s);
+      ctx.lineTo(-8*s, -1*s);
+      ctx.closePath();
+    };
+    const lowerPath = () => {
+      ctx.beginPath();
+      ctx.moveTo(-8*s, 1*s);
+      ctx.lineTo(19*s, 1*s);
+      ctx.bezierCurveTo(19*s, 6*s, 12*s, 11*s, 2*s, 12*s);
+      ctx.bezierCurveTo(-10*s, 13*s, -20*s, 10*s, -22*s, 2*s);
+      ctx.closePath();
+    };
+    const teeth = (up) => {
+      ctx.fillStyle = "#f1eadb";
+      ctx.strokeStyle = "rgba(0,0,0,.5)";
+      ctx.lineWidth = Math.max(.5, .55*s);
+      const xs = up ? [-5, 0, 5, 10, 15.5] : [-2, 3, 8, 13];
+      xs.forEach((x0, i) => {
+        const fang = up ? i === xs.length - 1 : i === xs.length - 1;
+        const wv = (fang ? 4.6 : 3.8)*s, len = (fang ? 6.5 : 4)*s, X = x0*s;
+        ctx.beginPath();
+        if(up){ctx.moveTo(X, -1.2*s); ctx.lineTo(X + wv, -1.2*s); ctx.lineTo(X + wv*.55, -1.2*s + len);}
+        else {ctx.moveTo(X, 1.2*s); ctx.lineTo(X + wv, 1.2*s); ctx.lineTo(X + wv*.55, 1.2*s - len);}
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+      });
+    };
+    const shade = (pathFn, up) => {
+      // Volume: a soft lit rim on top, darker underside. No outlines, no halos.
+      ctx.save(); pathFn(); ctx.clip();
+      const g = ctx.createLinearGradient(0, up ? -24*s : 0, 0, up ? 0 : 13*s);
+      g.addColorStop(0, up ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.04)");
+      g.addColorStop(.45, "rgba(255,255,255,0)");
+      g.addColorStop(1, "rgba(0,0,0,.28)");
+      ctx.fillStyle = g;
+      ctx.fillRect(-30*s, -30*s, 60*s, 60*s);
+      if(red > .3){
+        // Scorch cracks glowing through the skin.
+        ctx.strokeStyle = `rgba(255,200,110,${.55*(red - .3)/.7})`;
+        ctx.lineWidth = Math.max(.6, .75*s);
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        for(let i=0;i<2;i++){
+          const yy = (up ? -6 + i*4 : 5 + i*3)*s, xx = (-17 + trapHash(i*2.3 + seed)*6)*s;
+          ctx.moveTo(xx, yy);
+          ctx.lineTo(xx + 6*s, yy + (trapHash(i + seed) - .5)*5*s);
+          ctx.lineTo(xx + 11*s, yy + (trapHash(i*1.9 + seed) - .5)*6*s);
+        }
+        ctx.stroke();
+      }
+      if(shooter && mouthHeat > .02){
+        // Heat building inside: glows through the lips and the snout only.
+        const g2 = ctx.createRadialGradient(18*s, 0, 0, 18*s, 0, 13*s);
+        g2.addColorStop(0, `rgba(255,190,60,${.7*mouthHeat})`);
+        g2.addColorStop(.5, `rgba(255,90,10,${.35*mouthHeat})`);
+        g2.addColorStop(1, "rgba(120,20,0,0)");
+        ctx.fillStyle = g2;
+        ctx.fillRect(-30*s, -30*s, 60*s, 60*s);
+        ctx.strokeStyle = `rgba(255,170,50,${.55*mouthHeat})`;
+        ctx.lineWidth = Math.max(.6, .7*s);
+        ctx.beginPath();
+        for(let i=0;i<3;i++){
+          const yy = (up ? -2.5 - i*1.8 : 2.5 + i*2)*s;
+          ctx.moveTo(21*s, yy); ctx.lineTo((17 - i*1.5 - mouthHeat*3)*s, yy + (up ? -1.4 : 1.4)*s);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+    ctx.save();
+    ctx.translate(p.x + kick*dir + shx, p.y + shy);
+    ctx.scale(dir, 1);
+    if(gulp) ctx.scale(1 + gulp*.04, 1 + gulp*.07);
+    // Back of the skull with a crest of spines.
+    ctx.fillStyle = skin;
+    ctx.beginPath(); ctx.arc(-12*s, 0, 11*s, 0, Math.PI*2); ctx.fill();
+    for(let i=0;i<3;i++){
+      const a = -Math.PI*.5 - .65 - i*.5;
+      const bx = -12*s + Math.cos(a)*10*s, by = Math.sin(a)*10*s;
+      const L = (17 - i*2)*s;
+      const tx = -12*s + Math.cos(a - .25)*L, ty = Math.sin(a - .25)*L;
+      ctx.beginPath();
+      ctx.moveTo(bx + Math.cos(a + 1.57)*3*s, by + Math.sin(a + 1.57)*3*s);
+      ctx.lineTo(tx, ty);
+      ctx.lineTo(bx - Math.cos(a + 1.57)*3*s, by - Math.sin(a + 1.57)*3*s);
+      ctx.closePath(); ctx.fill();
+    }
+    // Throat / mouth cavity, lit by the heat inside.
+    const cavR = Math.max(1.2*s, open*13*s);
+    ctx.fillStyle = "#170404";
+    ctx.beginPath(); ctx.ellipse(6*s, 0, 15*s, cavR, 0, 0, Math.PI*2); ctx.fill();
+    if(mouthHeat > .02 && open > .03){
+      const g = ctx.createRadialGradient(4*s, 0, 0, 4*s, 0, 15*s);
+      if(shooter){g.addColorStop(0, `rgba(255,250,215,${mouthHeat})`); g.addColorStop(.35, `rgba(255,170,40,${mouthHeat*.9})`);}
+      else {g.addColorStop(0, `rgba(255,225,205,${mouthHeat})`); g.addColorStop(.35, `rgba(255,40,20,${mouthHeat*.9})`);}
+      g.addColorStop(1, "rgba(90,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.ellipse(6*s, 0, 15*s, cavR, 0, 0, Math.PI*2); ctx.fill();
+    }
+    // Lower jaw.
+    ctx.save();
+    ctx.translate(hingeX, 0); ctx.rotate(loA); ctx.translate(-hingeX, 0);
+    ctx.fillStyle = skin; lowerPath(); ctx.fill();
+    shade(lowerPath, false);
+    teeth(false);
+    ctx.restore();
+    // Upper jaw with the eye under the brow.
+    ctx.save();
+    ctx.translate(hingeX, 0); ctx.rotate(upA); ctx.translate(-hingeX, 0);
+    ctx.fillStyle = skin; upperPath(); ctx.fill();
+    shade(upperPath, true);
+    teeth(true);
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.beginPath(); ctx.ellipse(17*s, -7*s, 1.5*s, .8*s, -.45, 0, Math.PI*2); ctx.fill();   // nostril
+    drawCreatureEye(ctx, -3*s, -11*s, 6.8*s, eye);
+    ctx.restore();
+    // Shooter: fire sputtering from the mouth while it charges, roaring while it fires.
+    const roar = shooter ? (st.active ? 1 : Math.max(st.charge*.7, st.heat*.3)) : 0;
+    if(roar > .03){
+      const n = Math.round(5 + 10*roar);
+      ctx.lineCap = "round";
+      const cols = ["#fff1a8", "#ffb12a", "#ff5a12", "#d91f00"];
+      for(let i=0;i<n;i++){
+        const ph = (time*(4 + 5*roar) + i*.37 + trapHash(i*3.1)) % 1;
+        const spread = (trapHash(i*7.7 + Math.floor(time*2)) - .5)*1.4;
+        const len = (5 + ph*16 + roar*7)*s;
+        const ex = 21*s + Math.cos(spread)*len, ey = Math.sin(spread)*len + ph*ph*7*s;
+        const bx = 21*s + Math.cos(spread)*len*.35, by = Math.sin(spread)*len*.35;
+        ctx.globalAlpha = Math.min(1, (1.15 - ph)*(.6 + .4*roar));
+        ctx.strokeStyle = cols[i % 4];
+        ctx.shadowColor = "#ff5a12";
+        ctx.shadowBlur = (3 + 4*roar)*s;
+        ctx.lineWidth = Math.max(1, (1.7 - ph)*s);
+        ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(ex, ey); ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
   function drawBeam(o){
-    // LASER_BEAM_V3: dark beam with a white-hot core and thin heated edges, power dashes flowing,
-    // crackle and a faint heat shimmer. Fire fountains at both mouths. It charges (mouths start to
-    // sputter, guide flickers), fires from both ends to meet, kicks back, then collapses and the
-    // generators stay hot. No glow bands, no circles. Visual only: isBeamActive + beamHitThickness.
     const info = beamCycleInfo(o);
     const active = info.active;
     const bx = o.x ?? 0;
@@ -17299,88 +17513,77 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(!editorMode) prismFxBeginFrame(o);
     const core = Math.max(3.4*s, beamHitThickness(o)*s);
     const innerL = p1.x + 16*s, innerR = p2.x - 16*s;
-    const mid = (innerL + innerR)/2;
+    const dir = beamShooterDir(o);
+    const fromX = dir > 0 ? innerL : innerR, toX = dir > 0 ? innerR : innerL;
     const disabled = obstacleDisabledByPower(o);
     const offFor = active ? 0 : info.local - o.on;
     const untilOn = active ? 0 : info.cycle - info.local;
-    const charge = !active && !disabled && untilOn < .5 ? 1 - untilOn/.5 : 0;
+    const charge = !active && !disabled && untilOn < .6 ? 1 - untilOn/.6 : 0;
     const fireKick = active && info.local < .2 ? Math.pow(1 - info.local/.2, 2) : 0;
     const offKick = !active && offFor < .22 ? Math.pow(1 - offFor/.22, 2) : 0;
     const heat = active ? 1 : (disabled ? 0 : Math.max(0, 1 - offFor/1.4));
     const tick = Math.floor(time*30);
     const seed = (o.phase || 0)*9.1 + o.y*.013;
-    const est = {active, charge, fireKick, offKick, heat};
+    const est = {active, charge, fireKick, offKick, heat, onFor:active ? info.local : 0, seed};
     ctx.save();
     ctx.lineCap = "round";
     if(active){
       const enter = easeOutCubic(info.onT);
-      const lEnd = innerL + (mid - innerL)*enter, rStart = innerR - (innerR - mid)*enter;
+      const front = fromX + (toX - fromX)*enter;
       const wob = 1 + .06*Math.sin(time*47 + seed);
       const bh = core*(1 + fireKick*.6)*wob;
-      const half = (xa, xb) => {
-        if(Math.abs(xb - xa) < 1) return;
-        ctx.strokeStyle = main;
-        ctx.lineWidth = bh;
-        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
-        // Heated edges.
-        ctx.strokeStyle = H[2];
-        ctx.lineWidth = Math.max(1, bh*.16);
-        ctx.beginPath();ctx.moveTo(xa, p1.y - bh*.42);ctx.lineTo(xb, p1.y - bh*.42);ctx.stroke();
-        ctx.beginPath();ctx.moveTo(xa, p1.y + bh*.42);ctx.lineTo(xb, p1.y + bh*.42);ctx.stroke();
-        // White-hot core.
-        ctx.strokeStyle = H[1];
-        ctx.lineWidth = Math.max(1, bh*.34);
-        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
-        ctx.strokeStyle = H[0];
-        ctx.lineWidth = Math.max(1, bh*.16);
-        ctx.beginPath();ctx.moveTo(xa, p1.y);ctx.lineTo(xb, p1.y);ctx.stroke();
-      };
-      half(innerL, lEnd);
-      half(innerR, rStart);
-      // Power dashes flowing in from both generators.
+      ctx.strokeStyle = main;
+      ctx.lineWidth = bh;
+      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
+      ctx.strokeStyle = H[2];
+      ctx.lineWidth = Math.max(1, bh*.16);
+      ctx.beginPath(); ctx.moveTo(fromX, p1.y - bh*.42); ctx.lineTo(front, p1.y - bh*.42); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(fromX, p1.y + bh*.42); ctx.lineTo(front, p1.y + bh*.42); ctx.stroke();
+      ctx.strokeStyle = H[1];
+      ctx.lineWidth = Math.max(1, bh*.34);
+      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
+      ctx.strokeStyle = H[0];
+      ctx.lineWidth = Math.max(1, bh*.16);
+      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
+      // Power flowing from the shooter into the receiver.
       ctx.setLineDash([bh*2.2, bh*3.2]);
       ctx.strokeStyle = accent;
       ctx.globalAlpha = .85;
       ctx.lineWidth = Math.max(1, bh*.3);
       ctx.lineDashOffset = -time*520*s;
-      ctx.beginPath();ctx.moveTo(innerL, p1.y);ctx.lineTo(lEnd, p1.y);ctx.stroke();
-      ctx.lineDashOffset = time*520*s;
-      ctx.beginPath();ctx.moveTo(innerR, p1.y);ctx.lineTo(rStart, p1.y);ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      // Crackle along the core.
-      const pts = trapBolt(innerL, p1.y, enter >= 1 ? innerR : lEnd, p1.y, bh*.45, 18, seed + tick*2.3);
+      const pts = trapBolt(fromX, p1.y, front, p1.y, bh*.45, 18, seed + tick*2.3);
       trapStrokePts(pts, Math.max(.7, bh*.12), H[0], .8);
-      // Faint heat shimmer above.
       if(heavy){
         ctx.globalAlpha = .22;
         ctx.strokeStyle = H[2];
         ctx.lineWidth = .9*s;
         ctx.beginPath();
         for(let i=0;i<=18;i++){
-          const xx = innerL + (innerR - innerL)*i/18;
+          const xx = fromX + (front - fromX)*i/18;
           const yy = p1.y - bh*1.6 + Math.sin(i*1.3 + time*10)*1.8*s;
           i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy);
         }
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
-      // Physical sparks: from both mouths, and a burst where the halves meet.
       if(!editorMode){
         const st = prismSmokeFor(o);
-        const want = (heavy ? 30 : 14)*st.dt;
+        const want = (heavy ? 26 : 12)*st.dt;
         const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+        const shootWX = dir > 0 ? bx + 16 : bx + bw - 16, eatWX = dir > 0 ? bx + bw - 16 : bx + 16;
         for(let i=0;i<n;i++){
-          const left = Math.random() < .5;
-          trapSparkBurst(o, left ? bx + 16 : bx + bw - 16, o.y, 1, "hot", .7, left ? .7 : -.7, -.6);
+          if(Math.random() < .55) trapSparkBurst(o, shootWX, o.y, 1, "hot", .7, dir*.7, -.6);
+          else trapSparkBurst(o, eatWX, o.y, 1, "crimson", .7, -dir*.5, -.7);
         }
-        if(enter >= 1 && info.local < .12 && !st.meetBurst){st.meetBurst = true; trapSparkBurst(o, bx + bw/2, o.y, 22, "hot", 1.1, 0, -.4);}
+        if(enter >= 1 && info.local < .12 && !st.meetBurst){st.meetBurst = true; trapSparkBurst(o, eatWX, o.y, 20, "crimson", 1.1, -dir*.6, -.4);}
       }
     } else {
       if(!editorMode) prismSmokeFor(o).meetBurst = false;
       const melt = info.meltT;
       if(!disabled && melt < 1){
-        // Shutdown: collapses to a white-hot thread that breaks apart.
         const pieces = 12;
         for(let i=0;i<pieces;i++){
           const a = i/pieces, b = (i + .7 - melt*.4)/pieces;
@@ -17388,26 +17591,29 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
           ctx.strokeStyle = i % 2 ? H[1] : main;
           ctx.lineWidth = Math.max(1, core*(.7 - melt*.4));
           const dy = Math.sin(i*2.1 + time*12)*melt*4*s;
-          ctx.beginPath();ctx.moveTo(innerL + (innerR - innerL)*a, p1.y + dy);ctx.lineTo(innerL + (innerR - innerL)*b, p1.y - dy*.5);ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(innerL + (innerR - innerL)*a, p1.y + dy); ctx.lineTo(innerL + (innerR - innerL)*b, p1.y - dy*.5); ctx.stroke();
         }
         ctx.globalAlpha = 1;
       }
-      // Idle guide, flickering hot while charging.
       ctx.setLineDash([10*s, 8*s]);
       const flick = charge > 0 ? (Math.floor(time*(10 + charge*22)) % 2 ? 1 : .35) : 1;
       ctx.globalAlpha = charge > 0 ? (.35 + .55*charge)*flick : .5;
       ctx.strokeStyle = charge > 0 ? H[2] : rgbaHex(trapIdle(), .9);
       ctx.lineWidth = Math.max(1.5*s, core*.36*(1 + charge*.6));
-      ctx.beginPath();ctx.moveTo(innerL, p1.y);ctx.lineTo(innerR, p1.y);ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(innerL, p1.y); ctx.lineTo(innerR, p1.y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      // Hot generators let off a little smoke as they cool.
-      if(!editorMode && heat > .3) for(const ex of [bx + 8, bx + bw - 8]) prismSmokeEmitRate(o, ex, o.y - 20, 0, 2*heat*(heavy ? 1 : .45), heat*.5);
+      // Both cool off: the shooter's mouth smokes a little, the scorched receiver smokes hard.
+      if(!editorMode && heat > .25){
+        const shootWX = dir > 0 ? bx + 14 : bx + bw - 14, eatWX = dir > 0 ? bx + bw - 14 : bx + 14;
+        prismSmokeEmitRate(o, shootWX, o.y - 6, 0, 1.4*heat*(heavy ? 1 : .45), heat*.4);
+        prismSmokeEmitRate(o, eatWX, o.y - 12, 0, 3*heat*(heavy ? 1 : .45), heat*.6);
+      }
     }
     ctx.restore();
     if(!editorMode){prismSmokeUpdateDraw(o); prismSparksUpdateDraw(o);}
-    drawBeamEmitter(bx, o.y, 1, est);
-    drawBeamEmitter(bx + bw, o.y, -1, est);
+    drawBeamCreature(bx, o.y, 1, dir > 0, est);
+    drawBeamCreature(bx + bw, o.y, -1, dir < 0, est);
   }
   function drawOrbitSaw(o){
     // ORBIT_SAW_POLISH_V1: visual only. Collision still uses orbitSawState + o.sawR.
@@ -19718,47 +19924,54 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function paperIsDark(hex){
     try{return luminanceForHex(safeHex(hex, "#111111")) < .45;}catch(_e){return true;}
   }
-  // Builds the sheet outline (with dog-ear cut and accordion zig-zag) as the current path.
+  // PAPER_CHARACTER_V2: softer, more comfortable paper. The outline is built from sampled sides so
+  // the sheet can bow as one flexible piece (opts.bend), and while stretched the sides breathe in at
+  // every fold and out between them with smooth curves (no saw teeth). Fewer, wider folds.
   function paperSheetPath(g, x, y, w, h, s, o){
     const r = Math.min(o.r, w*.3, h*.3);
-    const d = o.ear;            // dog-ear size
-    const folds = o.folds, zig = o.zig, wob = o.wob || 0;
-    const sideX = (side, k) => {
-      // zig-zag offset at crease k (alternating in/out)
-      return (k % 2 ? -1 : 1)*zig*side;
+    const d = o.ear;
+    const folds = o.folds, zig = o.zig, wob = o.wob || 0, bend = o.bend || 0;
+    // Side offset at height fraction v (0 top .. 1 bottom): pinch at creases, bulge mid-band, bow.
+    const side = (v) => {
+      let off = Math.sin(v*Math.PI)*bend*w*.07;
+      if(folds > 1) off += -Math.cos(v*folds*Math.PI*2)*zig*.5 + zig*.5;
+      return off;
     };
+    const N = Math.max(6, folds*4);
     g.beginPath();
-    g.moveTo(x + r, y + wob*.3);
-    // top edge with a slight live curl
-    g.quadraticCurveTo(x + (w - d)/2, y - wob, x + w - d, y);
-    // dog-ear cut
+    g.moveTo(x + r + side(0), y + wob*.3);
+    g.quadraticCurveTo(x + (w - d)/2 + side(0), y - wob, x + w - d + side(0), y);
     g.lineTo(x + w, y + d);
-    // right side, zig-zag at creases
-    for(let k=1;k<folds;k++){
-      const yy = y + h*k/folds;
-      if(yy > y + d) g.lineTo(x + w + sideX(1, k), yy);
+    // right side: bulges outward between creases
+    for(let i=1;i<=N;i++){
+      const v = i/N, yy = y + h*v;
+      if(yy <= y + d) continue;
+      if(yy >= y + h - r){g.lineTo(x + w + side(v), y + h - r); break;}
+      g.lineTo(x + w + side(v), yy);
     }
-    g.lineTo(x + w, y + h - r);
-    g.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    g.lineTo(x + r, y + h);
-    g.quadraticCurveTo(x, y + h, x, y + h - r);
-    for(let k=folds - 1;k>=1;k--){
-      const yy = y + h*k/folds;
-      g.lineTo(x - sideX(1, k), yy);
+    g.quadraticCurveTo(x + w + side(1), y + h, x + w - r + side(1), y + h);
+    g.lineTo(x + r + side(1), y + h);
+    g.quadraticCurveTo(x + side(1), y + h, x + side(1), y + h - r);
+    // left side: mirror of the crease breathing, same bow direction
+    for(let i=N;i>=0;i--){
+      const v = i/N, yy = y + h*v;
+      if(yy >= y + h - r || yy <= y + r) continue;
+      const bow = Math.sin(v*Math.PI)*bend*w*.07;
+      const breathe = side(v) - bow;
+      g.lineTo(x + bow - breathe, yy);
     }
-    g.lineTo(x, y + r);
-    g.quadraticCurveTo(x, y, x + r, y + wob*.3);
+    g.lineTo(x + side(0), y + r);
+    g.quadraticCurveTo(x + side(0), y, x + r + side(0), y + wob*.3);
     g.closePath();
   }
-  // Draws the paper body. Returns nothing; leaves no path state relied on by callers.
   function drawPaperBody(g, x, y, w, h, s, cube, normalH, opts={}){
-    const stretch = clamp01((h/Math.max(1, normalH*s) - 1)/1.2);
-    const foldUnit = normalH*s*.62;
-    const folds = h > normalH*s*1.06 ? Math.max(2, Math.round(h/foldUnit)) : 1;
-    const zig = folds > 1 ? 2.4*s*(1 - stretch*.55) : 0;
-    const ear = Math.min(w, normalH*s)*.24*(opts.flap ?? 1);
+    const nh = Math.max(1, normalH*s);
+    const stretch = clamp01((h/nh - 1)/1.2);
+    const folds = h > nh*1.12 ? Math.max(2, Math.round(h/(nh*.95))) : 1;
+    const zig = folds > 1 ? 3.2*s*(1 - stretch*.45) : 0;
+    const ear = Math.min(w, nh)*.24*(opts.flap ?? 1);
     const r = Math.max(2*s, Math.min(cube.radius*s, 6*s));
-    const o = {r, ear: Math.max(2*s, ear), folds, zig, wob:opts.wob || 0};
+    const o = {r, ear:Math.max(2*s, ear), folds, zig, wob:opts.wob || 0, bend:opts.bend || 0};
     const body = cube?.body || "#111111";
     const dark = paperIsDark(body);
     g.save();
@@ -19766,50 +19979,64 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     g.fillStyle = cubeBodyPaint(g, x, y, w, h, cube);
     g.fill();
     g.clip();
-    // Accordion bands: mountain folds catch light, valley folds fall into shade.
+    // Paper curvature across the sheet: lit left edge, soft shade toward the right.
+    const cg = g.createLinearGradient(x, 0, x + w, 0);
+    cg.addColorStop(0, `rgba(255,255,255,${dark ? .1 : .3})`);
+    cg.addColorStop(.35, "rgba(255,255,255,0)");
+    cg.addColorStop(1, `rgba(0,0,0,${dark ? .2 : .08})`);
+    g.fillStyle = cg;
+    g.fillRect(x - 8*s, y - 4*s, w + 16*s, h + 8*s);
     if(folds > 1){
+      // Soft accordion: each band rolls from light at its top to gentle shade at its bottom,
+      // like wide paper folds catching light, with a faint crease where they meet.
       for(let k=0;k<folds;k++){
         const y0 = y + h*k/folds, y1 = y + h*(k + 1)/folds;
         const gr = g.createLinearGradient(0, y0, 0, y1);
-        if(k % 2){gr.addColorStop(0, `rgba(0,0,0,${dark ? .2 : .1})`); gr.addColorStop(1, "rgba(0,0,0,0)");}
-        else {gr.addColorStop(0, `rgba(255,255,255,${dark ? .12 : .35})`); gr.addColorStop(1, "rgba(255,255,255,0)");}
+        const up = k % 2 === 0;
+        gr.addColorStop(0, `rgba(255,255,255,${(dark ? .1 : .3)*(up ? 1 : .45)})`);
+        gr.addColorStop(.45, "rgba(255,255,255,0)");
+        gr.addColorStop(1, `rgba(0,0,0,${(dark ? .26 : .1)*(up ? .6 : 1)})`);
         g.fillStyle = gr;
-        g.fillRect(x - 4*s, y0, w + 8*s, y1 - y0);
-        // crease line
-        g.strokeStyle = k % 2 ? `rgba(0,0,0,${dark ? .5 : .2})` : `rgba(255,255,255,${dark ? .22 : .6})`;
-        g.lineWidth = Math.max(.8, .9*s);
-        g.beginPath(); g.moveTo(x - 4*s, y0); g.lineTo(x + w + 4*s, y0); g.stroke();
+        g.fillRect(x - 8*s, y0, w + 16*s, y1 - y0);
+        if(k){
+          g.strokeStyle = `rgba(${dark ? "255,255,255" : "0,0,0"},${dark ? .12 : .1})`;
+          g.lineWidth = Math.max(.6, .7*s);
+          g.beginPath(); g.moveTo(x - 8*s, y0); g.quadraticCurveTo(x + w/2, y0 + 1.6*s*(up ? 1 : -1), x + w + 8*s, y0); g.stroke();
+        }
       }
     } else {
-      // A single soft centre crease: the sheet was folded once, not a flat block.
-      const gr = g.createLinearGradient(x, 0, x + w, 0);
-      gr.addColorStop(0, `rgba(255,255,255,${dark ? .07 : .25})`);
-      gr.addColorStop(.5, "rgba(255,255,255,0)");
-      gr.addColorStop(.52, `rgba(0,0,0,${dark ? .14 : .06})`);
-      gr.addColorStop(1, "rgba(0,0,0,0)");
-      g.fillStyle = gr;
+      // At rest: one soft diagonal fold from the dog-ear, the sheet gently bowed.
+      g.strokeStyle = `rgba(${dark ? "255,255,255" : "0,0,0"},${dark ? .09 : .08})`;
+      g.lineWidth = Math.max(.6, .8*s);
+      g.beginPath(); g.moveTo(x + w - o.ear*1.6, y); g.quadraticCurveTo(x + w*.45, y + h*.45, x + w*.08, y + h); g.stroke();
+      const sg = g.createLinearGradient(x + w - o.ear*1.6, y, x + w*.3, y + h);
+      sg.addColorStop(0, "rgba(0,0,0,0)");
+      sg.addColorStop(.5, `rgba(0,0,0,${dark ? .12 : .05})`);
+      sg.addColorStop(.52, `rgba(255,255,255,${dark ? .05 : .15})`);
+      sg.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = sg;
       g.fillRect(x, y, w, h);
     }
     g.restore();
-    // Cut edge catching the light along the top and left.
+    // Cut edge catching the light along the top.
     g.save();
-    g.strokeStyle = dark ? "rgba(255,255,255,.22)" : "rgba(0,0,0,.18)";
+    g.strokeStyle = dark ? "rgba(255,255,255,.2)" : "rgba(0,0,0,.15)";
     g.lineWidth = Math.max(.8, 1*s);
     g.beginPath();
-    g.moveTo(x + 1*s, y + h - o.r);
-    g.lineTo(x + 1*s, y + o.r);
-    g.quadraticCurveTo(x + 1*s, y + 1*s, x + o.r, y + 1*s + (o.wob*.3));
+    g.moveTo(x + o.r, y + 1*s + o.wob*.3);
     g.lineTo(x + w - o.ear - 1*s, y + 1*s);
     g.stroke();
     g.restore();
-    // Dog-ear: the folded-over corner showing the paper's other side.
+    // Dog-ear: the folded corner showing the paper's other side, with a soft shade under it.
     const e = o.ear;
     const flap = opts.flap ?? 1;
     const tipX = x + w - e + e*(1 - flap)*.9, tipY = y + e - e*(1 - flap)*.9;
     g.save();
-    g.fillStyle = paperShade(body, dark ? .22 : -.12);
+    g.fillStyle = "rgba(0,0,0,.18)";
+    g.beginPath(); g.moveTo(x + w - e, y); g.lineTo(x + w, y + e); g.lineTo(tipX - 1.2*s, tipY + 1.6*s); g.closePath(); g.fill();
+    g.fillStyle = paperShade(body, dark ? .24 : -.12);
     g.beginPath(); g.moveTo(x + w - e, y); g.lineTo(x + w, y + e); g.lineTo(tipX, tipY); g.closePath(); g.fill();
-    g.strokeStyle = dark ? "rgba(255,255,255,.35)" : "rgba(0,0,0,.25)";
+    g.strokeStyle = dark ? "rgba(255,255,255,.3)" : "rgba(0,0,0,.2)";
     g.lineWidth = Math.max(.8, 1*s);
     g.beginPath(); g.moveTo(x + w - e, y); g.lineTo(x + w, y + e); g.stroke();
     g.restore();
@@ -19818,6 +20045,15 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   // Steps the dog-ear spring from the live player (called once per frame by drawPlayer).
   function paperCharacterStep(h){
     const dt = Math.min(.05, Math.max(0, time - paperFx.lastT));
+    // Bend: the sheet bows a little when its base moves fast (release pulls it up), then settles.
+    if(dt > 0){
+      const by = Number(player.baseY) || 0;
+      const v = (by - (paperFx.lastBase ?? by))/dt;
+      paperFx.lastBase = by;
+      const target = Math.max(-1, Math.min(1, v/700));
+      paperFx.bendV = (paperFx.bendV || 0) + ((target - (paperFx.bend || 0))*140 - (paperFx.bendV || 0)*14)*dt;
+      paperFx.bend = Math.max(-1, Math.min(1, (paperFx.bend || 0) + paperFx.bendV*dt));
+    }
     paperFx.lastT = time;
     const dh = h - (paperFx.lastH || h);
     paperFx.lastH = h;
@@ -20885,7 +21121,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // PAPER_CHARACTER_V1 body (see drawPaperBody).
     const paperFlap = paperCharacterStep(h);
     const paperWob = eye.mood === "danger" ? Math.sin(time*42)*1.3*s*Math.max(.4, eye.danger || 0) : Math.sin(time*2.2)*.5*s;
-    drawPaperBody(ctx, x, y, w, h, s, cube, player.normalH, {flap:paperFlap, wob:paperWob});
+    drawPaperBody(ctx, x, y, w, h, s, cube, player.normalH, {flap:paperFlap, wob:paperWob, bend:paperFx.bend || 0});
 
     const blinkT = eye.blinkProgress > 0 ? 1 - Math.abs((eye.blinkProgress / eye.blinkDuration) - .5) * 2 : 0;
     let openScale = Math.max(.08, 1 - blinkT);
