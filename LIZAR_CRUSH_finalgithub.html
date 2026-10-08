@@ -12682,6 +12682,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(type === "electric" && deathCulprit.type === "slider") return 1.0;
       if(type === "laser" && deathCulprit.type === "beam") return .95;
       if(type === "fan" && deathCulprit.type === "sideSweeper") return 1.0;
+      if(type === "saw" && deathCulprit.type === "orbitSaw") return 1.0;   // time for the paper to float down
     }
     if(type === "gate") return 1.0;
     if(type === "ink") return 1.95;
@@ -19217,6 +19218,22 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.restore();
       }
     }
+    // Paper squeezed out of the seam: scraps of the sheet (the player's own colour) spurt up and
+    // down from between the faces and float away. Nothing else of the player is left.
+    if(dyingHere && dT >= 0){
+      const c = worldToScreen(info.centerX, info.cy);
+      const body = cubeSkin()?.body || "#111111";
+      for(let i=0;i<12;i++){
+        const up = i % 2 ? -1 : 1;
+        const a = up*Math.PI/2 + (trapHash(i*3.9) - .5)*1.1;
+        const sp = (90 + trapHash(i*1.7)*120)*s;
+        const f = paperFlutter(50 + i, dT, Math.cos(a)*sp, Math.sin(a)*sp, s);
+        ctx.save();
+        ctx.globalAlpha = 1 - Math.max(0, dT - .45)*3;
+        drawPaperScrap(c.x + f.dx, c.y + up*hS*.42 + f.dy, (2 + trapHash(i*7.7)*2.6)*s, f.rot*3, f.flip, body);
+        ctx.restore();
+      }
+    }
     // Impact at the bite: a short burst of lines where the faces slam together.
     if(info.mode === "crush"){
       const c = worldToScreen(info.centerX, info.cy);
@@ -19859,6 +19876,69 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(const e of edges){ctx.moveTo(e[0], e[1]); ctx.lineTo(e[2], e[3]);}
       ctx.stroke();
     }
+    ctx.restore();
+  }
+  // PAPER_DEATH_KIT_V1: shared paper physics for death pieces. Paper falls slowly against heavy air
+  // drag, sways side to side and flips over as it goes (we see the paler back of the sheet).
+  function paperFlutter(i, T, vx0, vy0, s, floorDy=Infinity){
+    const k = 3.2, e = 1 - Math.exp(-k*T);
+    const sway = Math.sin(T*6.2 + i*1.7)*9*s*Math.min(1, T*2.2);
+    let dx = vx0/k*e + sway;
+    let dy = vy0/k*e + 150*s*T*T/(1 + T*1.2);
+    let landed = false;
+    if(dy > floorDy){dy = floorDy; landed = true;}
+    const rot = (trapHash(i*4.1) - .5)*.5 + Math.sin(T*4.6 + i*2.3)*.55*Math.min(1, T*2);
+    // starts flat and turns over gradually (a sheet does not snap edge-on)
+    const turn = T*(2 + trapHash(i*7.3)*1.6)*(trapHash(i*2.9) > .5 ? 1 : -1);
+    const flip = landed ? (Math.cos(turn) >= 0 ? 1 : -1) : Math.cos(turn);
+    return {dx, dy, rot, flip, landed};
+  }
+  // Draws one paper piece (cube-local polygon) with the paper physics above. edge: "char" (burnt
+  // brown with a live ember line), "fiber" (pale torn fibres) or "clean". heat 0..1 drives embers.
+  function drawPaperShard(art, ox, oy, poly, m, opts={}){
+    let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
+    const s = opts.s || 1;
+    const fl = m.flip ?? 1, fx = Math.sign(fl || 1)*Math.max(.07, Math.abs(fl));
+    ctx.save();
+    ctx.translate(ox + mx + (m.dx || 0), oy + my + (m.dy || 0));
+    ctx.rotate(m.rot || 0);
+    ctx.scale(fx, 1);
+    ctx.translate(-mx, -my);
+    ctx.save();
+    ctx.beginPath(); poly.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(art, 0, 0);
+    if(fl < 0){ctx.fillStyle = "rgba(244,240,230,.42)"; ctx.fillRect(-4, -4, art.width + 8, art.height + 8);}   // the back of the sheet
+    const edgeOn = 1 - Math.abs(fl);
+    if(edgeOn > .02){ctx.fillStyle = `rgba(0,0,0,${.35*edgeOn})`; ctx.fillRect(-4, -4, art.width + 8, art.height + 8);}
+    if(opts.tint){ctx.fillStyle = opts.tint; ctx.fillRect(-4, -4, art.width + 8, art.height + 8);}
+    if(opts.onTop) opts.onTop();
+    ctx.restore();
+    const edges = opts.edges || [];
+    if(edges.length){
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      const line = (w, col) => {ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); for(const e of edges){ctx.moveTo(e[0], e[1]); ctx.lineTo(e[2], e[3]);} ctx.stroke();};
+      if(opts.edge === "char"){
+        line(3.2*s, "#2a170b");
+        const heat = opts.heat ?? 1;
+        if(heat > .02){ctx.globalAlpha *= .55 + .45*heat*(.6 + .4*Math.sin(time*30 + mx)); line(1.3*s, heat > .6 ? "#ffd06a" : "#ff6a14"); ctx.globalAlpha = 1;}
+      } else if(opts.edge === "fiber"){
+        line(1.4*s, "rgba(255,252,244,.85)");
+        ctx.lineWidth = .6*s; ctx.beginPath();
+        for(const e of edges){for(let k=1;k<4;k++){const u = k/4, px = e[0] + (e[2] - e[0])*u, py = e[1] + (e[3] - e[1])*u, a = trapHash(px*.3 + py*.7)*Math.PI*2; ctx.moveTo(px, py); ctx.lineTo(px + Math.cos(a)*2*s, py + Math.sin(a)*2*s);}}
+        ctx.stroke();
+      } else line(1*s, "rgba(255,252,244,.6)");
+    }
+    ctx.restore();
+  }
+  // A small loose scrap of paper (cube colour) fluttering on its own: for confetti and chips.
+  function drawPaperScrap(x, y, size, rot, flip, color){
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(rot); ctx.scale(Math.sign(flip || 1)*Math.max(.1, Math.abs(flip)), 1);
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.moveTo(-size, -size*.55); ctx.lineTo(size*.85, -size*.7); ctx.lineTo(size, size*.45); ctx.lineTo(-size*.5, size*.7); ctx.closePath(); ctx.fill();
+    if(flip < 0){ctx.fillStyle = "rgba(244,240,230,.45)"; ctx.fill();}
+    ctx.strokeStyle = "rgba(255,252,244,.55)"; ctx.lineWidth = Math.max(.5, size*.12); ctx.stroke();
     ctx.restore();
   }
   // Clip a convex polygon by the half-plane n·p <= d (Sutherland–Hodgman, one edge).
@@ -20769,9 +20849,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const i = k % B.cols, j = Math.floor(k / B.cols);
       const lx = (i + .5)/B.cols*w, ly = (j + .5)/B.rows*h;
       const ember = Math.random() < .35;
-      B.flakes.push({x:lx, y:ly, vx:(Math.random() - .5)*40*s, vy:-(20 + Math.random()*50)*s, age:0,
-        life:ember ? .35 + Math.random()*.35 : .7 + Math.random()*.7, size:(ember ? 1.2 : 2 + Math.random()*2.6)*s,
-        rot:Math.random()*6.28, vr:(Math.random() - .5)*9, ember});
+      B.flakes.push({x:lx, y:ly, vx:(Math.random() - .5)*30*s, vy:-(14 + Math.random()*34)*s, age:0,
+        life:ember ? .35 + Math.random()*.35 : .9 + Math.random()*.8, size:(ember ? 1.1 : 2.4 + Math.random()*2.8)*s,
+        rot:Math.random()*6.28, vr:(Math.random() - .5)*4, ember, tone:Math.random() < .5 ? "#a9a49b" : "#77726b"});
       if(Math.random() < .14 && deathCulprit) prismSmokeEmit(deathCulprit, worldRect.x + lx/s, worldRect.y + ly/s, 0, 1, .8);
     }
     for(let i=B.flakes.length - 1; i>=0; i--){
@@ -20788,14 +20868,19 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.rotate(f.rot);
       if(f.ember){
         ctx.fillStyle = k < .4 ? "#fff1a8" : "#ff7a00";
-        ctx.fillRect(-f.size/2, -f.size/2, f.size, f.size);
+        ctx.beginPath(); ctx.arc(0, 0, f.size*.6, 0, Math.PI*2); ctx.fill();
       } else {
-        // Ash: a dark curled flake with a glowing rim that dies out.
-        ctx.fillStyle = "#2b2420";
+        // Paper ash: a light, curled grey sliver turning over as it rides the heat up; its rim
+        // glows for a moment, then it is just ash.
+        const fl = Math.cos(f.age*4.5 + i*1.3);
+        ctx.scale(Math.sign(fl || 1)*Math.max(.15, Math.abs(fl)), 1);
+        const z = f.size;
+        ctx.fillStyle = f.tone;
         ctx.beginPath();
-        ctx.moveTo(-f.size, -f.size*.4); ctx.lineTo(f.size*.7, -f.size*.6); ctx.lineTo(f.size, f.size*.5); ctx.lineTo(-f.size*.5, f.size*.6);
+        ctx.moveTo(-z, -z*.2); ctx.quadraticCurveTo(0, -z*.95, z, -z*.25);
+        ctx.lineTo(z*.75, z*.25); ctx.quadraticCurveTo(0, -z*.3, -z*.85, z*.4);
         ctx.closePath(); ctx.fill();
-        if(k < .4){ctx.strokeStyle = "#ff7a00"; ctx.lineWidth = .8*s; ctx.globalAlpha = (1 - k/.4)*.9; ctx.stroke();}
+        if(k < .35){ctx.strokeStyle = "#ff7a00"; ctx.lineWidth = .7*s; ctx.globalAlpha = (1 - k/.35)*.85*(1 - k); ctx.stroke();}
       }
       ctx.restore();
     }
@@ -21115,135 +21200,127 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
     // Still Crusher: the crumple is drawn on top of the jaws by drawCrusherDeathOverlay.
     if(deathType === "electric" && deathCulprit?.type === "slider"){
-      // ELECTRIC_LINK_DEATH_V1 (electrocution): the cube is pinned and shaken by the current, flicking
-      // between itself and an x-ray frame while arcs crawl over it from the side the link touched;
-      // then an overload flash and it bursts into charred, smoking shards.
+      // ELECTRIC_LINK_DEATH_V2 (paper): the current pins and shakes the sheet while branching burn
+      // marks — lightning scorched into paper — race across it from the side the link touched, their
+      // tips glowing. An overload flash, then the scorched sheet breaks into charred pieces that
+      // float down like paper, trailing embers and smoke. The eye dies through it.
       ctx.globalAlpha = 1;
       const E = TRAP_SPARK_PALETTES.electric;
       const tick = Math.floor(time*30);
       const key = deathPlayerSnapshot || deathCulprit;
-      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.25, 1.1);
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 0);
       const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
-      const rad = Math.max(7*s, cube.radius*s);
       const side = Number.isFinite(deathImpact?.x) ? (deathImpact.x < p.x + p.w/2 ? -1 : 1) : 1;
-      const shockEnd = .6, burstAt = .66;
-      const eyeY = Math.min(h - 12*s, Math.min(h*.48, normalH*.50*s) - 1.1*s);
+      const shockEnd = .56, burstAt = .62;
+      const eyeY = trapCubeEyeY(h, s, normalH);
+      // Lichtenberg burn tree, grown once per death (cube-local, deterministic).
+      if(!fx.tree){
+        const segsT = [];
+        const grow = (x0, y0, ang, len, depth, t0) => {
+          const x1 = x0 + Math.cos(ang)*len, y1 = y0 + Math.sin(ang)*len;
+          const dur = .05 + len/(w*3.2);
+          segsT.push({x0, y0, x1, y1, t0, t1:t0 + dur, wd:Math.max(.7, (2.4 - depth*.45))*s});
+          if(depth < 4){
+            const n = depth < 2 ? 2 : 1 + (trapHash(x1*.7 + y1*1.3) > .5 ? 1 : 0);
+            for(let k=0;k<n;k++){
+              const da = (k ? 1 : -1)*(.35 + trapHash(x1 + k*3.1 + depth)*.5);
+              grow(x1, y1, ang + da, len*(.62 + trapHash(y1 + k)*.2), depth + 1, t0 + dur);
+            }
+          }
+        };
+        for(let r=0;r<3;r++){
+          const y0 = h*(.22 + r*.28 + (trapHash(r*4.7) - .5)*.1);
+          grow(side > 0 ? w : 0, y0, (side > 0 ? Math.PI : 0) + (trapHash(r*2.1) - .5)*.6, w*.32, 0, r*.05);
+        }
+        fx.tree = segsT;
+      }
+      const tree = fx.tree;
+      const drawBurns = (tt, glow) => {
+        ctx.lineCap = "round";
+        for(const g of tree){
+          if(tt < g.t0) continue;
+          const k = clamp01((tt - g.t0)/(g.t1 - g.t0));
+          const ex = g.x0 + (g.x1 - g.x0)*k, ey = g.y0 + (g.y1 - g.y0)*k;
+          ctx.strokeStyle = "rgba(255,140,40,.55)"; ctx.lineWidth = g.wd + 1.6*s;
+          if(glow){ctx.beginPath(); ctx.moveTo(g.x0, g.y0); ctx.lineTo(ex, ey); ctx.stroke();}
+          ctx.strokeStyle = "#2a1608"; ctx.lineWidth = g.wd;
+          ctx.beginPath(); ctx.moveTo(g.x0, g.y0); ctx.lineTo(ex, ey); ctx.stroke();
+          if(k < 1 && glow){ctx.fillStyle = E[0]; ctx.beginPath(); ctx.arc(ex, ey, g.wd*1.3, 0, Math.PI*2); ctx.fill();}
+        }
+      };
+      const eye = () => drawDyingPlayerEye(ctx, w/2, eyeY, s, eyeTone, Math.min(1, t*1.4), 1.2);
+      const rect = [[0,0],[w,0],[w,h],[0,h]];
       if(t < shockEnd){
-        const shake = 3.4*s*(1 - t*.4);
+        const shake = 3.2*s*(1 - t*.4);
         const jx = (trapHash(tick*1.3) - .5)*2*shake, jy = (trapHash(tick*2.1 + 4) - .5)*shake;
-        const ox = x + jx, oy = y + jy;
-        if(tick % 3 === 0){
-          // X-ray frame.
-          ctx.save();
-          ctx.translate(ox, oy);
-          roundRect(ctx, 0, 0, w, h, rad);
-          ctx.fillStyle = E[0]; ctx.fill();
-          ctx.lineWidth = 2*s; ctx.strokeStyle = "#0b1f33"; ctx.stroke();
-          ctx.strokeStyle = "#0b1f33";
-          ctx.lineWidth = 1.5*s;
-          roundRect(ctx, w*.2, h*.14, w*.6, h*.72, rad*.5); ctx.stroke();
-          ctx.beginPath();
-          for(let i=1;i<=3;i++){const ry = h*(.36 + i*.15); if(ry < h*.84){ctx.moveTo(w*.28, ry); ctx.lineTo(w*.72, ry);}}
-          ctx.stroke();
-          ctx.lineWidth = 2*s;
-          ctx.beginPath(); ctx.ellipse(w/2, eyeY, 6*s, 9*s, 0, 0, Math.PI*2); ctx.stroke();
-          ctx.restore();
-        } else {
-          ctx.drawImage(art, ox, oy);
-          ctx.save();
-          roundRect(ctx, ox, oy, w, h, rad); ctx.clip();
-          ctx.globalAlpha = .18 + .22*trapHash(tick*.7);
-          ctx.fillStyle = E[2];
-          ctx.fillRect(ox, oy, w, h);
-          ctx.restore();
-        }
-        // Arcs crawling over the body from the contact side.
+        drawPaperShard(art, x + jx, y + jy, rect, {}, {s, onTop:() => {
+          drawBurns(t*1.6, true); eye();
+          if(tick % 4 === 0){ctx.fillStyle = "rgba(230,245,255,.35)"; ctx.fillRect(0, 0, w, h);}
+        }});
         for(let k=0;k<4;k++){
-          const hy = oy + h*(.15 + .7*trapHash(tick*3.3 + k*7));
-          const sx = side > 0 ? ox + w + 6*s : ox - 6*s;
+          const hy = y + jy + h*(.15 + .7*trapHash(tick*3.3 + k*7));
+          const sx = side > 0 ? x + jx + w + 6*s : x + jx - 6*s;
           const ta = trapHash(tick*1.7 + k*11)*Math.PI*2;
-          const tx = ox + w/2 + Math.cos(ta)*w*.5, ty = oy + h/2 + Math.sin(ta)*h*.5;
-          trapDrawBolt(trapBolt(sx, hy, tx, ty, 6*s, 6, tick*2 + k*5), 1.5*s, E, .95);
+          trapDrawBolt(trapBolt(sx, hy, x + jx + w/2 + Math.cos(ta)*w*.5, y + jy + h/2 + Math.sin(ta)*h*.5, 6*s, 6, tick*2 + k*5), 1.5*s, E, .9);
         }
-        if(deathCulprit && Math.random() < .7) trapSparkBurst(deathCulprit, p.x + (side > 0 ? p.w : 0), p.y + p.h*Math.random(), 1, "electric", .8);
+        if(deathCulprit && Math.random() < .6) trapSparkBurst(deathCulprit, p.x + (side > 0 ? p.w : 0), p.y + p.h*Math.random(), 1, "electric", .8);
       } else if(t < burstAt){
-        // Overload flash.
-        ctx.save();
-        roundRect(ctx, x, y, w, h, rad);
-        ctx.fillStyle = E[0]; ctx.fill();
-        ctx.lineWidth = 3*s; ctx.strokeStyle = E[1]; ctx.stroke();
-        ctx.restore();
+        drawPaperShard(art, x, y, rect, {}, {s, onTop:() => {drawBurns(9, true); eye(); ctx.fillStyle = "rgba(235,248,255,.85)"; ctx.fillRect(0, 0, w, h);}});
       } else {
         if(!fx.burst && deathCulprit){
           fx.burst = true;
-          trapSparkBurst(deathCulprit, p.x + p.w/2, p.y + p.h/2, 34, "electric", 1.3);
+          trapSparkBurst(deathCulprit, p.x + p.w/2, p.y + p.h/2, 26, "electric", 1.1);
           for(let i=0;i<6;i++) prismSmokeEmit(deathCulprit, p.x + p.w*Math.random(), p.y + p.h*Math.random(), 0, 1, .9);
         }
-        const T = (t - burstAt);
+        const T = (t - burstAt)*deathDuration(deathType);
         const cx0 = w*(.5 + (trapHash(3.1) - .5)*.2), r1 = h*(.33 + (trapHash(5.7) - .5)*.1), r2 = h*(.66 + (trapHash(8.3) - .5)*.1);
         const pieces = [
           [[0,0],[cx0,0],[cx0 + 3*s,r1],[0,r1 - 2*s]], [[cx0,0],[w,0],[w,r1 + 2*s],[cx0 + 3*s,r1]],
           [[0,r1 - 2*s],[cx0 + 3*s,r1],[cx0 - 2*s,r2],[0,r2 + 2*s]], [[cx0 + 3*s,r1],[w,r1 + 2*s],[w,r2 - 2*s],[cx0 - 2*s,r2]],
           [[0,r2 + 2*s],[cx0 - 2*s,r2],[cx0,h],[0,h]], [[cx0 - 2*s,r2],[w,r2 - 2*s],[w,h],[cx0,h]]
         ];
-        const floorY = h + 2*s;
         pieces.forEach((poly, i) => {
           let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= 4; my /= 4;
-          const vx = (mx < w/2 ? -1 : 1)*(70 + trapHash(i*3.7)*90)*s;
-          const vy = -(90 + trapHash(i*5.1)*140)*s;
-          let dy = vy*T + .5*1300*s*T*T;
-          const landed = my + dy > floorY - 4*s;
-          if(landed) dy = floorY - 4*s - my;
-          const rot = (trapHash(i*9.3) - .5)*9*Math.min(T, .3);
-          trapDrawPiece(art, x, y, poly, vx*T, dy, rot, E[1], 1.6*s*(1 - Math.min(1, T*3)),
-            poly.map((q, j) => [q[0], q[1], poly[(j + 1) % poly.length][0], poly[(j + 1) % poly.length][1]]), "rgba(18,22,28,.78)");
+          const f = paperFlutter(20 + i, T, (mx < w/2 ? -1 : 1)*(60 + trapHash(i*3.7)*70)*s, -(60 + trapHash(i*5.1)*80)*s, s, h - my);
+          drawPaperShard(art, x, y, poly, f, {s, tint:"rgba(26,16,8,.45)", edge:"char", heat:1 - T*1.5,
+            // only the break lines are burnt, not the sheet's own outer edges
+            edges:poly.map((q, j) => [q[0], q[1], poly[(j + 1) % poly.length][0], poly[(j + 1) % poly.length][1]]).filter(e => !((e[0] < .5 && e[2] < .5) || (e[0] > w - .5 && e[2] > w - .5) || (e[1] < .5 && e[3] < .5) || (e[1] > h - .5 && e[3] > h - .5))),
+            onTop:() => {drawBurns(9, false); eye();}});
         });
       }
       ctx.restore();
       return;
     } else if(deathType === "laser" && deathCulprit?.type === "beam"){
-      // LASER_BEAM_DEATH_V1 (slice): cut clean at the beam's height. The top slides off along the
-      // cut and drops, both cut faces glow white-hot then cool to red and smoke, sparks shower
-      // from the cut while the beam is still live.
+      // LASER_BEAM_DEATH_V2 (paper): the beam slices the sheet at its height. Both cut edges char and
+      // smoulder with a live ember line; the top half slides off along the cut, then flutters down
+      // like a sheet of paper (drag, sway, turning over). The eye dies on whichever piece holds it.
       ctx.globalAlpha = 1;
-      const C = TRAP_SPARK_PALETTES.crimson;
       const key = deathPlayerSnapshot || deathCulprit;
       const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 0);
       const cutWorld = Number.isFinite(deathImpact?.worldY) ? deathImpact.worldY : p.y + p.h/2;
       const cut = Math.max(4*s, Math.min(h - 4*s, (cutWorld - p.y)*s));
       const dirS = (p.x + p.w/2) < WORLD_W/2 ? 1 : -1;
-      const slide = easeOutCubic(clamp01(t/.45))*w*.32 + Math.pow(Math.max(0, t - .35), 2)*w*2.4;
-      const drop = Math.pow(Math.max(0, t - .38), 2)*h*3.2;
-      const rot = dirS*Math.max(0, t - .3)*1.5;
-      const edgeCol = t < .25 ? C[0] : (t < .55 ? C[1] : C[2]);
-      const edgeW = 3.2*s*(1 - t*.6);
-      trapDrawPiece(art, x, y, [[0,cut],[w,cut],[w,h],[0,h]], 0, 0, 0, edgeCol, edgeW, [[0,cut,w,cut]]);
-      trapDrawPiece(art, x, y, [[0,0],[w,0],[w,cut],[0,cut]], dirS*slide, drop, rot, edgeCol, edgeW, [[0,cut,w,cut]]);
-      {
-        // The eye is cut with the cube: each piece carries its own part of it, and it dies there.
-        const ey0 = trapCubeEyeY(h, s, normalH), ex0 = w/2;
-        const pieceEye = (poly, dx, dy, r) => {
-          let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
-          ctx.save();
-          ctx.translate(x + mx + dx, y + my + dy); ctx.rotate(r); ctx.translate(-mx, -my);
-          ctx.beginPath(); poly.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
-          ctx.clip();
-          drawDyingPlayerEye(ctx, ex0, ey0, s, eyeTone, t, 1.2);
-          ctx.restore();
-        };
-        pieceEye([[0,cut],[w,cut],[w,h],[0,h]], 0, 0, 0);
-        pieceEye([[0,0],[w,0],[w,cut],[0,cut]], dirS*slide, drop, rot);
-      }
+      const slide = easeOutCubic(clamp01(t/.32))*w*.3;
+      const T = Math.max(0, deathTimer - .24);
+      const fl = paperFlutter(2, T, dirS*70*s, -30*s, s, h - cut);
+      const lift = clamp01(T*4);
+      const heat = 1 - t;
+      const ey0 = trapCubeEyeY(h, s, normalH), ex0 = w/2;
+      const eyeOn = (poly) => () => drawDyingPlayerEye(ctx, ex0, ey0, s, eyeTone, t, 1.2);
+      const bottom = [[0,cut],[w,cut],[w,h],[0,h]], top = [[0,0],[w,0],[w,cut],[0,cut]];
+      drawPaperShard(art, x, y, bottom, {dx:0, dy:0, rot:0, flip:1}, {s, edges:[[0,cut,w,cut]], edge:"char", heat, onTop:eyeOn(bottom)});
+      drawPaperShard(art, x, y, top, {dx:dirS*slide + fl.dx*lift, dy:fl.dy*lift, rot:fl.rot*lift, flip:lift > 0 ? 1 + (fl.flip - 1)*lift : 1}, {s, edges:[[0,cut,w,cut]], edge:"char", heat, onTop:eyeOn(top)});
       if(t < .1){
         ctx.globalAlpha = 1 - t/.1;
-        ctx.strokeStyle = C[0];
+        ctx.strokeStyle = "#fff4d6";
         ctx.lineWidth = 2.4*s;
         ctx.beginPath(); ctx.moveTo(x - 4*s, y + cut); ctx.lineTo(x + w + 4*s, y + cut); ctx.stroke();
         ctx.globalAlpha = 1;
       }
       if(deathCulprit){
-        if(t < .45 && Math.random() < .8) trapSparkBurst(deathCulprit, p.x + (Math.random() < .5 ? 0 : p.w), cutWorld, 1, "crimson", .9, 0, -.6);
-        if(t > .2 && Math.random() < .35) prismSmokeEmit(deathCulprit, p.x + p.w*Math.random(), cutWorld - 2, 0, 1, .8);
+        // embers lifting off the burnt edge, smoke curling up
+        if(t < .6 && Math.random() < .6) trapSparkCone(deathCulprit, p.x + p.w*Math.random(), cutWorld, 1, "hot", -Math.PI/2, .7, 30, 90, .4, .8);
+        if(t > .12 && Math.random() < .4) prismSmokeEmit(deathCulprit, p.x + p.w*Math.random(), cutWorld - 2, 0, 1, .7);
       }
       ctx.restore();
       return;
@@ -21299,7 +21376,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.globalAlpha = fadeOut;
       const M = TRAP_SPARK_PALETTES.metal;
       const key = deathPlayerSnapshot || deathCulprit;
-      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.22, 1.1);
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 0);
       const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
       const ang = Number.isFinite(deathImpact?.ang) ? deathImpact.ang : 0;
       const hasHit = Number.isFinite(deathImpact?.hitX) && Number.isFinite(deathImpact?.hitY);
@@ -21326,24 +21403,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const front = spin > 0 ? B : A, back = spin > 0 ? A : B;
       const T = Math.max(0, t - .06);
       const floorY = h + 2*s;
-      // Deterministic rigid-body step: gravity, floor bounce with friction, spin damping.
-      const sim = (poly, vx, vy, vr) => {
+      // Paper pieces: flung at the blade's real speed, then the air takes them (drag, sway, turning).
+      const flutterPiece = (poly, idx, vx, vy) => {
         let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
-        let rad = 0; for(const q of poly) rad = Math.max(rad, Math.hypot(q[0] - mx, q[1] - my));
-        const half = rad*.72;
-        let x = 0, y = 0, rot = 0;
-        const step = 1/120;
-        for(let k=0, n=Math.floor(T/step); k<n; k++){
-          vy += 1500*s*step;
-          x += vx*step; y += vy*step; rot += vr*step;
-          if(my + y + half > floorY){
-            y = floorY - my - half;
-            if(vy > 0){vy = -vy*.28; vx *= .55; vr *= .45;}
-            if(Math.abs(vy) < 40*s) vy = 0;
-            vx *= .985; vr *= .97;
-          }
-        }
-        return {x, y, rot};
+        return paperFlutter(idx, T, vx, vy, s, h - my);
       };
       const cutEdges = poly => {
         const out = [];
@@ -21353,36 +21416,29 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         }
         return out;
       };
-      const flash = t < .06 ? "rgba(255,255,255,.9)" : null;
-      const edgeCol = t < .3 ? M[0] : (t < .6 ? M[1] : M[2]);
-      const edgeW = 2.4*s*(1 - Math.min(1, t*1.2));
+      const eyeY = trapCubeEyeY(h, s, normalH);
+      const eye = () => drawDyingPlayerEye(ctx, w/2, eyeY, s, eyeTone, t, 1.2);
       const pieces = [];
       if(front.length >= 3 && back.length >= 3 && area(front) > full*.03 && area(back) > full*.03){
-        // Body ahead of the blade is batted along the swing; the slice the blade passed through
-        // shears off spinning hard.
-        pieces.push({poly:front, v:sim(front, tx*speed*.75, ty*speed*.75 - speed*.25, spin*(3 + speed/(140*s)))});
-        pieces.push({poly:back, v:sim(back, tx*speed*.45 - nx*spin*speed*.2, ty*speed*.45 - ny*spin*speed*.2 - speed*.3, spin*(9 + speed/(60*s)))});
+        pieces.push({poly:front, f:flutterPiece(front, 31, tx*speed*.8, ty*speed*.8 - speed*.3)});
+        pieces.push({poly:back, f:flutterPiece(back, 32, tx*speed*.2, ty*speed*.2 - 40*s)});
       } else {
-        // The blade only grazed it: the whole cube is batted away.
-        pieces.push({poly:rect, v:sim(rect, tx*speed*.7, ty*speed*.7 - speed*.3, spin*5)});
+        // the blade only clipped it: the whole sheet is batted away
+        pieces.push({poly:rect, f:flutterPiece(rect, 33, tx*speed*.6, ty*speed*.6 - speed*.25)});
       }
       for(const pc of pieces){
-        trapDrawPiece(art, x, y, pc.poly, pc.v.x, pc.v.y, pc.v.rot, edgeCol, edgeW, cutEdges(pc.poly), flash);
+        if(t < .06){ctx.save(); ctx.globalAlpha = 1;}
+        drawPaperShard(art, x, y, pc.poly, pc.f, {s, edges:cutEdges(pc.poly), edge:"fiber", onTop:eye});
+        if(t < .06) ctx.restore();
       }
-      // Chips knocked off at the contact, flying with the swing.
-      ctx.fillStyle = cube.body || trapMain();
-      for(let i=0;i<9;i++){
-        const a = Math.atan2(ty, tx) + (trapHash(i*4.7) - .5)*1.2;
-        const sp = speed*(.35 + .55*trapHash(i*2.9));
-        const cx1 = hx + Math.cos(a)*sp*T, cy1 = hy + Math.sin(a)*sp*T + .5*1500*s*T*T;
-        if(cy1 > floorY) continue;
-        const sz = (1.5 + trapHash(i*6.1)*2.5)*s;
-        ctx.save();
-        ctx.translate(x + cx1, y + cy1);
-        ctx.rotate(T*14*(trapHash(i) - .5));
-        ctx.globalAlpha = fadeOut*(1 - Math.min(1, T*1.4));
-        ctx.fillRect(-sz/2, -sz/2, sz, sz);
-        ctx.restore();
+      // paper chips knocked off at the contact, carried by the swing
+      const body = cube?.body || "#111111";
+      for(let i=0;i<8;i++){
+        const a = Math.atan2(ty, tx) + (trapHash(i*4.7) - .5)*1.3;
+        const sp = speed*(.3 + .5*trapHash(i*2.9));
+        const f = paperFlutter(40 + i, T, Math.cos(a)*sp, Math.sin(a)*sp, s);
+        ctx.globalAlpha = fadeOut*(1 - Math.min(1, T*1.1));
+        drawPaperScrap(x + hx + f.dx, y + hy + f.dy, (1.5 + trapHash(i*6.1)*2.2)*s, f.rot*3, f.flip, body);
       }
       ctx.restore();
       return;
@@ -21478,34 +21534,25 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx + (Math.random()-.5)*22*s, sy + (Math.random()-.5)*18*s);ctx.stroke();
       }
     } else if(deathType === "scanner"){
-      // SCANNER_DEATH_V2: the scan line reads the cube top to bottom and deletes it slice by slice.
+      // SCANNER_DEATH_V3 (paper shredder): the scan line reads the sheet top to bottom and shreds
+      // what it has read into strips, which peel away and float down. Below the line it is whole.
       const fade = ctx.globalAlpha;
       const main = trapMain(), accent = trapAccent();
       const rad = Math.max(7*s, cube.radius*s);
       const scanY = y + h*easeOutCubic(clamp01(t/.5));
-      const eyeCY = Math.min(y + h - 12*s, y + Math.min(h*.48, normalH*.50*s) - 1.1*s);
-      // Not scanned yet: the solid cube below the line.
-      if(scanY < y + h){
-        ctx.save();
-        ctx.beginPath();ctx.rect(x - 30*s, scanY, w + 60*s, y + h - scanY + 30*s);ctx.clip();
-        ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-        roundRect(ctx, x, y, w, h, rad);ctx.fill();
-        strokeCustomCubeOutline(ctx, x, y, w, h, rad, s, cube);
-        if(eyeCY > scanY) drawDeathEyeAt(cx, eyeCY, s, t*.5, eyeTone);
-        ctx.restore();
-      }
-      // Scanned: horizontal slices slide out sideways and vanish.
-      const slices = Math.max(6, Math.min(16, Math.round(h/(7*s))));
-      const sliceH = h/slices;
-      ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-      for(let i=0;i<slices;i++){
-        const sy = y + i*sliceH;
-        if(sy + sliceH > scanY) break;
-        const age = clamp01((scanY - (sy + sliceH)) / (h*.5) + Math.max(0, t - .5)*1.6);
-        const side = i % 2 ? 1 : -1;
-        const off = easeOutCubic(age)*(16 + (i % 3)*12)*s*side;
-        ctx.globalAlpha = fade*(1 - age);
-        ctx.fillRect(x + off + w*age*.18, sy + sliceH*.12, w*(1 - age*.36), sliceH*(1 - age*.55));
+      const key = deathPlayerSnapshot || deathCulprit || {scanner:1};
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 0);
+      const eyeYl = trapCubeEyeY(h, s, normalH);
+      const eye = () => drawDyingPlayerEye(ctx, w/2, eyeYl, s, eyeTone, t*.8, 1.2);
+      const sl = scanY - y;
+      if(sl < h - .5) drawPaperShard(art, x, y, [[0,sl],[w,sl],[w,h],[0,h]], {}, {s, onTop:eye});
+      const n = 6, sw = w/n, D = deathDuration(deathType);
+      for(let i=0;i<n;i++){
+        if(sl < 1) break;
+        const T = Math.max(0, t*D - .12 - ((i*7) % n)*.035);
+        const f = paperFlutter(60 + i, T, (i - (n - 1)/2)*18*s, -15*s, s, h);
+        const strip = [[i*sw,0],[(i + 1)*sw,0],[(i + 1)*sw,sl],[i*sw,sl]];
+        drawPaperShard(art, x, y, strip, f, {s, edges:[[i*sw,0,i*sw,sl],[(i + 1)*sw,0,(i + 1)*sw,sl]], edge:"clean", onTop:eye});
       }
       // Ghost outline where the cube was measured.
       ctx.globalAlpha = fade*.5*(1 - t);
@@ -21537,98 +21584,55 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
       return;
     } else if(deathType === "saw" && deathCulprit?.type === "orbitSaw" && Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y)){
-      // ORBIT_SAW_DEATH_V2 (paper tear): the blade rips the sheet along its path with a jagged,
-      // fibrous tear plus a branching side tear. Torn edges show pale paper fibres. The pieces
-      // flutter down like paper (drag, sway, slow spin) and small scraps drift away.
+      // ORBIT_SAW_DEATH_V3 (paper tear): the blade rips the sheet along its path — a jagged tear with
+      // white fibres, and a side tear that starts but never finishes, like real paper. The halves
+      // part, then float down (drag, sway, turning over); paper scraps whirl off the blade.
       ctx.globalAlpha = 1;
       const key = deathPlayerSnapshot || deathCulprit;
-      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 1.22, 1.1);
-      const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 0);
       const imp = worldToScreen(deathImpact.x, deathImpact.y);
       let dxs = (x + w/2) - imp.x, dys = (y + h/2) - imp.y;
-      const dl = Math.hypot(dxs, dys) || 1; dxs /= dl; dys /= dl;     // tear runs from the saw through the sheet
-      const pxs = -dys, pys = dxs;                                    // pieces part sideways from the tear
-      const L = (w + h)*1.2;
-      const lcx = w/2, lcy = h/2;
-      // Jagged tear line in cube-local px (deterministic).
+      const dl = Math.hypot(dxs, dys) || 1; dxs /= dl; dys /= dl;
+      const pxs = -dys, pys = dxs;
+      const L = (w + h)*1.2, lcx = w/2, lcy = h/2;
       const tear = [];
       for(let i=0;i<=16;i++){
         const u = i/16*2 - 1;
         const amp = (trapHash(i*7.3 + 1.1) - .5)*Math.min(w, h)*.16 + (i % 2 ? 1 : -1)*Math.min(w, h)*.03;
         tear.push([lcx + dxs*u*L*.5 + pxs*amp, lcy + dys*u*L*.5 + pys*amp]);
       }
-      const far = (sgn) => [[tear[16][0] + pxs*L*sgn, tear[16][1] + pys*L*sgn], [tear[0][0] + pxs*L*sgn, tear[0][1] + pys*L*sgn]];
-      const polyA = tear.concat(far(1)), polyB = tear.concat(far(-1));
-      // Branch tear splitting piece B in two, starting near the middle of the main tear.
+      const far = (sg) => [[tear[16][0] + pxs*L*sg, tear[16][1] + pys*L*sg], [tear[0][0] + pxs*L*sg, tear[0][1] + pys*L*sg]];
+      const toRect = (poly) => {let q = poly; q = trapClipPoly(q, -1, 0, 0); q = trapClipPoly(q, 1, 0, w); q = trapClipPoly(q, 0, -1, 0); q = trapClipPoly(q, 0, 1, h); return q;};
+      const polyA = toRect(tear.concat(far(1))), polyB = toRect(tear.concat(far(-1)));
+      const segs = (pts, upto=1) => {const out = [], n = Math.floor((pts.length - 1)*upto); for(let i=0;i<n;i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]]); return out;};
+      const tearEdges = segs(tear);
+      // the side tear into piece B, starting near the middle, stopping part-way
       const br0 = tear[8 + Math.floor(trapHash(3.3)*3)];
       const bdx = dxs*.4 - pxs*.92, bdy = dys*.4 - pys*.92;
       const branch = [br0];
-      for(let i=1;i<=7;i++){
-        const u = i/7*L*.6;
-        const amp = (trapHash(i*5.9 + 4) - .5)*Math.min(w, h)*.12;
+      for(let i=1;i<=6;i++){
+        const u = i/6*Math.min(w, h)*.45, amp = (trapHash(i*5.9 + 4) - .5)*Math.min(w, h)*.1;
         branch.push([br0[0] + bdx*u - bdy*amp, br0[1] + bdy*u + bdx*amp]);
       }
-      const T = t;
-      const sep = easeOutCubic(clamp01(T/.25))*8*s + T*22*s;
-      const fall = T*T*90*s;
-      const sway = (k) => Math.sin(T*7 + k*2.1)*6*s*T;
-      const fibre = (pts) => {
-        // pale fibres along a torn edge, with tiny whiskers
-        ctx.lineCap = "round";
-        ctx.strokeStyle = "rgba(255,252,244,.85)";
-        ctx.lineWidth = Math.max(.8, 1.3*s);
-        ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
-        ctx.lineWidth = Math.max(.5, .6*s);
-        ctx.beginPath();
-        for(let i=1;i<pts.length;i++){
-          const q = pts[i];
-          const a = trapHash(i*9.7)*Math.PI*2;
-          ctx.moveTo(q[0], q[1]); ctx.lineTo(q[0] + Math.cos(a)*2.2*s, q[1] + Math.sin(a)*2.2*s);
-        }
-        ctx.stroke();
-      };
-      const piece = (poly, dx, dy, rot, edges) => {
-        let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
-        ctx.save();
-        ctx.translate(x + mx + dx, y + my + dy);
-        ctx.rotate(rot);
-        ctx.translate(-mx, -my);
-        ctx.beginPath(); poly.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
-        ctx.clip();
-        ctx.drawImage(art, 0, 0);
-        for(const e of edges) fibre(e);
-        ctx.restore();
-      };
-      // Piece A (one side of the tear).
-      piece(polyA, pxs*sep + sway(0), fall*.8, T*.5 + Math.sin(T*5)*.12, [tear]);
-      // Piece B split by the branch into B1/B2, clipped twice.
-      const sideB = (sgn) => {
-        const bfar = [[branch[7][0] + (bdx*0 + pxs*0) + dxs*L*sgn, branch[7][1] + dys*L*sgn], [br0[0] + dxs*L*sgn, br0[1] + dys*L*sgn]];
-        return branch.concat(bfar);
-      };
-      ctx.save();
-      ctx.translate(-pxs*sep*.6 + sway(1), fall);
-      ctx.beginPath(); polyB.forEach((q, i) => i ? ctx.lineTo(x + q[0], y + q[1]) : ctx.moveTo(x + q[0], y + q[1])); ctx.closePath();
-      ctx.clip();
-      piece(sideB(1), -pxs*sep*.5 + dxs*sep*.5, fall*.2, -T*.7, [tear, branch]);
-      piece(sideB(-1), -pxs*sep*.3 - dxs*sep*.6, fall*.35, T*.9 + Math.sin(T*6)*.15, [tear, branch]);
-      ctx.restore();
-      // Scraps of paper drifting off the tear.
-      if(!fx.burst && deathCulprit){fx.burst = true; trapSparkBurst(deathCulprit, p.x + p.w/2, p.y + p.h/2, 14, "metal", .9, -dxs, -dys);}
+      const T = deathTimer;
+      const part = easeOutCubic(clamp01(T/.18))*7*s;
+      const TA = Math.max(0, T - .1);
+      const fA = paperFlutter(1, TA, pxs*55*s, -25*s, s, h*.55);
+      const fB = paperFlutter(6, TA, -pxs*45*s, -12*s, s, h*.55);
+      const eyeY = trapCubeEyeY(h, s, normalH);
+      const eye = () => drawDyingPlayerEye(ctx, w/2, eyeY, s, eyeTone, t, 1.2);
+      const growBranch = clamp01(T/.3);
+      if(polyB.length >= 3) drawPaperShard(art, x, y, polyB, {dx:-pxs*part + fB.dx, dy:-pys*part + fB.dy, rot:fB.rot, flip:TA > 0 ? fB.flip : 1}, {s, edges:tearEdges.concat(segs(branch, growBranch)), edge:"fiber", onTop:eye});
+      if(polyA.length >= 3) drawPaperShard(art, x, y, polyA, {dx:pxs*part + fA.dx, dy:pys*part + fA.dy, rot:fA.rot, flip:TA > 0 ? fA.flip : 1}, {s, edges:tearEdges, edge:"fiber", onTop:eye});
+      const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
+      // paper scraps whirled off the blade
       const body = cube?.body || "#111111";
-      for(let i=0;i<10;i++){
-        const a = Math.atan2(pys, pxs)*(i % 2 ? 1 : -1) + (trapHash(i*4.4) - .5)*1.6;
-        const d = (10 + trapHash(i*2.2)*36)*s*easeOutCubic(T);
-        const sx = x + w/2 + Math.cos(a)*d + Math.sin(T*8 + i)*4*s, sy = y + h/2 + Math.sin(a)*d + T*T*60*s;
-        ctx.save();
-        ctx.translate(sx, sy);
-        ctx.rotate(T*6*(trapHash(i*1.3) - .5) + Math.sin(T*9 + i)*.4);
-        ctx.globalAlpha = 1 - Math.max(0, T - .5)*2;
-        const z = (1.8 + trapHash(i*7.7)*2.8)*s;
-        ctx.fillStyle = body;
-        ctx.beginPath(); ctx.moveTo(-z, -z*.5); ctx.lineTo(z*.8, -z*.7); ctx.lineTo(z, z*.4); ctx.lineTo(-z*.4, z*.7); ctx.closePath(); ctx.fill();
-        ctx.strokeStyle = "rgba(255,252,244,.7)"; ctx.lineWidth = Math.max(.5, .6*s); ctx.stroke();
-        ctx.restore();
+      for(let i=0;i<9;i++){
+        const a = Math.atan2(pys, pxs)*(i % 2 ? 1 : -1) + (trapHash(i*4.4) - .5)*1.8;
+        const sp = (60 + trapHash(i*2.2)*90)*s;
+        const f = paperFlutter(10 + i, T, Math.cos(a)*sp, Math.sin(a)*sp - 30*s, s);
+        ctx.globalAlpha = 1 - Math.max(0, t - .6)*2.5;
+        drawPaperScrap(x + w/2 + f.dx, y + h/2 + f.dy, (1.6 + trapHash(i*7.7)*2.4)*s, f.rot*3, f.flip, body);
       }
       ctx.restore();
       return;
