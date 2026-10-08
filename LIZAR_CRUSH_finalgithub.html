@@ -17324,22 +17324,40 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const main = trapMain();
     const seed = st.seed + (shooter ? 0 : 50);
     const live = st.active ? 1 : 0;
-    let open, eye, shakeAmt, red = 0, kick = 0, gulp = 0, mouthHeat;
+    let open, eye, shakeAmt, red = 0, kick = 0, gulp = 0, mouthHeat, lick = 0, tongueHeat = 0;
+    const off = st.active ? -1 : st.offFor;                 // seconds since the beam stopped
+    const win = (a, b) => off >= a && off < b ? (off - a)/(b - a) : -1;
     if(shooter){
-      open = st.active ? .9 + .08*Math.sin(time*38) : Math.max(st.charge*.38, st.heat*.1);
+      // Ending: the jaws snap shut (with a small bounce), then it licks its lips, satisfied.
+      const shut = win(0, .22), lk = win(.3, .85);
+      const closing = shut >= 0 ? .9*Math.pow(1 - shut, 2) + Math.sin(shut*Math.PI)*.06 : 0;
+      lick = lk >= 0 ? Math.sin(lk*Math.PI) : 0;
+      open = st.active ? .9 + .08*Math.sin(time*38) : Math.max(st.charge*.38, closing, lick*.16);
+      tongueHeat = Math.max(st.charge, live, st.heat*.5);
       kick = (-st.fireKick*5 + st.offKick*2)*s;
       shakeAmt = st.charge*1.4 + live*.5;
       mouthHeat = Math.max(live, st.charge, st.heat*.6);
       const focus = Math.max(st.charge, live);
-      eye = {open:(.66 + .16*focus)*(1 - creatureBlink(seed)*(1 - focus)), slant:.25 + .6*focus, pupil:.64 - .36*focus, lookX:.95, glow:focus*.9};
+      eye = {open:(.66 + .16*focus)*(1 - creatureBlink(seed)*(1 - focus)), slant:.25 + .6*focus, pupil:.64 - .36*focus, lookX:.95, glow:Math.max(focus*.9, st.heat*.3)};
+      if(lick > 0) eye = {open:.5, squint:.45*lick, slant:.1, pupil:.6, lookX:.6, lookY:-.2, glow:st.heat*.3};
     } else {
       red = st.active ? Math.min(1, .45 + st.onFor*1.6) : st.heat*.85;
-      open = st.active ? .78 + .1*Math.sin(time*24) : st.charge*.25;
-      gulp = st.active ? Math.max(0, Math.sin(time*13)) : 0;
+      // Ending: swallows the last of the beam (.16s), snaps shut with a big gulp, then coughs smoke.
+      const tail = win(0, .16), shut = win(.16, .3), gl = win(.16, .55), cough = win(.58, .8);
+      const closing = tail >= 0 ? .8 : (shut >= 0 ? .8*Math.pow(1 - shut, 2) : 0);
+      const coughOpen = cough >= 0 ? .42*Math.sin(cough*Math.PI) : 0;
+      open = st.active ? .78 + .1*Math.sin(time*24) : Math.max(st.charge*.25, closing, coughOpen);
+      gulp = st.active ? Math.max(0, Math.sin(time*13)) : (gl >= 0 ? Math.sin(gl*Math.PI)*1.8 : 0);
+      tongueHeat = st.active ? 1 : st.heat*.7;
       shakeAmt = st.charge*1.1 + live*1.7 + st.heat*.35;
       mouthHeat = st.active ? 1 : st.heat*.5;
       if(st.active) eye = {open:.74 + .08*Math.sin(time*19), squint:.42, slant:-.3, pupil:.3, lookX:.25, red, pain:1, glow:.95, glowRed:true};
       else if(st.charge > 0) eye = {open:1, slant:-.6*st.charge, pupil:.6 - .38*st.charge, lookX:.95, lookY:-.1*st.charge};
+      else if(off >= 0 && off < .55) eye = {open:1, slant:-.2, pupil:.22, lookX:.5, lookY:-.3, red:red*.8, glow:.6, glowRed:true};   // gulp: wide-eyed
+      else if(off >= .55 && off < 1.5){                                                                                        // dizzy, cooling
+        const k = 1 - (off - .55)/.95;
+        eye = {open:.62, squint:.3, slant:-.35, pupil:.5, lookX:Math.cos(time*11)*.55*k, lookY:Math.sin(time*11)*.45*k, red:red*.7, pain:.7*k, glow:st.heat*.5, glowRed:true};
+      }
       else eye = {open:(.85 - .2*st.heat)*(1 - creatureBlink(seed)), slant:-.15 - .25*st.heat, squint:.25*st.heat, pupil:.55, lookX:.75, red:red*.7, pain:st.heat*.6, glow:st.heat*.5, glowRed:true};
     }
     // Skin colour: the shop trap colour, scorched toward red on the receiver.
@@ -17445,23 +17463,66 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.lineTo(bx - Math.cos(a + 1.57)*3*s, by - Math.sin(a + 1.57)*3*s);
       ctx.closePath(); ctx.fill();
     }
-    // Throat / mouth cavity, lit by the heat inside.
-    const cavR = Math.max(1.2*s, open*13*s);
-    ctx.fillStyle = "#170404";
-    ctx.beginPath(); ctx.ellipse(6*s, 0, 15*s, cavR, 0, 0, Math.PI*2); ctx.fill();
-    if(mouthHeat > .02 && open > .03){
-      const g = ctx.createRadialGradient(4*s, 0, 0, 4*s, 0, 15*s);
-      if(shooter){g.addColorStop(0, `rgba(255,250,215,${mouthHeat})`); g.addColorStop(.35, `rgba(255,170,40,${mouthHeat*.9})`);}
-      else {g.addColorStop(0, `rgba(255,225,205,${mouthHeat})`); g.addColorStop(.35, `rgba(255,40,20,${mouthHeat*.9})`);}
-      g.addColorStop(1, "rgba(90,0,0,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.ellipse(6*s, 0, 15*s, cavR, 0, 0, Math.PI*2); ctx.fill();
+    // Inside of the mouth: gums darkening into the throat (only between the jaws, nothing pokes
+    // out), the heat glowing deep in the throat, and a tongue lying on the lower jaw.
+    const rotP = (px, py, ang) => {const dx = px*s - hingeX, c = Math.cos(ang), sn = Math.sin(ang); return [hingeX + dx*c - py*s*sn, dx*sn + py*s*c];};
+    if(open > .02){
+      const u0 = rotP(-8, -1, upA), u1 = rotP(20.5, -1, upA), l0 = rotP(-8, 1, loA), l1 = rotP(17.5, 1, loA);
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(u0[0], u0[1]); ctx.lineTo(u1[0], u1[1]);
+      ctx.quadraticCurveTo(13*s, 0, l1[0], l1[1]);
+      ctx.lineTo(l0[0], l0[1]);
+      ctx.closePath();
+      const gum = ctx.createLinearGradient(hingeX, 0, 20*s, 0);
+      gum.addColorStop(0, "#1e0507");
+      gum.addColorStop(.55, "#5a1219");
+      gum.addColorStop(1, "#8a2430");
+      ctx.fillStyle = gum;
+      ctx.fill();
+      ctx.clip();
+      if(mouthHeat > .02){
+        const g = ctx.createRadialGradient(hingeX + 3*s, 0, 0, hingeX + 3*s, 0, 18*s);
+        if(shooter){g.addColorStop(0, `rgba(255,246,200,${mouthHeat})`); g.addColorStop(.3, `rgba(255,160,40,${mouthHeat*.85})`);}
+        else {g.addColorStop(0, `rgba(255,215,190,${mouthHeat*.9})`); g.addColorStop(.3, `rgba(255,40,20,${mouthHeat*.8})`);}
+        g.addColorStop(1, "rgba(80,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(-30*s, -30*s, 60*s, 60*s);
+      }
+      ctx.restore();
     }
-    // Lower jaw.
+    // Lower jaw with the tongue.
     ctx.save();
     ctx.translate(hingeX, 0); ctx.rotate(loA); ctx.translate(-hingeX, 0);
     ctx.fillStyle = skin; lowerPath(); ctx.fill();
     shade(lowerPath, false);
+    {
+      const hump = 1.35*(1 - live*.4)*(.7 + .3*Math.min(1, open*1.5));
+      const tx = 15*s, ty = -1.6*s;
+      const wag = 0;
+      ctx.beginPath();
+      ctx.moveTo(-7*s, 1.3*s);
+      ctx.bezierCurveTo(-3*s, -4.6*s*hump, 5*s, -4.4*s*hump, tx - 2.5*s, ty - 1.4*s + wag);
+      ctx.quadraticCurveTo(tx + 1.8*s, ty + wag*.5, tx - .8*s, ty + 2.1*s + wag*.3);
+      ctx.bezierCurveTo(6*s, 2*s, 0, 2.1*s, -7*s, 1.3*s);
+      ctx.closePath();
+      const tc = ctx.createLinearGradient(-7*s, 0, tx, 0);
+      const hotTongue = shooter ? tongueHeat : 0, redTongue = shooter ? 0 : tongueHeat;
+      tc.addColorStop(0, "#7c2233");
+      tc.addColorStop(.6, redTongue > .05 ? `rgb(${200 + 55*redTongue},${70 - 30*redTongue},${80 - 50*redTongue})` : "#c84a60");
+      tc.addColorStop(1, hotTongue > .05 ? `rgb(255,${Math.round(150 + 90*hotTongue)},${Math.round(90 + 80*hotTongue)})` : (redTongue > .05 ? "#ff5a3a" : "#e0687c"));
+      ctx.fillStyle = tc;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(60,0,10,.45)";
+      ctx.lineWidth = Math.max(.5, .6*s);
+      ctx.stroke();
+      // centre groove and a wet highlight
+      ctx.strokeStyle = "rgba(90,10,25,.55)";
+      ctx.beginPath(); ctx.moveTo(-3*s, -.6*s*hump); ctx.quadraticCurveTo(4*s, -1.8*s*hump, tx - 4*s, ty + .2*s + wag*.6); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,235,240,.55)";
+      ctx.lineWidth = Math.max(.5, .7*s);
+      ctx.beginPath(); ctx.moveTo(-1*s, -2.6*s*hump); ctx.quadraticCurveTo(3*s, -3.4*s*hump, 7*s, -2.6*s*hump); ctx.stroke();
+    }
     teeth(false);
     ctx.restore();
     // Upper jaw with the eye under the brow.
@@ -17474,6 +17535,20 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.beginPath(); ctx.ellipse(17*s, -7*s, 1.5*s, .8*s, -.45, 0, Math.PI*2); ctx.fill();   // nostril
     drawCreatureEye(ctx, -3*s, -11*s, 6.8*s, eye);
     ctx.restore();
+    if(lick > .02){
+      // The tongue slides out of the corner of the mouth and licks up over the snout.
+      const ex = (19 + lick*8)*s, ey = (-2 - lick*7)*s + Math.sin(time*20)*.8*s*lick;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = "#7c2233";
+      ctx.lineWidth = 4.4*s;
+      ctx.beginPath(); ctx.moveTo(15*s, .5*s); ctx.quadraticCurveTo((24 + lick*5)*s, 2*s, ex, ey); ctx.stroke();
+      ctx.strokeStyle = "#e0687c";
+      ctx.lineWidth = 3.4*s;
+      ctx.beginPath(); ctx.moveTo(15*s, .5*s); ctx.quadraticCurveTo((24 + lick*5)*s, 2*s, ex, ey); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,235,240,.6)";
+      ctx.lineWidth = .8*s;
+      ctx.beginPath(); ctx.moveTo(18*s, 0); ctx.quadraticCurveTo((23 + lick*5)*s, .6*s, ex - .8*s, ey + 1*s); ctx.stroke();
+    }
     // Shooter: fire sputtering from the mouth while it charges, roaring while it fires.
     const roar = shooter ? (st.active ? 1 : Math.max(st.charge*.7, st.heat*.3)) : 0;
     if(roar > .03){
@@ -17524,7 +17599,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const heat = active ? 1 : (disabled ? 0 : Math.max(0, 1 - offFor/1.4));
     const tick = Math.floor(time*30);
     const seed = (o.phase || 0)*9.1 + o.y*.013;
-    const est = {active, charge, fireKick, offKick, heat, onFor:active ? info.local : 0, seed};
+    const est = {active, charge, fireKick, offKick, heat, onFor:active ? info.local : 0, offFor:disabled ? 99 : offFor, seed};
     ctx.save();
     ctx.lineCap = "round";
     if(active){
@@ -17532,6 +17607,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const front = fromX + (toX - fromX)*enter;
       const wob = 1 + .06*Math.sin(time*47 + seed);
       const bh = core*(1 + fireKick*.6)*wob;
+      beamBody(fromX, front, bh);
+    }
+    function beamBody(fromX, front, bh){
       ctx.strokeStyle = main;
       ctx.lineWidth = bh;
       ctx.beginPath(); ctx.moveTo(fromX, p1.y); ctx.lineTo(front, p1.y); ctx.stroke();
@@ -17556,6 +17634,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.globalAlpha = 1;
       const pts = trapBolt(fromX, p1.y, front, p1.y, bh*.45, 18, seed + tick*2.3);
       trapStrokePts(pts, Math.max(.7, bh*.12), H[0], .8);
+    }
+    if(active){
+      const enter = easeOutCubic(info.onT);
+      const front = fromX + (toX - fromX)*enter;
+      const bh = core*(1 + fireKick*.6)*(1 + .06*Math.sin(time*47 + seed));
       if(heavy){
         ctx.globalAlpha = .22;
         ctx.strokeStyle = H[2];
@@ -17582,22 +17665,21 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
     } else {
       if(!editorMode) prismSmokeFor(o).meetBurst = false;
-      const melt = info.meltT;
-      if(!disabled && melt < 1){
-        const pieces = 12;
-        for(let i=0;i<pieces;i++){
-          const a = i/pieces, b = (i + .7 - melt*.4)/pieces;
-          ctx.globalAlpha = (1 - melt)*(.9 - (i % 3)*.15);
-          ctx.strokeStyle = i % 2 ? H[1] : main;
-          ctx.lineWidth = Math.max(1, core*(.7 - melt*.4));
-          const dy = Math.sin(i*2.1 + time*12)*melt*4*s;
-          ctx.beginPath(); ctx.moveTo(innerL + (innerR - innerL)*a, p1.y + dy); ctx.lineTo(innerL + (innerR - innerL)*b, p1.y - dy*.5); ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
+      // Ending: the shooter has shut its mouth; the tail of the beam races across and the receiver
+      // slurps the last of it (purely visual, ~0.16s; the hit is already off).
+      if(!disabled && offFor < .16){
+        const k = offFor/.16;
+        const tail = fromX + (toX - fromX)*k*k;
+        beamBody(tail, toX, core*(1 - .55*k));
+      }
+      if(!editorMode && !disabled && offFor >= .58 && offFor < .72){
+        // the receiver coughs out a puff of smoke
+        const eatWX = dir > 0 ? bx + bw - 22 : bx + 22;
+        prismSmokeEmitRate(o, eatWX, o.y - 2, 0, 30*(heavy ? 1 : .5), .9);
       }
       ctx.setLineDash([10*s, 8*s]);
       const flick = charge > 0 ? (Math.floor(time*(10 + charge*22)) % 2 ? 1 : .35) : 1;
-      ctx.globalAlpha = charge > 0 ? (.35 + .55*charge)*flick : .5;
+      ctx.globalAlpha = (charge > 0 ? (.35 + .55*charge)*flick : .5)*(disabled ? 1 : clamp01((offFor - .16)/.2));
       ctx.strokeStyle = charge > 0 ? H[2] : rgbaHex(trapIdle(), .9);
       ctx.lineWidth = Math.max(1.5*s, core*.36*(1 + charge*.6));
       ctx.beginPath(); ctx.moveTo(innerL, p1.y); ctx.lineTo(innerR, p1.y); ctx.stroke();
