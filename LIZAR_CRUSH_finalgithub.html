@@ -12681,7 +12681,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(type === "ink") return 1.95;
     if(type === "electric") return .82;
     if(type === "laser") return .72;
-    if(type === "prismPulse") return .72;
+    if(type === "prismPulse") return 1.15;
     if(type === "scanner") return .95;
     if(type === "saw") return .68;
     if(type === "gate") return .78;
@@ -16405,7 +16405,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         for(const seg of segs){
           if(capsuleRectCollide(seg.a, seg.b, Math.max(3, c.beamThickness*.42), p)){
             const impactY = Math.max(cur.y + 4, Math.min((seg.a.y + seg.b.y)/2, cur.y + cur.h - 4));
-            return startDeath("The prism pulse crossed your path.", "prismPulse", {worldY:impactY}, o);
+            return startDeath("The prism pulse crossed your path.", "prismPulse", {worldY:impactY, ang:Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x)}, o);
           }
         }
       }
@@ -18310,20 +18310,108 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   }
 
 
-  // Soft smoke puff, rendered once and reused (cheap on phones).
-  let prismSmokeSprite = null;
-  function getPrismSmokeSprite(){
-    if(prismSmokeSprite) return prismSmokeSprite;
-    const c = document.createElement("canvas");
-    c.width = c.height = 64;
-    const g = c.getContext("2d");
-    const gr = g.createRadialGradient(32, 32, 2, 32, 32, 32);
-    gr.addColorStop(0, "rgba(88,82,76,.62)");
-    gr.addColorStop(.5, "rgba(88,82,76,.26)");
-    gr.addColorStop(1, "rgba(88,82,76,0)");
-    g.fillStyle = gr;
-    g.fillRect(0, 0, 64, 64);
-    return prismSmokeSprite = c;
+  // PRISM_SMOKE_V1: physical particle smoke for hot surfaces.
+  // Each puff lives in world space with its own velocity: buoyancy lifts it, air drag slows it,
+  // a turbulence field makes it swirl, and it grows, rotates, lightens and thins as it cools.
+  // Puffs use cloud-shaped sprites rendered once at boot, so a frame only costs drawImage calls.
+  const prismSmokeSprites = [];
+  function prismSmokeSprite(i){
+    if(!prismSmokeSprites.length){
+      for(let v=0; v<6; v++){
+        const c = document.createElement("canvas");
+        c.width = c.height = 96;
+        const g = c.getContext("2d");
+        let seed = v*977 + 131;
+        const rnd = () => {seed = (seed*16807) % 2147483647; return seed/2147483647;};
+        // v 0-2: young, warm and dense. v 3-5: old, cool and grey.
+        const shade = v < 3 ? "58,50,44" : "120,116,112";
+        for(let k=0;k<26;k++){
+          const a = rnd()*Math.PI*2, d = Math.pow(rnd(), .7)*24;
+          const x = 48 + Math.cos(a)*d, y = 48 + Math.sin(a)*d*.85;
+          const r = 10 + rnd()*20;
+          const gr = g.createRadialGradient(x, y, 0, x, y, r);
+          gr.addColorStop(0, `rgba(${shade},${.14 + rnd()*.12})`);
+          gr.addColorStop(.6, `rgba(${shade},${.05 + rnd()*.04})`);
+          gr.addColorStop(1, `rgba(${shade},0)`);
+          g.fillStyle = gr;
+          g.beginPath();g.arc(x, y, r, 0, Math.PI*2);g.fill();
+        }
+        // Soften the outer edge so no puff ever shows a circle.
+        g.globalCompositeOperation = "destination-in";
+        const m = g.createRadialGradient(48, 48, 18, 48, 48, 47);
+        m.addColorStop(0, "rgba(0,0,0,1)");
+        m.addColorStop(1, "rgba(0,0,0,0)");
+        g.fillStyle = m;
+        g.fillRect(0, 0, 96, 96);
+        prismSmokeSprites.push(c);
+      }
+    }
+    return prismSmokeSprites[i % prismSmokeSprites.length];
+  }
+  const prismSmokeState = new WeakMap();
+  function prismSmokeFor(o){
+    let st = prismSmokeState.get(o);
+    if(!st){st = {parts:[], last:time}; prismSmokeState.set(o, st);}
+    return st;
+  }
+  const PRISM_SMOKE_MAX = 90;
+  // Emit puffs at a world point. heat 0..1 makes them darker, denser and faster.
+  function prismSmokeEmit(o, wx, wy, dirX, count, heat=1){
+    const st = prismSmokeFor(o);
+    for(let i=0;i<count && st.parts.length < PRISM_SMOKE_MAX;i++){
+      st.parts.push({
+        x:wx + (Math.random() - .5)*6, y:wy + (Math.random() - .5)*8,
+        vx:dirX*(18 + Math.random()*34) + (Math.random() - .5)*14,
+        vy:-(14 + Math.random()*26)*(.6 + heat*.6),
+        r:5 + Math.random()*4, age:0, life:1.7 + Math.random()*1.4,
+        rot:Math.random()*Math.PI*2, vr:(Math.random() - .5)*1.2,
+        sprite:Math.floor(Math.random()*3), seed:Math.random()*100, heat
+      });
+    }
+  }
+  // Step and draw one trap's smoke. Uses the game clock, so pausing or slow time also slows the smoke.
+  function prismSmokeUpdateDraw(o){
+    const st = prismSmokeFor(o);
+    let dt = time - st.last;
+    st.last = time;
+    if(!(dt > 0)) dt = 0;
+    if(dt > .1) dt = .1;
+    if(!st.parts.length) return;
+    const dragX = Math.pow(.32, dt), dragY = Math.pow(.62, dt);
+    ctx.save();
+    for(let i=st.parts.length - 1; i>=0; i--){
+      const p = st.parts[i];
+      p.age += dt;
+      if(p.age >= p.life){st.parts.splice(i, 1); continue;}
+      // Buoyancy (hot air rises), turbulence (swirl), drag, spread.
+      p.vy -= (34 + 30*p.heat*(1 - p.age/p.life))*dt;
+      p.vx += (Math.sin(p.y*.045 + time*1.7 + p.seed)*46 + Math.cos(p.x*.031 - time*1.15 + p.seed*.5)*28)*dt;
+      p.vy += Math.sin(p.x*.05 + time*2.1 + p.seed)*14*dt;
+      p.vx *= dragX; p.vy *= dragY;
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      p.r += (15 + p.r*.28)*dt;
+      p.rot += p.vr*dt;
+      const k = p.age/p.life;
+      const alpha = Math.min(1, p.age/.22)*Math.pow(1 - k, 1.5)*(.42 + .28*p.heat);
+      if(alpha <= .01) continue;
+      const sp = worldToScreen(p.x, p.y);
+      const size = p.r*2.7*sp.s;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(sp.x, sp.y);
+      ctx.rotate(p.rot);
+      // Young smoke is dark and warm; it turns into lighter grey as it ages.
+      ctx.drawImage(prismSmokeSprite(k < .35 ? p.sprite : p.sprite + 3), -size/2, -size/2, size, size);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  // Rate-based emission (puffs per second), independent of frame rate.
+  function prismSmokeEmitRate(o, wx, wy, dirX, rate, heat){
+    const dt = Math.min(.1, Math.max(0, time - prismSmokeFor(o).last));
+    const want = rate*dt;
+    const n = Math.floor(want) + (Math.random() < want - Math.floor(want) ? 1 : 0);
+    if(n > 0) prismSmokeEmit(o, wx, wy, dirX, n, heat);
   }
   function drawPrismPulse(o){
     const tl = prismPulseTimeline(o, state === "editor" ? time*.8 : time);
@@ -18397,45 +18485,64 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const crackleFrame = Math.floor(time*26);
     const drawThermalBeam = (a, b, width, alpha, seed=0) => {
       if(alpha <= .01) return;
+      // PRISM_PULSE_BEAM_V4: a solid energy cylinder. A gradient across the beam (charred edge ->
+      // red -> orange -> white-hot centre) gives it volume on light floors, and bright pulses race
+      // along it from the turret so it reads as raw power being pumped out. Visual only.
       const pa = worldToScreen(a.x, a.y);
       const pb = worldToScreen(b.x, b.y);
       const dx = pb.x - pa.x, dy = pb.y - pa.y;
       const len = Math.hypot(dx, dy);
       if(len < 1) return;
       const nx = -dy/len, ny = dx/len;
-      const w = Math.max(1.5, width*pa.s);
-      const flick = .9 + .1*Math.sin(time*37 + seed*2.3);
-      const line = (lw, color, al) => {
-        ctx.globalAlpha = alpha*al;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = lw;
-        ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
-      };
+      const w = Math.max(2, width*pa.s);
+      const wob = 1 + .07*Math.sin(time*43 + seed*2.3) + .05*Math.sin(time*71 + seed);
+      const hw = w*.78*wob;
       ctx.save();
+      ctx.lineCap = "butt";
+      // Tight outer heat.
+      ctx.globalAlpha = alpha*.14;
+      ctx.strokeStyle = hot.red;
+      ctx.lineWidth = hw*3.4;
+      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
+      // Volumetric body.
+      const g = ctx.createLinearGradient(pa.x + nx*hw, pa.y + ny*hw, pa.x - nx*hw, pa.y - ny*hw);
+      g.addColorStop(0, hot.dark);
+      g.addColorStop(.1, hot.red);
+      g.addColorStop(.28, hot.orange);
+      g.addColorStop(.42, hot.yellow);
+      g.addColorStop(.5, hot.white);
+      g.addColorStop(.58, hot.yellow);
+      g.addColorStop(.72, hot.orange);
+      g.addColorStop(.9, hot.red);
+      g.addColorStop(1, hot.dark);
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = g;
+      ctx.lineWidth = hw*2;
+      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
+      // Power pulses flowing out of the turret.
+      ctx.setLineDash([w*2.4, w*3.2]);
+      ctx.lineDashOffset = -time*620*pa.s - seed*37;
       ctx.lineCap = "round";
-      line(w*2.3, hot.orange, .16);          // tight heat glow only
-      line(w*1.34, hot.dark, 1);             // charred rim: contrast on light floors
-      line(w*1.12*flick, hot.red, 1);        // saturated burning body
-      line(w*.74, hot.orange, 1);
-      line(w*.46*flick, hot.yellow, 1);
-      line(Math.max(1.2, w*.2), hot.white, 1); // white-hot core
-      // Crackling plasma: two jagged filaments wrapping the core, re-rolled ~26 times a second.
-      const steps = Math.max(5, Math.min(26, Math.floor(len/(10*pa.s))));
-      for(let f=0; f<2; f++){
-        ctx.globalAlpha = alpha*(f ? .75 : .95);
-        ctx.strokeStyle = f ? hot.pale : hot.white;
-        ctx.lineWidth = Math.max(.8, w*(f ? .1 : .13));
-        ctx.beginPath();
-        for(let i=0;i<=steps;i++){
-          const t = i/steps;
-          const r = prismHash(seed*31.7 + f*97.3 + i*13.1 + crackleFrame*1.7) - .5;
-          const off = (i === 0 || i === steps) ? 0 : r*w*.95;
-          const x = pa.x + dx*t + nx*off, y = pa.y + dy*t + ny*off;
-          if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
+      ctx.strokeStyle = hot.white;
+      ctx.lineWidth = hw*.62;
+      ctx.globalAlpha = alpha*.7;
+      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();
+      ctx.setLineDash([]);
+      // One crackling filament riding the core.
+      const steps = Math.max(5, Math.min(24, Math.floor(len/(12*pa.s))));
+      ctx.globalAlpha = alpha*.9;
+      ctx.strokeStyle = hot.white;
+      ctx.lineWidth = Math.max(.8, w*.1);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      for(let i=0;i<=steps;i++){
+        const t = i/steps;
+        const off = (i === 0 || i === steps) ? 0 : (prismHash(seed*31.7 + i*13.1 + crackleFrame*1.7) - .5)*hw*1.3;
+        const x = pa.x + dx*t + nx*off, y = pa.y + dy*t + ny*off;
+        if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-      drawHeatWave(a,b,width*1.4,alpha*.22,seed);
+      ctx.stroke();
+      drawHeatWave(a,b,width*1.6,alpha*.2,seed);
       ctx.restore();
     };
     // Travelling tip: a jagged plasma drill pointed along the beam, never a round blob.
@@ -18614,13 +18721,24 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
     }
 
+    // Turret vents smoke as it cools, then all smoke for this trap is stepped and drawn
+    // here, under the beams, so the lasers always stay the brightest thing on screen.
+    if(!editorMode){
+      if(heavy && coreHeat > .05 && !tl.beams.some(b => b.active)) prismSmokeEmitRate(o, c.x, c.y - 14, 0, 9*coreHeat, coreHeat);
+      prismSmokeUpdateDraw(o);
+    }
+
     // Active sequential thermal traveling beams.
     for(const b of tl.beams){
       const visibleSegs = prismPulseSegmentsToLength(b.path, b.visible);
       if(!visibleSegs.length) continue;
       const alpha = editorMode ? Math.max(.20, b.alpha*.58) : b.alpha;
+      // Fire burst: the beam slams out fat and settles; on shutdown it thins as it retracts.
+      const sinceFire = tl.t - b.start;
+      const burst = !editorMode && sinceFire >= 0 && sinceFire < .2 ? 1 + .9*(1 - sinceFire/.2) : 1;
+      const thin = b.mode === "shutdown" ? Math.max(.25, b.alpha) : 1;
       for(const seg of visibleSegs){
-        drawThermalBeam(seg.a, seg.b, c.beamThickness, alpha, b.index + seg.len*.01);
+        drawThermalBeam(seg.a, seg.b, c.beamThickness*burst*thin, alpha, b.index + seg.len*.01);
         if(seg.bounce && b.mode !== "shutdown") drawDot(seg.b, Math.max(4.5, c.beamThickness*.46), hot.yellow, alpha*.72);
         // Embers peeling off the beam and rising.
         if(heavy && !editorMode && alpha > .3){
@@ -18684,108 +18802,156 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
           ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx - tx/tl2*9*ss, sy - ty/tl2*9*ss);ctx.stroke();
         }
       }
-      if(heavy){
-        const smoke = getPrismSmokeSprite();
-        const puffs = 8;
-        const amount = w.live ? .55 + .45*w.heat : Math.min(1, w.heat*1.6);
-        for(let k=0;k<puffs;k++){
-          const ph = (time*.38 + k/puffs + w.seed*.21) % 1;
-          const px = hp.x + side*(8 + ph*22)*ss + Math.sin(ph*4.5 + k*2.3)*7*ss;
-          const py = hp.y - 4*ss - ph*72*ss;
-          const pr = (7 + ph*20)*ss;
-          ctx.globalAlpha = amount*.45*(1 - ph)*Math.min(1, ph*5);
-          ctx.drawImage(smoke, px - pr, py - pr, pr*2, pr*2);
-        }
-      }
+      // Burning wall point pours out smoke (keeps smoking while it cools).
+      if(heavy) prismSmokeEmitRate(o, w.pt.x + side*3, w.pt.y, side, w.live ? 16 + 10*w.heat : 14*w.heat, w.heat);
       ctx.restore();
     }
 
-    // Core cools down with a short plume of smoke after the beams shut off.
-    if(heavy && !editorMode && coreHeat > .05 && !tl.beams.some(b => b.active)){
-      ctx.save();
-      for(let k=0;k<4;k++){
-        const ph = (time*.5 + k/4) % 1;
-        const pr = (9 + ph*22)*s;
-        ctx.globalAlpha = coreHeat*.6*(1 - ph)*Math.min(1, ph*5);
-        ctx.drawImage(getPrismSmokeSprite(), p.x + Math.sin(ph*4 + k)*7*s - pr, p.y - 14*s - ph*56*s - pr, pr*2, pr*2);
-      }
-      ctx.restore();
-    }
-    // Heat bloom around the core while it fires and cools.
-    if(!editorMode && coreHeat > .02){
-      ctx.save();
-      const R = (20 + 10*coreHeat)*s;
-      const g = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, R);
-      g.addColorStop(0, `rgba(255,120,20,${.25*coreHeat})`);
-      g.addColorStop(1, "rgba(255,47,23,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();ctx.arc(p.x, p.y, R, 0, Math.PI*2);ctx.fill();
-      ctx.restore();
-    }
 
-    // Prism core body: dark prism with a hot molten eye. Always solid and visible.
+    // PRISM_PULSE_DEVICE_V4: armoured multi-barrel laser turret. It never spins and never fades.
+    // One barrel per beam; each barrel kicks back when its beam fires and the whole turret jolts
+    // again when a beam shuts down. Visual only.
     const pulse = .5 + .5*Math.sin(time*9 + c.phase);
     const live = tl.beams.some(b => b.active);
-    // Recoil: every beam shoves the core back against its firing direction, then it settles.
     let kick = 0, recoilX = 0, recoilY = 0;
+    const barrelKick = [], fireFlash = [];
     for(const b of tl.beams){
+      if(b.mode === "disabled" || editorMode){barrelKick[b.index] = 0; fireFlash[b.index] = 0; continue;}
       const since = tl.t - b.start;
-      if(since >= 0 && since < .32){
-        const k = Math.pow(1 - since/.32, 2);
-        kick = Math.max(kick, k);
-        recoilX -= Math.cos(b.angle)*10*s*k;
-        recoilY -= Math.sin(b.angle)*10*s*k;
-      }
+      const k = since >= 0 && since < .34 ? Math.pow(1 - since/.34, 2) : 0;
+      const offStart = tl.shutdownStart + (c.beamCount - 1 - b.index)*c.shutdownTime;
+      const sinceOff = tl.t - offStart;
+      const ko = sinceOff >= 0 && sinceOff < .28 ? Math.pow(1 - sinceOff/.28, 2)*.7 : 0;
+      barrelKick[b.index] = k;
+      fireFlash[b.index] = since >= 0 && since < .2 ? 1 - since/.2 : 0;
+      kick = Math.max(kick, k, ko);
+      recoilX += Math.cos(b.angle)*s*(-11*k + 6*ko);
+      recoilY += Math.sin(b.angle)*s*(-11*k + 6*ko);
     }
-    // Strain shake while beams are pouring out of it.
-    const strain = editorMode ? 0 : (live ? .55 : 0) + kick*1.4;
-    const shakeX = (prismHash(crackleFrame*3.1 + c.phase) - .5)*3.2*s*strain;
-    const shakeY = (prismHash(crackleFrame*5.7 + c.phase + 9) - .5)*3.2*s*strain;
-    ctx.save();
-    ctx.translate(p.x + recoilX + shakeX, p.y + recoilY + shakeY);
-    const r = (17 + (live ? 2*pulse : 0) + kick*3 - charging*1.5)*s;
-    // Heavy mount plate: does not spin, so the trap always reads as a solid object.
-    ctx.fillStyle = "rgba(0,0,0,.16)";
-    roundRect(ctx, -r*1.05 + 2*s, -r*1.05 + 3*s, r*2.1, r*2.1, r*.42); ctx.fill();
-    ctx.fillStyle = main;
-    roundRect(ctx, -r*1.05, -r*1.05, r*2.1, r*2.1, r*.42); ctx.fill();
-    ctx.strokeStyle = live || kick > 0 ? hot.orange : rgbaHex(accent, .35);
-    ctx.lineWidth = Math.max(1.2, 1.8*s);
-    roundRect(ctx, -r*.86, -r*.86, r*1.72, r*1.72, r*.32); ctx.stroke();
-    // Charging facets close in around the core before firing.
-    if(!editorMode && (charging > 0 || kick > 0)){
-      const k = Math.max(charging, kick);
-      ctx.save();
-      ctx.rotate(-time*2.4);
-      ctx.globalAlpha = .25 + .6*k;
-      ctx.fillStyle = kick > 0 ? hot.yellow : hot.orange;
-      const fr = r*(2.3 - charging*.6 + kick*.5);
-      for(let i=0;i<3;i++){
-        ctx.rotate(Math.PI*2/3);
-        ctx.beginPath();ctx.moveTo(fr, 0);ctx.lineTo(fr + 6*s, -4*s);ctx.lineTo(fr + 6*s, 4*s);ctx.closePath();ctx.fill();
+    const strain = editorMode ? 0 : (live ? .6 : 0) + kick*1.6;
+    const shakeX = (prismHash(crackleFrame*3.1 + c.phase) - .5)*3.4*s*strain;
+    const shakeY = (prismHash(crackleFrame*5.7 + c.phase + 9) - .5)*3.4*s*strain;
+    const cx0 = p.x + recoilX + shakeX, cy0 = p.y + recoilY + shakeY;
+    const R = 19*s;
+    const octa = (rad) => {
+      ctx.beginPath();
+      for(let i=0;i<8;i++){
+        const a = Math.PI/8 + i*Math.PI/4;
+        const x = Math.cos(a)*rad, y = Math.sin(a)*rad;
+        if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
+      ctx.closePath();
+    };
+
+    ctx.save();
+    ctx.translate(cx0, cy0);
+    // Ground shadow.
+    ctx.save();
+    ctx.translate(2*s, 4*s);
+    ctx.fillStyle = "rgba(0,0,0,.18)";
+    octa(R*1.08);ctx.fill();
+    ctx.restore();
+
+    // Barrels under the body.
+    for(const b of tl.beams){
+      const heat = editorMode ? 0 : pointHeat(b, 0)[0];
+      const back = (barrelKick[b.index] || 0)*R*.38;
+      const x0 = R*.6 - back, x1 = R*1.95 - back, bw = R*.36;
+      ctx.save();
+      ctx.rotate(b.angle);
+      ctx.fillStyle = main;
+      roundRect(ctx, x0, -bw/2, x1 - x0, bw, bw*.22);ctx.fill();
+      // Cooling fins.
+      ctx.fillStyle = rgbaHex(accent, .22);
+      for(let f=0;f<3;f++) ctx.fillRect(x0 + (x1 - x0)*(.18 + f*.16), -bw/2, 1.4*s, bw);
+      // Barrel glows from the muzzle back as it heats.
+      if(heat > .02){
+        const hg = ctx.createLinearGradient(x0, 0, x1, 0);
+        hg.addColorStop(0, "rgba(255,47,23,0)");
+        hg.addColorStop(.55, `rgba(255,47,23,${.45*heat})`);
+        hg.addColorStop(1, `rgba(255,170,40,${.95*heat})`);
+        ctx.fillStyle = hg;
+        roundRect(ctx, x0, -bw/2, x1 - x0, bw, bw*.22);ctx.fill();
+      }
+      // Muzzle collar and bore.
+      ctx.fillStyle = heat > .25 ? hot.yellow : rgbaHex(accent, .55);
+      ctx.fillRect(x1 - bw*.32, -bw*.56, bw*.2, bw*1.12);
+      ctx.fillStyle = heat > .05 ? hot.white : "rgba(0,0,0,.55)";
+      ctx.beginPath();ctx.arc(x1, 0, bw*.2, 0, Math.PI*2);ctx.fill();
       ctx.restore();
     }
-    ctx.rotate((time*.45 + c.phase*.05) % (Math.PI*2));
+
+    // Armoured body.
+    ctx.fillStyle = main;
+    octa(R);ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, .28);
+    ctx.lineWidth = Math.max(1, 1.4*s);
+    octa(R*.78);ctx.stroke();
+    ctx.fillStyle = rgbaHex(accent, .55);
+    for(let i=0;i<4;i++){
+      const a = Math.PI/4 + i*Math.PI/2;
+      ctx.beginPath();ctx.arc(Math.cos(a)*R*.66, Math.sin(a)*R*.66, Math.max(1, 1.6*s), 0, Math.PI*2);ctx.fill();
+    }
+
+    // Lens: dull ember when idle, white-hot when charging or firing.
+    const lensK = editorMode ? .35 : Math.max(charging, live ? .72 + .28*pulse : 0, kick);
     ctx.fillStyle = hot.dark;
-    ctx.beginPath();
-    ctx.moveTo(0,-r*.95); ctx.lineTo(r*.92,0); ctx.lineTo(0,r*.95); ctx.lineTo(-r*.92,0); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = hot.orange;
-    ctx.lineWidth = Math.max(1.6,2.4*s);
-    ctx.globalAlpha = live || kick > 0 ? 1 : .85;
-    ctx.stroke();
+    ctx.beginPath();ctx.arc(0, 0, R*.52, 0, Math.PI*2);ctx.fill();
+    const lg = ctx.createRadialGradient(0, 0, 1, 0, 0, R*.46);
+    lg.addColorStop(0, lensK > .2 ? hot.white : hot.orange);
+    lg.addColorStop(.35, lensK > .2 ? hot.yellow : hot.red);
+    lg.addColorStop(.75, hot.orange);
+    lg.addColorStop(1, hot.dark);
+    ctx.globalAlpha = .35 + .65*lensK;
+    ctx.fillStyle = lg;
+    ctx.beginPath();ctx.arc(0, 0, R*.46*(.75 + .25*lensK), 0, Math.PI*2);ctx.fill();
     ctx.globalAlpha = 1;
-    const coreGrad = ctx.createRadialGradient(0,0,Math.max(1,r*.08),0,0,Math.max(2,r*.62));
-    coreGrad.addColorStop(0,hot.white);
-    coreGrad.addColorStop(.38,hot.pale);
-    coreGrad.addColorStop(.76,hot.orange);
-    coreGrad.addColorStop(1,"rgba(255,47,23,.20)");
-    ctx.fillStyle = coreGrad;
-    ctx.beginPath();ctx.arc(0,0,Math.max(4*s, r*.42),0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = hot.white;
-    ctx.lineWidth = Math.max(1,1.1*s);
-    ctx.globalAlpha = live ? .74 : .38;
-    ctx.beginPath();ctx.arc(0,0,Math.max(2*s, r*.20),0,Math.PI*2);ctx.stroke();
+
+    // Charging: energy sucked into the lens from all around.
+    if(!editorMode && charging > 0){
+      ctx.lineCap = "round";
+      for(let k=0;k<10;k++){
+        const ph = (time*2.6 + k/10) % 1;
+        const a = k*Math.PI*2/10 + time*.6;
+        const d0 = R*(2.9 - ph*2.2), d1 = d0 + R*.5*(1 - ph);
+        ctx.globalAlpha = charging*ph;
+        ctx.strokeStyle = k % 2 ? hot.yellow : hot.orange;
+        ctx.lineWidth = Math.max(1, 2*s*ph);
+        ctx.beginPath();ctx.moveTo(Math.cos(a)*d0, Math.sin(a)*d0);ctx.lineTo(Math.cos(a)*d1, Math.sin(a)*d1);ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Muzzle flash at the barrel tip on each shot.
+    for(const b of tl.beams){
+      const f = fireFlash[b.index];
+      if(f <= 0) continue;
+      const back = (barrelKick[b.index] || 0)*R*.38;
+      ctx.save();
+      ctx.rotate(b.angle);
+      ctx.translate(R*2 - back, 0);
+      const spikes = 9;
+      const layer = (scale, color) => {
+        ctx.beginPath();
+        for(let i=0;i<spikes*2;i++){
+          const a = i/(spikes*2)*Math.PI*2;
+          const fwd = Math.max(0, Math.cos(a));
+          const out = R*(.55 + .7*prismHash(i*3.3 + crackleFrame*2.1 + b.index) + fwd*1.3)*(.5 + .7*f);
+          const rad = (i % 2 ? R*.28 : out)*scale;
+          if(i === 0) ctx.moveTo(Math.cos(a)*rad, Math.sin(a)*rad); else ctx.lineTo(Math.cos(a)*rad, Math.sin(a)*rad);
+        }
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+      };
+      ctx.globalAlpha = f;
+      layer(1, hot.red);
+      layer(.72, hot.orange);
+      layer(.48, hot.yellow);
+      ctx.fillStyle = hot.white;
+      ctx.beginPath();ctx.arc(0, 0, R*.3*f + 1, 0, Math.PI*2);ctx.fill();
+      ctx.restore();
+    }
     ctx.restore();
 
     if(editorMode){
@@ -19245,79 +19411,132 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
       return;
     } else if(deathType === "prismPulse"){
-      // PRISM_PULSE_DEATH_V1: superheated at the hit line, then shatters into three hot shards.
-      const fade = ctx.globalAlpha;
-      const HOT = {white:"#fffdf0", yellow:"#ffd34a", orange:"#ff7a00"};
+      // PRISM_PULSE_DEATH_V2 (melt): the cube is pinned, the beam drills straight through it,
+      // it trembles and glows white-hot from the wound, then sags and melts into a cooling puddle.
+      const fade = 1 - Math.max(0, t - .9)*10;
+      ctx.globalAlpha = fade;
+      const HOT = {white:"#fffdf0", pale:"#fff1a8", yellow:"#ffd34a", orange:"#ff7a00", red:"#ff2f17", dark:"#5f1307"};
       const rad = Math.max(7*s, cube.radius*s);
+      const hash = n => {const v = Math.sin(n*127.1 + 311.7)*43758.5453; return v - Math.floor(v);};
+      const tick = Math.floor(time*30);
       const iy0 = Number.isFinite(deathImpact?.worldY) ? worldToScreen(player.x, deathImpact.worldY).y : y + h*.5;
       const iy = Math.max(y + 8*s, Math.min(y + h - 8*s, iy0));
-      const heatT = clamp01(t/.22);
-      const burst = clamp01((t - .2)/.8);
-      const cool = clamp01((t - .3)/.6);
+      const ang = Number.isFinite(deathImpact?.ang) ? deathImpact.ang : 0;
+      const burn = clamp01((t - .04)/.32);
+      const meltRaw = clamp01((t - .28)/.56);
+      const melt = meltRaw*meltRaw*(3 - 2*meltRaw);
+      const cool = clamp01((t - .78)/.22);
+      const tremble = (1 - melt)*burn*2.2*s;
+      const jx = (hash(tick*1.3) - .5)*tremble*2;
+      const jy = (hash(tick*2.7 + 5) - .5)*tremble;
+      const baseY = y + h;
+      const curH = Math.max(5*s, h*(1 - .84*melt));
+      const spread = w*(1 + 1.25*melt);
+      const left = cx - spread/2 + jx, right = cx + spread/2 + jx;
+      const top = baseY - curH + jy;
+      const cr = Math.max(2*s, rad*(1 - melt*.6));
       const eyeCY = Math.min(y + h - 12*s, y + Math.min(h*.48, normalH*.50*s) - 1.1*s);
-      if(burst <= 0){
-        ctx.save();
-        ctx.translate(cx, iy);ctx.scale(1 + heatT*.06, 1 + heatT*.03);ctx.translate(-cx, -iy);
-        ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-        roundRect(ctx, x, y, w, h, rad);ctx.fill();
-        strokeCustomCubeOutline(ctx, x, y, w, h, rad, s, cube);
-        const k = (iy - y)/h;
-        const g = ctx.createLinearGradient(0, y, 0, y + h);
-        g.addColorStop(0, "rgba(255,122,0,0)");
-        g.addColorStop(clamp01(k - .45*heatT), "rgba(255,122,0,0)");
-        g.addColorStop(k, `rgba(255,211,74,${.85*heatT})`);
-        g.addColorStop(clamp01(k + .45*heatT), "rgba(255,122,0,0)");
-        g.addColorStop(1, "rgba(255,122,0,0)");
-        ctx.fillStyle = g;
-        roundRect(ctx, x, y, w, h, rad);ctx.fill();
-        ctx.globalAlpha = fade*heatT;
-        ctx.fillStyle = HOT.white;
-        ctx.fillRect(x - 4*s, iy - 1.2*s, w + 8*s, 2.4*s);
-        ctx.globalAlpha = fade;
-        drawDeathEyeAt(cx, eyeCY, s, heatT*.3, eyeTone);
-        ctx.restore();
-      } else {
-        const notch = iy + Math.min(h*.06, 10*s);
-        const shards = [
-          {pts:[[x,y],[x+w,y],[x+w,iy],[cx,notch],[x,iy]], dx:0, dy:-1, rot:-.6, eye:eyeCY < iy},
-          {pts:[[x,iy],[cx,notch],[cx,y+h],[x,y+h]], dx:-1, dy:.45, rot:-1.1, eye:eyeCY >= iy},
-          {pts:[[cx,notch],[x+w,iy],[x+w,y+h],[cx,y+h]], dx:1, dy:.45, rot:1.1, eye:false}
-        ];
-        const fly = easeOutCubic(burst);
-        const trace = pts => {ctx.beginPath(); pts.forEach((q,j) => j ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();};
-        for(const sh of shards){
-          let mx = 0, my = 0;
-          for(const q of sh.pts){mx += q[0]; my += q[1];}
-          mx /= sh.pts.length; my /= sh.pts.length;
-          ctx.save();
-          ctx.globalAlpha = fade*(1 - burst*.85);
-          ctx.translate(mx + sh.dx*fly*34*s, my + sh.dy*fly*30*s + burst*burst*40*s);
-          ctx.rotate(sh.rot*fly);
-          ctx.translate(-mx, -my);
-          ctx.save();
-          trace(sh.pts);ctx.clip();
-          ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-          roundRect(ctx, x, y, w, h, rad);ctx.fill();
-          ctx.fillStyle = `rgba(255,122,0,${.55*(1 - cool)})`;
-          ctx.fillRect(x - 2*s, y - 2*s, w + 4*s, h + 4*s);
-          if(sh.eye) drawDeathEyeAt(cx, eyeCY, s, .4 + burst*.6, eyeTone);
-          ctx.restore();
-          trace(sh.pts);
-          ctx.lineJoin = "round";
-          ctx.strokeStyle = HOT.yellow;
-          ctx.globalAlpha = fade*(1 - burst*.85)*(1 - cool*.75);
-          ctx.lineWidth = 2*s;
-          ctx.stroke();
-          ctx.restore();
+      const shape = () => {
+        ctx.beginPath();
+        ctx.moveTo(left, baseY);
+        ctx.lineTo(right, baseY);
+        const bulge = melt*w*.22;
+        ctx.bezierCurveTo(right + bulge, baseY - curH*.3, right + bulge*.2, top + cr, right - cr*.4, top);
+        const n = 7;
+        for(let i=1;i<n;i++){
+          const u = i/n;
+          const xx = (right - cr*.4) + ((left + cr*.4) - (right - cr*.4))*u;
+          const sag = Math.sin(u*Math.PI)*melt*curH*.18;
+          const ripple = Math.sin(u*9 + time*7)*melt*2.4*s;
+          ctx.lineTo(xx, top + sag + ripple);
+        }
+        ctx.lineTo(left + cr*.4, top);
+        ctx.bezierCurveTo(left - bulge*.2, top + cr, left - bulge, baseY - curH*.3, left, baseY);
+        ctx.closePath();
+      };
+      // Body.
+      ctx.save();
+      shape();
+      ctx.clip();
+      ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
+      ctx.fillRect(left - 20*s, top - 20*s, spread + 40*s, curH + 40*s);
+      // Heat spreading out from the wound.
+      const wy = Math.max(top + 3*s, Math.min(baseY - 3*s, iy + (baseY - iy)*melt*.7));
+      const heatR = (6 + burn*Math.max(w, h)*1.1)*(1 + melt*.4);
+      const hg = ctx.createRadialGradient(cx + jx, wy, 1, cx + jx, wy, heatR);
+      hg.addColorStop(0, HOT.white);
+      hg.addColorStop(.25, HOT.yellow);
+      hg.addColorStop(.55, `rgba(255,122,0,${.85})`);
+      hg.addColorStop(1, "rgba(255,47,23,0)");
+      ctx.globalAlpha = fade*burn*(1 - cool*.85);
+      ctx.fillStyle = hg;
+      ctx.fillRect(left - 20*s, top - 20*s, spread + 40*s, curH + 40*s);
+      // Molten sheen as it collapses, then a dark crust as it cools.
+      if(melt > 0){
+        const mg = ctx.createLinearGradient(0, top, 0, baseY);
+        mg.addColorStop(0, HOT.pale);
+        mg.addColorStop(.4, HOT.orange);
+        mg.addColorStop(1, HOT.red);
+        ctx.globalAlpha = fade*melt*.75*(1 - cool);
+        ctx.fillStyle = mg;
+        ctx.fillRect(left - 20*s, top - 20*s, spread + 40*s, curH + 40*s);
+      }
+      if(cool > 0){
+        ctx.globalAlpha = fade*cool*.7;
+        ctx.fillStyle = "#2a160c";
+        ctx.fillRect(left - 20*s, top - 20*s, spread + 40*s, curH + 40*s);
+      }
+      // Eye slides down with the melt and shuts.
+      if(melt < .85){
+        ctx.globalAlpha = fade*(1 - melt/.85);
+        drawDeathEyeAt(cx + jx, eyeCY + (baseY - curH*.55 - eyeCY)*melt + jy, s, .3 + burn*.4 + melt*.3, eyeTone);
+      }
+      ctx.restore();
+      // Rim highlight.
+      ctx.globalAlpha = fade*(.6 + .4*burn)*(1 - cool*.6);
+      ctx.strokeStyle = burn > .2 ? HOT.orange : trapMain();
+      ctx.lineWidth = 1.6*s;
+      shape();ctx.stroke();
+      // The beam drilling straight through the cube.
+      if(t < .42){
+        const k = 1 - t/.42;
+        const L = Math.max(w, h)*.9;
+        const bx = Math.cos(ang), by = Math.sin(ang);
+        const px0 = cx + jx - bx*L, py0 = iy - by*L, px1 = cx + jx + bx*L, py1 = iy + by*L;
+        ctx.lineCap = "round";
+        ctx.globalAlpha = fade*k;
+        ctx.strokeStyle = HOT.red;  ctx.lineWidth = 9*s*k; ctx.beginPath();ctx.moveTo(px0, py0);ctx.lineTo(px1, py1);ctx.stroke();
+        ctx.strokeStyle = HOT.yellow; ctx.lineWidth = 5*s*k; ctx.beginPath();ctx.moveTo(px0, py0);ctx.lineTo(px1, py1);ctx.stroke();
+        ctx.strokeStyle = HOT.white;  ctx.lineWidth = 2*s*k; ctx.beginPath();ctx.moveTo(px0, py0);ctx.lineTo(px1, py1);ctx.stroke();
+        // Exit spray on the far side.
+        for(let i=0;i<8;i++){
+          const ph = (t*3.4 + i/8) % 1;
+          const a = ang + (hash(i*7.7) - .5)*1.3;
+          const d = (6 + ph*34)*s;
+          const sx = cx + jx + bx*w*.5 + Math.cos(a)*d, sy = iy + by*w*.5 + Math.sin(a)*d;
+          ctx.globalAlpha = fade*k*(1 - ph);
+          ctx.strokeStyle = i % 2 ? HOT.yellow : HOT.white;
+          ctx.lineWidth = 1.8*s;
+          ctx.beginPath();ctx.moveTo(sx, sy);ctx.lineTo(sx - Math.cos(a)*6*s, sy - Math.sin(a)*6*s);ctx.stroke();
         }
       }
-      // Hot ring at the hit line.
-      if(t < .5){
-        const k = t/.5;
-        ctx.globalAlpha = fade*(1 - k);
-        ctx.strokeStyle = HOT.orange;
-        ctx.lineWidth = 3*s*(1 - k);
-        ctx.beginPath();ctx.ellipse(cx, iy, w*.5 + k*40*s, (6 + k*14)*s, 0, 0, Math.PI*2);ctx.stroke();
+      // Molten drips sliding off and pooling.
+      if(melt > .05){
+        for(let i=0;i<4;i++){
+          const ph = clamp01((t - .34 - i*.06)/.42);
+          if(ph <= 0 || ph >= 1) continue;
+          const side = i % 2 ? 1 : -1;
+          const dx = (side > 0 ? right : left) + side*(2 + i)*s;
+          const dy = top + curH*.45 + ph*(curH*.55 + 6*s);
+          ctx.globalAlpha = fade*(1 - ph*.6)*(1 - cool);
+          ctx.fillStyle = ph < .4 ? HOT.yellow : HOT.orange;
+          ctx.beginPath();ctx.ellipse(dx, dy, 2*s, (3 + ph*3)*s, 0, 0, Math.PI*2);ctx.fill();
+        }
+      }
+      // The wound and then the cooling puddle smoke (real particles, drawn by the trap itself).
+      if(deathCulprit && (perfSettings?.heavyFx)){
+        if(burn > .25 && melt < .6 && Math.random() < .55) prismSmokeEmit(deathCulprit, player.x, deathImpact?.worldY ?? (player.baseY - player.h*.5), 0, 1, .9);
+        if(melt > .5 && Math.random() < .5) prismSmokeEmit(deathCulprit, player.x + (Math.random() - .5)*player.w*1.6, player.baseY - 3, 0, 1, .7);
       }
       ctx.restore();
       return;
