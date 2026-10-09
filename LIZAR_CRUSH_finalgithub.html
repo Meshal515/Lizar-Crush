@@ -15268,6 +15268,184 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     voltGripParticles = voltGripParticles.filter(p => p.life > 0);
   }
+  // ---- FLINGER_ART_V1: cut-cardstock drawing kit (fill, crescent shade, top rim light, paper
+  // grain, dark outline). Every piece goes through flingerShape so they all read as one style.
+  let flingerGrainPat = null;
+  function flingerGrain(){
+    if(flingerGrainPat) return flingerGrainPat;
+    const g = document.createElement("canvas"); g.width = g.height = 64;
+    const x = g.getContext("2d"), d = x.createImageData(64, 64);
+    for(let i=0;i<d.data.length;i+=4){const v = 110 + Math.floor(trapHash(i*.37)*145); d.data[i] = d.data[i+1] = d.data[i+2] = v; d.data[i+3] = 255;}
+    x.putImageData(d, 0, 0);
+    flingerGrainPat = ctx.createPattern(g, "repeat");
+    return flingerGrainPat;
+  }
+  function flingerPalette(main){
+    const dark = paperIsDark(main);
+    // the reference is a light-to-mid grey card with a near-black outline; keep that ramp for dark
+    // trap skins and flip it for light ones so the creature never vanishes into its own outline
+    return dark
+      ? {line:main, base:paperShade(main, .58), shade:paperShade(main, .4), hi:paperShade(main, .82), deep:paperShade(main, .22), tooth:"#f6f3ea"}
+      : {line:paperShade(main, -.82), base:paperShade(main, -.18), shade:paperShade(main, -.36), hi:paperShade(main, .25), deep:paperShade(main, -.6), tooth:"#f6f3ea"};
+  }
+  function flingerShape(path, fill, pal, s, opt={}){
+    const d = (opt.shadeDepth ?? 3.2)*s, lx = opt.lx ?? .45;
+    path(); ctx.fillStyle = fill; ctx.fill();
+    ctx.save(); path(); ctx.clip();
+    if(!opt.noShade){
+      // crescent shade on the lower-right: shade everything, then lay the shape back on, shifted up-left
+      ctx.fillStyle = opt.shade || pal.shade; ctx.fillRect(-1e4, -1e4, 2e4, 2e4);
+      ctx.save(); ctx.translate(-d*lx, -d); path(); ctx.restore();
+      ctx.fillStyle = fill; ctx.fill();
+    }
+    if(!opt.noHi){
+      // rim light just inside the upper-left edge
+      ctx.save(); ctx.translate(d*.3, d*.5); path(); ctx.restore();
+      ctx.strokeStyle = pal.hi; ctx.globalAlpha = .75; ctx.lineWidth = Math.max(1, 1.5*s); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = flingerGrain(); ctx.globalAlpha = .08; ctx.globalCompositeOperation = "multiply";
+    ctx.fillRect(-1e4, -1e4, 2e4, 2e4);
+    ctx.restore();
+    path(); ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1.1, (opt.lw || 1.7)*s); ctx.lineJoin = "round"; ctx.stroke();
+  }
+  // One nested shell segment, pointing down: a rounded cone with a dark cup at the top (where the
+  // segment above sits) and a riveted stud at its tip.
+  function flingerSegment(cx, cy, w, h, inward, s, pal){
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(inward, 1);
+    const path = () => {
+      ctx.beginPath();
+      ctx.moveTo(-w*.5, -h*.3);
+      ctx.bezierCurveTo(-w*.56, h*.05, -w*.22, h*.42, w*.02, h*.5);
+      ctx.bezierCurveTo(w*.3, h*.44, w*.58, h*.06, w*.5, -h*.3);
+      ctx.bezierCurveTo(w*.32, -h*.48, -w*.32, -h*.48, -w*.5, -h*.3);
+      ctx.closePath();
+    };
+    flingerShape(path, pal.base, pal, s, {shadeDepth:3.4});
+    // the cup at the top
+    ctx.beginPath(); ctx.ellipse(0, -h*.31, w*.36, h*.09, 0, 0, Math.PI*2);
+    ctx.fillStyle = pal.shade; ctx.fill(); ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(.9, 1.2*s); ctx.stroke();
+    // stud
+    ctx.beginPath(); ctx.arc(w*.04, h*.36, Math.max(1.4, w*.1), 0, Math.PI*2);
+    ctx.fillStyle = pal.deep; ctx.fill(); ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(.8, 1*s); ctx.stroke();
+    ctx.restore();
+  }
+  // An organic leg: a tapering tube along a cubic curve (thick at the hip, a knee swell, thin at the
+  // end) finishing in a hooked claw that curls more as it grips. Current crawls along it when live.
+  function flingerLeg(x0, y0, c1, c2, x1, y1, inward, w0, curl, s, pal, live, seed){
+    const N = 22;
+    const P = (u) => {const v = 1 - u; return [v*v*v*x0 + 3*v*v*u*c1[0] + 3*v*u*u*c2[0] + u*u*u*x1, v*v*v*y0 + 3*v*v*u*c1[1] + 3*v*u*u*c2[1] + u*u*u*y1];};
+    const L = [], R = [], C = [];
+    for(let i=0;i<=N;i++){
+      const u = i/N, a = P(Math.max(0, u - .02)), b = P(Math.min(1, u + .02)), pt = P(u);
+      const tx = b[0] - a[0], ty = b[1] - a[1], tl = Math.hypot(tx, ty) || 1;
+      const w = w0*(1 - .62*u + .3*Math.exp(-Math.pow((u - .38)/.1, 2)));
+      L.push([pt[0] - ty/tl*w/2, pt[1] + tx/tl*w/2]); R.push([pt[0] + ty/tl*w/2, pt[1] - tx/tl*w/2]); C.push(pt);
+    }
+    // the leg ends in a rounded cap; a separate thorn-like talon grows from it, curling down and
+    // back, darker like the reference's talons (it curls in harder as it grips)
+    const end = C[N], prev = C[N - 2];
+    const ang = Math.atan2(end[1] - prev[1], end[0] - prev[0]);
+    const wEnd = Math.hypot(L[N][0] - R[N][0], L[N][1] - R[N][1])/2;
+    const path = () => {
+      ctx.beginPath();
+      L.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]));
+      ctx.arc(end[0], end[1], wEnd, ang + Math.PI/2, ang - Math.PI/2, true);
+      for(let i=N;i>=0;i--) ctx.lineTo(R[i][0], R[i][1]);
+      ctx.closePath();
+    };
+    flingerShape(path, pal.base, pal, s, {shadeDepth:2, lw:1.5});
+    const sd = inward > 0 ? 1 : -1, cl = 12*s, bw = Math.max(2*s, wEnd*1.45);
+    const dirA = ang + sd*(.55 + curl*.75);
+    const nx = -Math.sin(ang), ny = Math.cos(ang);
+    const b0 = [end[0] - nx*bw*sd, end[1] - ny*bw*sd], b1 = [end[0] + nx*bw*sd, end[1] + ny*bw*sd];
+    const tip = [end[0] + Math.cos(dirA + sd*.5)*cl, end[1] + Math.sin(dirA + sd*.5)*cl];
+    const ctl = [end[0] + Math.cos(dirA - sd*.25)*cl*.95, end[1] + Math.sin(dirA - sd*.25)*cl*.95];
+    const talon = () => {ctx.beginPath(); ctx.moveTo(b0[0], b0[1]); ctx.quadraticCurveTo(ctl[0], ctl[1], tip[0], tip[1]); ctx.quadraticCurveTo((ctl[0] + b1[0])/2, (ctl[1] + b1[1])/2, b1[0], b1[1]); ctx.closePath();};
+    flingerShape(talon, pal.deep, pal, s, {shade:pal.line, shadeDepth:1.2, lw:1.2});
+    // hip joint disc
+    ctx.beginPath(); ctx.arc(x0, y0, w0*.55, 0, Math.PI*2); ctx.fillStyle = pal.deep; ctx.fill(); ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(.9, 1.1*s); ctx.stroke();
+    if(live > 0){
+      ctx.save(); ctx.lineCap = "round";
+      ctx.strokeStyle = rgbaHex(TRAP_SPARK_PALETTES.electric[1], live);
+      ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.setLineDash([2*s, 9*s]); ctx.lineDashOffset = -inward*time*46*s - seed*5*s;
+      ctx.beginPath(); C.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  // The head, side view facing +x after the inward flip: a spiky collar at the back, a helmet-like
+  // skull whose brim overhangs the mouth, and a lower jaw hinged at the back. jaw 0..1 opens it;
+  // teeth 0..1 bares the teeth (0 = the zigzag seam of a shut mouth); strain clenches.
+  function flingerHead(cx, cy, R, inward, jaw, teeth, strain, s, pal, t){
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(inward, 1);
+    // spikes on the collar
+    for(let k=0;k<5;k++){
+      const a = Math.PI*(.62 + k*.16) + Math.sin(t*3 + k)*.03;
+      const bx = -R*.5 + Math.cos(a)*R*.3*.7, by = R*.04 + Math.sin(a)*R*.56*.7;   // rooted inside the collar edge
+      const path = () => {ctx.beginPath(); ctx.moveTo(bx + Math.cos(a + 1.6)*R*.15, by + Math.sin(a + 1.6)*R*.15); ctx.quadraticCurveTo(bx + Math.cos(a)*R*.25, by + Math.sin(a)*R*.25, bx + Math.cos(a)*R*.42, by + Math.sin(a)*R*.42); ctx.quadraticCurveTo(bx + Math.cos(a - .5)*R*.18, by + Math.sin(a - .5)*R*.18, bx + Math.cos(a - 1.6)*R*.15, by + Math.sin(a - 1.6)*R*.15); ctx.closePath();};
+      flingerShape(path, pal.shade, pal, s, {noHi:true, shadeDepth:1.6, shade:pal.deep, lw:1.4});
+    }
+    // collar
+    const collar = () => {ctx.beginPath(); ctx.ellipse(-R*.5, R*.04, R*.3, R*.56, 0, 0, Math.PI*2);};
+    flingerShape(collar, pal.shade, pal, s, {shade:pal.deep, shadeDepth:2.2});
+    // lower jaw, hinged at the back
+    const ja = -.05 + jaw*.75;
+    ctx.save(); ctx.translate(-R*.3, R*.2); ctx.rotate(ja);
+    const jawPath = () => {ctx.beginPath(); ctx.moveTo(-R*.05, -R*.08); ctx.lineTo(R*.9, -R*.06); ctx.quadraticCurveTo(R*.98, R*.2, R*.72, R*.34); ctx.quadraticCurveTo(R*.3, R*.42, -R*.08, R*.3); ctx.closePath();};
+    if(jaw > .08){
+      // mouth interior behind the teeth
+      ctx.beginPath(); ctx.moveTo(-R*.05, -R*.08); ctx.lineTo(R*.95, -R*.06); ctx.lineTo(R*.95, -R*.6); ctx.lineTo(-R*.05, -R*.4); ctx.closePath();
+      ctx.fillStyle = "#16121a"; ctx.fill();
+    }
+    flingerShape(jawPath, pal.base, pal, s, {shadeDepth:2.4});
+    if(teeth > .05){
+      for(let k=0;k<4;k++){
+        const tx = R*(.2 + k*.17), th = R*(.16 + (k === 3 ? .04 : 0))*teeth;
+        const tp = () => {ctx.beginPath(); ctx.moveTo(tx - R*.07, -R*.06); ctx.lineTo(tx, -R*.06 - th); ctx.lineTo(tx + R*.07, -R*.06); ctx.closePath();};
+        flingerShape(tp, pal.tooth, pal, s, {noHi:true, shadeDepth:1, shade:"#cfc9bb", lw:1});
+      }
+    }
+    ctx.restore();
+    // skull with the brim
+    const skull = () => {
+      ctx.beginPath();
+      ctx.moveTo(-R*.42, R*.22);
+      ctx.bezierCurveTo(-R*.62, -R*.35, -R*.1, -R*.82, R*.45, -R*.6);
+      ctx.bezierCurveTo(R*.85, -R*.42, R*1.08, -R*.05, R*.98, R*.2);
+      ctx.quadraticCurveTo(R*.88, R*.32, R*.78, R*.18);
+      ctx.quadraticCurveTo(R*.3, R*.1, -R*.42, R*.22);
+      ctx.closePath();
+    };
+    flingerShape(skull, pal.base, pal, s, {shadeDepth:3.6});
+    // the brim edge line
+    ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(.9, 1.1*s);
+    ctx.beginPath(); ctx.moveTo(-R*.25, -R*.5); ctx.quadraticCurveTo(-R*.05, -R*.05, -R*.2, R*.2); ctx.stroke();
+    // upper fangs hang from the brim when bared
+    if(teeth > .05){
+      for(let k=0;k<4;k++){
+        const tx = R*(.12 + k*.18), th = R*(.2 + (k === 3 ? .06 : 0))*teeth*(1 - .3*strain);
+        const tp = () => {ctx.beginPath(); ctx.moveTo(tx - R*.08, R*.15); ctx.lineTo(tx, R*.15 + th); ctx.lineTo(tx + R*.08, R*.15); ctx.closePath();};
+        flingerShape(tp, pal.tooth, pal, s, {noHi:true, shadeDepth:1, shade:"#cfc9bb", lw:1});
+      }
+    } else {
+      // zigzag seam of the shut mouth
+      ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.3*s); ctx.lineJoin = "miter";
+      ctx.beginPath();
+      for(let k=0;k<=6;k++){const x = R*(.0 + k*.125), y = R*(.2 + (k % 2 ? -.07 : .03)); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);}
+      ctx.stroke(); ctx.lineJoin = "round";
+    }
+    // two antennae with bulbs, flicking
+    for(const k of [0, 1]){
+      const a = -Math.PI/2 - .25 - k*.45 + Math.sin(t*(3 + k) + k)*.12;
+      const bx = R*.1, by = -R*.62;
+      const ex = bx + Math.cos(a)*R*.9, ey = by + Math.sin(a)*R*.9;
+      ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.5*s); ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx + Math.cos(a + .6)*R*.5, by + Math.sin(a + .6)*R*.5, ex, ey); ctx.stroke();
+      const bulb = () => {ctx.beginPath(); ctx.ellipse(ex, ey, R*.12, R*.08, a, 0, Math.PI*2);};
+      flingerShape(bulb, pal.shade, pal, s, {noHi:true, shadeDepth:1, shade:pal.deep, lw:1.2});
+    }
+    ctx.restore();
+  }
   function drawVoltGrips(o){
     const st = (powerVisualBypassObstacle === o) ? voltGripsState(o) : (o.__vgState || voltGripsState(o));
     const rt = ensureVoltGripsRuntime(o);
@@ -15315,172 +15493,103 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         roundRect(ctx, hp.x, hp.y, hr.w*s, hr.h*s, 8*s); ctx.stroke();
       }
     }
-    // VOLT_GRIPS_FLINGER_V1: "the Flinger", a long many-legged creature clinging to the wall; its
-    // legs ARE the grip fingers. Only a mouth, no eye. Logic untouched; the legs now match the grab
-    // zone honestly: whenever the trap is live they reach exactly as far as the hit segments do.
-    //   just before it goes live — the legs unfold, the mouth grits its teeth (beginning)
-    //   live                     — legs out and twitching, a nasty grin; live arcs bridge the tips
-    //   it catches you           — the grin widens, then it strains (teeth clenched) while it pulls
-    //   the throw                — mouth wide open, a shout; then the legs fold back (end)
-    //   passed                   — it pouts and folds its legs
+    // VOLT_GRIPS_FLINGER_V2: "the Flinger", drawn in the cut-cardstock look of its reference sheet:
+    // a spiked, helmeted head with a hinged jaw, a column of nested shell segments hugging the wall,
+    // and long organic legs (tapered, bending, ending in a hooked claw) that ARE the grip fingers.
+    // Logic untouched; while the trap is live the legs reach exactly as far as the hit segments.
+    //   just before live — legs unfold, the jaw clenches (beginning)
+    //   live             — legs out, current crawling along them, a toothy grin, arcs bridge the tips
+    //   catch / pull     — wide grin, then straining with the jaw shut while it pulls you back
+    //   throw            — the jaw drops in a shout, then the legs fold back (end)
+    //   passed           — it sulks with the jaw shut
     const cyc = c.activeTime + c.offTime;
     const untilOn = st.active ? 0 : cyc - st.local, sinceOff = st.active ? 0 : st.local - c.activeTime;
     const vgSm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
-    const ext = st.active ? 1 : Math.max(vgSm(1 - untilOn/.3)*.85, 1 - vgSm(sinceOff/.34));
+    const extRaw = st.active ? 1 : Math.max(vgSm(1 - untilOn/.3)*.85, 1 - vgSm(sinceOff/.34));
+    // Visual continuity: legs never jump. While live they are fully out (honest); otherwise they
+    // ease toward the target, and after a catch they let go of where they held you instead of
+    // vanishing in one frame.
+    const vgDt = rt.drawT == null ? 0 : Math.max(0, Math.min(.1, time - rt.drawT)); rt.drawT = time;
+    if(rt.legExt == null || time < (rt.drawT0 ?? 0)) rt.legExt = extRaw;
+    rt.drawT0 = time;
+    rt.legExt = st.active ? 1 : rt.legExt + (extRaw - rt.legExt)*(1 - Math.exp(-vgDt*9));
+    const ext = rt.legExt;
+    if(playerTarget){rt.lastHold = playerTarget; rt.holdBlend = captureBlend;}
+    else if(rt.holdBlend > 0){rt.holdBlend = Math.max(0, rt.holdBlend - vgDt*4); playerTarget = rt.holdBlend > 0 && state !== "editor" ? rt.lastHold : null; captureBlend = vgSm(rt.holdBlend);}
     const fxPhase = playerFxActive ? voltGripEffect.phase : "";
     const passedVG = state !== "editor" && (Number(player.baseY) || 0) < rect.y - 10 && !playerFxActive;
-    const vgMain = colors.finger, vgDark = paperIsDark(vgMain);
-    const vgLo = paperShade(vgMain, vgDark ? .16 : -.3), vgHi = paperShade(vgMain, vgDark ? .32 : .25);
+    const pal = flingerPalette(colors.finger);
     const emitters = st.emitters || voltGripsEmitterRects(c);
     for(const emitter of emitters){
       const inward = emitter.side === "left" ? 1 : -1;
       const ep = worldToScreen(emitter.x, emitter.y);
       const wallX = emitter.side === "left" ? ep.x : ep.x + emitter.w*s;
-      const bodyW = Math.max(12, 17*s);
-      const bodyX = wallX + inward*bodyW*.95;                // spine of the body, hugging the wall
-      const topY = p.y + fingerGap*.35, botY = p.y + rect.h*s - fingerGap*.35;
-      // ---- legs (drawn first, the body covers their roots) ----
+      const segW = Math.max(18, 27*s);
+      const bodyX = wallX + inward*segW*.88;
+      const topY = p.y + fingerGap*.5, botY = p.y + rect.h*s - fingerGap*.1;
+      const breath = Math.sin(time*(st.active ? 5.5 : 2.2));
+      // ---- legs (behind the body) ----
       const sideTips = [];
       for(let i=0;i<fingerCount;i++){
         const yy = p.y + fingerGap*(i+1);
         const gait = Math.sin(time*7 + i*1.1 + (inward > 0 ? 0 : 1.6));
-        const twitch = (st.active ? 1 : .3)*gait*1.6*s;
-        const startX = bodyX + inward*bodyW*.3;
-        let liveTipX = isDual ? (emitter.side === "left" ? centerX - dualGap : centerX + dualGap) : wallX + inward*c.reach*s;
-        const restTipX = startX + inward*10*s;
-        let tipX = restTipX + (liveTipX - restTipX)*ext;
-        let tipY = yy + twitch*.3;
+        const twitch = (st.active ? 1 : .3)*gait*1.4*s;
+        const rootX = bodyX + inward*segW*.36, rootY = yy;
+        const liveTipX = isDual ? (emitter.side === "left" ? centerX - dualGap : centerX + dualGap) : wallX + inward*c.reach*s;
+        const restTipX = rootX - inward*segW*.3, restTipY = yy + fingerGap*.2;  // folded away behind the shells
+        let tipX = restTipX + (liveTipX - restTipX)*ext, tipY = restTipY + (yy + twitch*.3 - restTipY)*ext;
         if(playerTarget){
-          const tx = emitter.side === "left" ? playerTarget.x - 3*s : playerTarget.x + playerTarget.w + 3*s;
+          const tx = emitter.side === "left" ? playerTarget.x - 2*s : playerTarget.x + playerTarget.w + 2*s;
           const ty = playerTarget.y + playerTarget.h*(.18 + (i/Math.max(1, fingerCount - 1))*.64);
           tipX += (tx - tipX)*captureBlend; tipY += (ty - tipY)*captureBlend;
         }
-        // knee: folded high when the leg is in, almost straight when it reaches out
-        const kneeT = .38;
-        const kneeX = startX + (tipX - startX)*kneeT;
-        const kneeY = yy + (tipY - yy)*kneeT - (3*s + (1 - ext)*12*s) + twitch;
-        const lw0 = Math.max(2.4, 5.2*s), lw1 = Math.max(1.4, 2.4*s);
-        ctx.lineCap = "round"; ctx.lineJoin = "round";
-        ctx.strokeStyle = vgMain;
-        ctx.lineWidth = lw0;
-        ctx.beginPath(); ctx.moveTo(startX, yy); ctx.lineTo(kneeX, kneeY); ctx.stroke();
-        ctx.lineWidth = lw1*1.6;
-        ctx.beginPath(); ctx.moveTo(kneeX, kneeY); ctx.quadraticCurveTo(kneeX + (tipX - kneeX)*.5, kneeY + (tipY - kneeY)*.3, tipX, tipY); ctx.stroke();
-        // live current running along the leg
-        if(st.active || captureBlend > .05){
-          ctx.strokeStyle = rgbaHex(TRAP_SPARK_PALETTES.electric[1], .3 + rt.spark*.5 + captureBlend*.2);
-          ctx.lineWidth = Math.max(.7, .8*s);
-          ctx.setLineDash([2*s, 9*s]); ctx.lineDashOffset = -inward*time*50*s - i*4*s;
-          ctx.beginPath(); ctx.moveTo(kneeX, kneeY); ctx.quadraticCurveTo(kneeX + (tipX - kneeX)*.5, kneeY + (tipY - kneeY)*.3, tipX, tipY); ctx.stroke();
-          ctx.setLineDash([]);
-        }
-        // knee knob and a two-hook claw at the tip
-        ctx.fillStyle = vgLo;
-        ctx.beginPath(); ctx.arc(kneeX, kneeY, lw0*.55, 0, Math.PI*2); ctx.fill();
-        const ta = Math.atan2(tipY - kneeY, tipX - kneeX);
-        const hook = (3.6 + 1.6*ext)*s, close = playerTarget ? captureBlend : 0;
-        ctx.strokeStyle = vgMain; ctx.lineWidth = Math.max(1, 1.5*s);
-        for(const hk of [-1, 1]){
-          const ha = ta + hk*(.75 - .5*close);
-          ctx.beginPath(); ctx.moveTo(tipX, tipY);
-          ctx.quadraticCurveTo(tipX + Math.cos(ha)*hook, tipY + Math.sin(ha)*hook, tipX + Math.cos(ta + hk*(1.9 - close))*hook*.8 + Math.cos(ta)*hook*.6, tipY + Math.sin(ta + hk*(1.9 - close))*hook*.8 + Math.sin(ta)*hook*.6);
-          ctx.stroke();
-        }
-        if(st.active){
-          ctx.fillStyle = rgbaHex(colors.hot, .5 + rt.spark*.4);
-          ctx.beginPath(); ctx.arc(tipX, tipY, Math.max(1.2, 1.8*s), 0, Math.PI*2); ctx.fill();
-        }
+        const span = Math.abs(tipX - rootX);
+        const lift = (4*ext + Math.max(0, 22*s - span*.12)*ext + (1 - ext)*7*s) - twitch*ext;   // the leg arches up from the body
+        const c1 = [rootX + (tipX - rootX)*.25, rootY - lift*1.2], c2 = [rootX + (tipX - rootX)*.7, tipY - lift*.55];
+        const curl = .35 + .6*(playerTarget ? captureBlend : 0) + .4*(1 - ext);
+        if(ext > .04 || captureBlend > 0) flingerLeg(rootX, rootY, c1, c2, tipX, tipY, inward, Math.max(3.6, 6.4*s), curl, s, pal, st.active || captureBlend > .05 ? .35 + rt.spark*.5 : 0, i);
         sideTips.push({x:tipX, y:tipY});
         emitterTips.push({side:emitter.side, x:tipX, y:tipY});
       }
-      // ---- the body: a column of overlapping plates hugging the wall, breathing in a wave ----
-      const plates = fingerCount + 1;
-      for(let i=plates - 1;i>=0;i--){
-        const yy = topY + (botY - topY)*(i/(plates - 1));
-        const wave = Math.sin(time*(st.active ? 6 : 2) - i*.9)*(st.active ? 1.6 : .8)*s;
-        const pw = bodyW*(.62 + .1*Math.sin(i*1.7)) + wave*.3, ph = (botY - topY)/(plates - 1)*.72;
-        ctx.fillStyle = i % 2 ? vgMain : vgLo;
-        ctx.beginPath(); ctx.ellipse(bodyX + inward*wave*.4, yy, pw, Math.max(ph, 6*s), 0, 0, Math.PI*2); ctx.fill();
-        ctx.strokeStyle = vgHi; ctx.globalAlpha = .45; ctx.lineWidth = Math.max(.8, 1*s);
-        ctx.beginPath(); ctx.ellipse(bodyX + inward*wave*.4, yy, pw*.8, Math.max(ph, 6*s)*.7, 0, inward > 0 ? -1.2 : Math.PI + .2, inward > 0 ? -.2 : Math.PI + 1.2); ctx.stroke();
-        ctx.globalAlpha = 1;
+      // ---- the shell segments, nested top to bottom, tapering ----
+      const segs = fingerCount + 1;
+      const step = (botY - topY)/segs;
+      for(let i=segs - 1;i>=0;i--){                          // bottom first: each segment's tip sits in the cup below
+        const k = i/(segs - 1 || 1);
+        const sw = segW*(1.06 - .3*k), sh = step*1.7;
+        const wob = Math.sin(time*(st.active ? 6 : 2) - i*.9)*(st.active ? 1.4 : .6)*s;
+        flingerSegment(bodyX + inward*wob*.4, topY + step*(i + .5), sw, sh, inward, s, pal);
       }
-      // ---- the head at the top, mouth facing inward ----
-      const headR = bodyW*1.15;
-      const hx = bodyX + inward*bodyW*.25, hy = topY - headR*.55;
-      ctx.fillStyle = vgMain;
-      ctx.beginPath(); ctx.ellipse(hx, hy, headR, headR*.82, 0, 0, Math.PI*2); ctx.fill();
-      // mouth pose
-      let mOpen = .08, mGrin = .2, teeth = 0, shout = 0;
-      if(!st.active && untilOn < .3){teeth = vgSm(1 - untilOn/.3); mOpen = .12; mGrin = .4;}       // gritting before it goes live
-      if(st.active){mOpen = .16 + .1*rt.spark; mGrin = .8; teeth = 1;}
-      if(fxPhase === "warn" || fxPhase === "encircle"){mOpen = .3; mGrin = 1.1; teeth = 1;}
-      if(fxPhase === "pull"){mOpen = .1; mGrin = .5; teeth = 1;}                                      // straining
-      if(fxPhase === "launch"){mOpen = .85; mGrin = .2; teeth = 1; shout = 1;}
-      if(passedVG){mOpen = .05; mGrin = -.5; teeth = 0;}
-      const mx = hx + inward*headR*.42, my = hy + headR*.12;
-      const mw = headR*1.05, mh = headR*(.42 + mOpen*.8);
-      ctx.save();
-      ctx.translate(mx, my);
-      ctx.scale(inward, 1);
-      ctx.fillStyle = "#3a1218";
-      ctx.beginPath();
-      ctx.moveTo(-mw*.5, -mGrin*mh*.4);
-      ctx.quadraticCurveTo(0, -mh*.5 + mGrin*mh*.2, mw*.5, -mGrin*mh*.9);
-      ctx.quadraticCurveTo(mw*.1, mh*(.5 + mGrin*.3), -mw*.5, -mGrin*mh*.4);
-      ctx.closePath(); ctx.fill();
-      if(teeth > .05){
-        ctx.save(); ctx.clip();
-        ctx.fillStyle = rgbaHex("#f4f1e8", teeth);
-        for(let k=0;k<5;k++){
-          const tx = -mw*.42 + k*mw*.2;
-          ctx.beginPath(); ctx.moveTo(tx, -mh); ctx.lineTo(tx + mw*.13, -mh); ctx.lineTo(tx + mw*.065, mh*(.05 - .25*mOpen)); ctx.closePath(); ctx.fill();
-          if(mOpen < .35){ctx.beginPath(); ctx.moveTo(tx + mw*.07, mh); ctx.lineTo(tx + mw*.2, mh); ctx.lineTo(tx + mw*.135, mh*.05); ctx.closePath(); ctx.fill();}
-        }
-        ctx.restore();
-      }
-      ctx.strokeStyle = vgHi; ctx.lineWidth = Math.max(1, 1.3*s);
-      ctx.beginPath();
-      ctx.moveTo(-mw*.5, -mGrin*mh*.4);
-      ctx.quadraticCurveTo(0, -mh*.5 + mGrin*mh*.2, mw*.5, -mGrin*mh*.9);
-      ctx.quadraticCurveTo(mw*.1, mh*(.5 + mGrin*.3), -mw*.5, -mGrin*mh*.4);
-      ctx.closePath(); ctx.stroke();
-      ctx.restore();
-      // straining sweat / shout lines
-      if(fxPhase === "pull"){
-        ctx.strokeStyle = vgHi; ctx.lineWidth = Math.max(1, 1.2*s);
-        for(let k=0;k<2;k++){ctx.beginPath(); ctx.moveTo(hx - inward*headR*.2 + k*3*s, hy - headR*.95); ctx.lineTo(hx - inward*headR*.1 + k*3*s, hy - headR*1.3); ctx.stroke();}
-      }
+      // ---- head on top, facing inward ----
+      const headR = segW*1.05;
+      let jaw = .05, teeth = 0, shout = 0, strain = 0;
+      if(!st.active && untilOn < .3){teeth = vgSm(1 - untilOn/.3); jaw = .02;}
+      if(st.active){teeth = 1; jaw = .1 + .06*rt.spark;}
+      if(fxPhase === "warn" || fxPhase === "encircle"){teeth = 1; jaw = .22;}
+      if(fxPhase === "pull"){teeth = 1; jaw = 0; strain = 1;}
+      if(fxPhase === "launch"){teeth = 1; jaw = .85; shout = 1;}
+      if(passedVG){teeth = 0; jaw = 0;}
+      // the head's collar sits right on the body's axis, on top of the first shell, like a neck
+      const hx = bodyX + inward*headR*.12, hy = topY - headR*.22 + breath*.6*s - strain*1.5*s;
+      flingerHead(hx, hy, headR, inward, jaw, teeth, strain, s, pal, time);
       if(shout > 0){
-        ctx.strokeStyle = rgbaHex(colors.hot, .8); ctx.lineWidth = Math.max(1, 1.4*s);
+        ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.3*s); ctx.lineCap = "round";
         for(const k of [-1, 0, 1]){
-          const ang = (inward > 0 ? 0 : Math.PI) + k*.45 - inward*.25;
-          ctx.beginPath(); ctx.moveTo(mx + Math.cos(ang)*headR*.6, my + Math.sin(ang)*headR*.6); ctx.lineTo(mx + Math.cos(ang)*headR*1.1, my + Math.sin(ang)*headR*1.1); ctx.stroke();
+          const ang = (inward > 0 ? 0 : Math.PI) + k*.45 + inward*.2;
+          const ox = hx + inward*headR*1.1, oy = hy + headR*.35;
+          ctx.beginPath(); ctx.moveTo(ox + Math.cos(ang)*headR*.35, oy + Math.sin(ang)*headR*.35); ctx.lineTo(ox + Math.cos(ang)*headR*.75, oy + Math.sin(ang)*headR*.75); ctx.stroke();
         }
       }
-      // two short antennae, flicking
-      ctx.strokeStyle = vgMain; ctx.lineWidth = Math.max(1, 1.3*s);
-      for(const k of [0, 1]){
-        const ang = -Math.PI/2 + inward*(.35 + k*.35) + Math.sin(time*(st.active ? 9 : 3) + k)*.15;
-        ctx.beginPath(); ctx.moveTo(hx, hy - headR*.6);
-        ctx.quadraticCurveTo(hx + Math.cos(ang)*headR*.8, hy - headR*.6 + Math.sin(ang)*headR*.8, hx + Math.cos(ang + inward*.4)*headR*1.3, hy - headR*.6 + Math.sin(ang + inward*.4)*headR*1.2);
-        ctx.stroke();
+      if(strain > 0){
+        ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.1*s); ctx.lineCap = "round";
+        for(let k=0;k<3;k++){const x0 = hx - inward*headR*(.2 - k*.22), y0 = hy - headR*.95; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 - inward*1.5*s, y0 - 4*s); ctx.stroke();}
       }
       // live arcs between neighbouring leg tips
       if(st.active || captureBlend > .08){
         for(let i=0;i<sideTips.length-1;i++){
-          const a = sideTips[i], b = sideTips[i+1];
-          ctx.strokeStyle = rgbaHex(colors.hot, .3 + rt.spark*.4 + captureBlend*.2);
-          ctx.lineWidth = Math.max(1,1.2*s);
-          ctx.beginPath();
-          const segs = 5;
-          for(let j=0;j<=segs;j++){
-            const t = j / segs;
-            const xx = a.x + (b.x-a.x)*t;
-            const yy2 = a.y + (b.y-a.y)*t + (j===0 || j===segs ? 0 : (trapHash(j*3.3 + i*7 + Math.floor(time*24))-.5)*(6 + c.arcIntensity*3 + captureBlend*5)*s);
-            if(j===0) ctx.moveTo(xx,yy2); else ctx.lineTo(xx,yy2);
-          }
-          ctx.stroke();
+          const a2 = sideTips[i], b2 = sideTips[i+1];
+          const pts = trapBolt(a2.x, a2.y, b2.x, b2.y, (3 + c.arcIntensity*1.5 + captureBlend*3)*s, 5, i*7.3 + Math.floor(time*24)*2.1 + inward);
+          trapDrawBolt(pts, Math.max(1, 1.1*s), TRAP_SPARK_PALETTES.electric, .45 + rt.spark*.4);
         }
       }
     }
@@ -15490,18 +15599,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const pairs = Math.min(leftTips.length, rightTips.length);
       for(let i=0;i<pairs && (st.active || playerFxActive || state === "editor");i++){
         const a = leftTips[i], b = rightTips[i];
-        ctx.strokeStyle = rgbaHex(colors.hot, playerFxActive ? (.40 + captureBlend*.42) : ((st.active ? .28 : .22) + rt.spark*.26));
-        ctx.lineWidth = Math.max(1, (playerFxActive ? (1.1 + captureBlend*.7) : (st.active ? 1.15 : 1.05)) * s);
-        ctx.beginPath();
-        const segs = playerFxActive ? 8 : 5;
-        for(let j=0;j<=segs;j++){
-          const t = j / segs;
-          const xx = a.x + (b.x-a.x)*t;
-          const amp = playerFxActive ? (2 + captureBlend*(8 + c.arcIntensity*5)) : (2.6 + rt.spark*4);
-          const yy = a.y + (b.y-a.y)*t + (j===0 || j===segs ? 0 : (trapHash(j*5.1 + i*3 + Math.floor(time*24))-.5)*amp*s);
-          if(j===0) ctx.moveTo(xx,yy); else ctx.lineTo(xx,yy);
-        }
-        ctx.stroke();
+        // the live bridge between the two claws is the part that grabs you: draw it as real
+        // lightning (glow + body + white core) so it reads on any background
+        const amp = playerFxActive ? (2 + captureBlend*(8 + c.arcIntensity*5)) : (3 + rt.spark*4);
+        const pts = trapBolt(a.x, a.y, b.x, b.y, amp*s, playerFxActive ? 9 : 7, i*3.1 + Math.floor(time*24)*1.7);
+        trapDrawBolt(pts, Math.max(1.4, (playerFxActive ? 1.6 + captureBlend*.8 : 1.5)*s), TRAP_SPARK_PALETTES.electric, state === "editor" ? .5 : .65 + rt.spark*.35);
       }
     }
     ctx.restore();
