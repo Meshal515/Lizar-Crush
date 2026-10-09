@@ -14551,83 +14551,159 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const dy = Math.max(-1, Math.min(1, (py - c.y) / 120));
     return {dx, dy};
   }
+  // PORTAL_MOUTH_GULPER_V1: "the Gulper", a creature that is only a mouth: thick lips around a
+  // swirling throat. Logic untouched; the open hole is drawn exactly over portalMonsterMouthRect and
+  // only while it can really take you (openPulse >= .22), so what you see is what swallows.
+  //   closed   — lips pressed shut, chewing; near the end of the wait the tongue licks the lip
+  //   opening  — the lips part, air streaks get sucked in, the throat swirls
+  //   swallow  — lips stretch round you, close, cheeks puff, a gulp runs down; at the exit a small
+  //              pair of the same lips spits you out
+  //   passed   — it purses its lips, sulking
+  function gulperLipPath(cx, cy, hw, hh){
+    ctx.beginPath();
+    for(let k=0;k<=40;k++){
+      const a = k/40*Math.PI*2, ca = Math.cos(a), sa = Math.sin(a);
+      const x = cx + hw*Math.sign(ca)*Math.pow(Math.abs(ca), .6), y = cy + hh*Math.sign(sa)*Math.pow(Math.abs(sa), .6);
+      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+  }
+  // Lips: hw/hh is the hole (0 hh = shut), lip is the lip thickness.
+  function drawGulperLips(cx, cy, hw, hh, lip, s, opts={}){
+    const main = trapMain(), dark = paperIsDark(main);
+    const lo = paperShade(main, dark ? .14 : -.3), hi = paperShade(main, dark ? .34 : .28);
+    const pout = opts.pout || 0, puff = opts.puff || 0;
+    // cheeks puffed out
+    if(puff > .01){
+      ctx.fillStyle = main;
+      for(const sd of [-1, 1]){ctx.beginPath(); ctx.ellipse(cx + sd*(hw + lip*.6), cy, lip*(1.2 + 1.1*puff), lip*(1.1 + .9*puff), 0, 0, Math.PI*2); ctx.fill();}
+    }
+    const ow = hw + lip*(1 - .35*pout), oh = Math.max(hh, 1) + lip*(1 + .25*pout);
+    ctx.fillStyle = main;
+    gulperLipPath(cx, cy, ow, oh); ctx.fill();
+    // the seam / hole
+    if(hh > .6){
+      ctx.save();
+      gulperLipPath(cx, cy, hw, hh); ctx.clip();
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(hw, hh));
+      g.addColorStop(0, "#000000"); g.addColorStop(.6, "#1a0a10"); g.addColorStop(1, "#3a1520");
+      ctx.fillStyle = g; ctx.fillRect(cx - hw, cy - hh, hw*2, hh*2);
+      // the throat swirls like a drain
+      const spin = (opts.spin || 0);
+      ctx.strokeStyle = rgbaHex(trapAccent(), .22 + .25*(opts.suck || 0)); ctx.lineWidth = Math.max(1, 1.4*s);
+      for(let k=0;k<4;k++){
+        ctx.beginPath();
+        for(let j=0;j<=24;j++){
+          const u = j/24, ang = spin + k*Math.PI/2 + u*4.2, rr = (1 - u)*.95;
+          const x = cx + Math.cos(ang)*hw*rr, y = cy + Math.sin(ang)*hh*rr;
+          j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        ctx.stroke();
+      }
+      // tongue resting on the floor of the mouth
+      ctx.fillStyle = "#8c3442";
+      ctx.beginPath(); ctx.ellipse(cx, cy + hh*.82, hw*.55, hh*.42, 0, Math.PI, 0); ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.beginPath(); ctx.moveTo(cx, cy + hh*.48); ctx.lineTo(cx, cy + hh*.8); ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = lo; ctx.lineWidth = Math.max(1.4, 2.2*s); ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(cx - hw*.98, cy); ctx.quadraticCurveTo(cx, cy + (opts.smack || 0)*lip*.4 + lip*.12, cx + hw*.98, cy); ctx.stroke();
+    }
+    // lip rims and a soft shine on the upper lip
+    ctx.strokeStyle = lo; ctx.lineWidth = Math.max(1, 1.3*s);
+    gulperLipPath(cx, cy, ow, oh); ctx.stroke();
+    ctx.strokeStyle = hi; ctx.globalAlpha = .7; ctx.lineWidth = Math.max(1, 1.6*s); ctx.lineCap = "round";
+    ctx.beginPath(); ctx.ellipse(cx - ow*.3, cy - Math.max(hh, 1) - lip*.5, ow*.22, lip*.22, -.08, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
+    ctx.globalAlpha = 1;
+    // the cupid's bow dip in the middle of the upper lip
+    ctx.strokeStyle = lo; ctx.lineWidth = Math.max(1, 1.2*s);
+    ctx.beginPath(); ctx.moveTo(cx - lip*.5, cy - oh + lip*.05); ctx.quadraticCurveTo(cx, cy - oh + lip*.5, cx + lip*.5, cy - oh + lip*.05); ctx.stroke();
+  }
   function drawPortalMonster(o){
     const st = portalMonsterState(o);
     const c = st.c;
     const p = worldToScreen(c.x, c.y);
     const s = p.s;
-    const look = portalMonsterLook(o);
-    const bodyW = c.w*s, bodyH = c.h*s;
-    const open = st.openPulse;
+    const editorMode = state === "editor";
     const main = trapMain();
     const accent = trapAccent();
-    const eyeFill = rgbaHex(accent, .96);
-    const eyeStroke = rgbaHex(main, .96);
-    const pupilFill = "#050507";
+    const fx = editorMode ? null : prismSmokeFor(o);
+    if(fx) prismFxBeginFrame(o);
+    const dt = fx ? (fx.dt || 0) : 0;
     ctx.save();
-    if(state === "editor"){
+    if(editorMode){
       const exit = portalFindExit(o, editorLevel || activeLevel());
       if(exit){const ex=portalExitConfig(exit);const ep=worldToScreen(ex.x,ex.y);ctx.setLineDash([8*s,6*s]);ctx.strokeStyle=rgbaHex(main,.55);ctx.lineWidth=Math.max(1,1.4*s);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(ep.x,ep.y);ctx.stroke();ctx.setLineDash([]);}
     }
-
-    // face only: no body circle, just themed eyes and mouth
-    const faceLift = bodyH * .02;
-    const eyeY = p.y - bodyH*.12 - faceLift;
-    const eyeSpread = bodyW*.18;
-    const eyeRX = Math.max(7.2*s, bodyW*.038);
-    const eyeRY = Math.max(9.2*s, bodyH*.058);
-    for(const side of [-1,1]){
-      const ex = p.x + side*eyeSpread;
-      ctx.fillStyle = eyeFill;
-      ctx.strokeStyle = eyeStroke;
-      ctx.lineWidth = Math.max(1.4, 2.1*s);
-      ctx.beginPath();ctx.ellipse(ex, eyeY, eyeRX, eyeRY, 0, 0, Math.PI*2);ctx.fill();ctx.stroke();
-      ctx.fillStyle = pupilFill;
-      ctx.beginPath();ctx.arc(ex + look.dx*2.8*s, eyeY + look.dy*2.6*s, Math.max(2.2*s, eyeRX*.28), 0, Math.PI*2);ctx.fill();
+    const pulse = editorMode ? .8 : st.openPulse;
+    const live = !editorMode && st.open && pulse >= .22 && !obstacleDisabledByPower(o);
+    const mr = (() => {
+      const mw = c.w*(.46 + pulse*.34), mh = c.h*(.16 + pulse*.48), my = c.y + c.h*.16 + pulse*c.h*.07;
+      return {cx:c.x, cy:my, hw:mw/2, hh:mh/2};
+    })();
+    const mp = worldToScreen(mr.cx, mr.cy);
+    const lip = Math.max(5*s, c.h*.13*s);
+    const swallowing = !editorMode && portalEffect.active && portalEffect.trap === o;
+    const phase = swallowing ? portalEffect.phase : "";
+    const passed = !editorMode && !swallowing && (Number(player.baseY) || 0) < c.y - c.h - 30;
+    let hw = mr.hw*s, hh = (live || editorMode) ? mr.hh*s : 0;
+    // just before the threshold the lips part a crack (harmless)
+    if(!live && !editorMode && st.open) hh = Math.min(1.6*s, pulse/.22*1.6*s);
+    let puff = 0, pout = 0, smack = 0, suck = live ? clamp01((pulse - .22)/.4) : 0;
+    if(!st.open && !swallowing){
+      const k = st.p;                                            // 0..1 through the closed wait
+      smack = k < .25 ? Math.sin(k/.25*Math.PI*3)*(1 - k/.25) : 0; // chewing right after it shuts
     }
-
-    // mouth / portal opening
-    const mouthOpen = easeOutCubic(open);
-    const mouthW = bodyW*(.28 + mouthOpen*.36);
-    const mouthH = bodyH*(.05 + mouthOpen*.40);
-    const my = p.y + bodyH*.12 + mouthOpen*bodyH*.08;
-    const lipColor = rgbaHex(main, .96);
-    const hotColor = rgbaHex(accent, .84);
-
-    if(mouthOpen < .08){
-      ctx.lineCap = "round";
-      ctx.strokeStyle = lipColor;
-      ctx.lineWidth = Math.max(2.8, 4.8*s);
-      ctx.beginPath();
-      ctx.moveTo(p.x - bodyW*.16, my);
-      ctx.quadraticCurveTo(p.x, my + bodyH*.028, p.x + bodyW*.16, my);
-      ctx.stroke();
-    } else {
-      ctx.fillStyle = lipColor;
-      ctx.beginPath();
-      ctx.ellipse(p.x, my, mouthW*.55, mouthH*.60, 0, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.fillStyle = "#000000";
-      ctx.beginPath();
-      ctx.ellipse(p.x, my, mouthW*.43, mouthH*.44, 0, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.strokeStyle = hotColor;
-      ctx.lineWidth = Math.max(1.8, 3.1*s);
-      ctx.beginPath();
-      ctx.ellipse(p.x, my, mouthW*.48, mouthH*.50, 0, 0, Math.PI*2);
-      ctx.stroke();
-
-      ctx.strokeStyle = rgbaHex(main,.82);
-      ctx.lineWidth = Math.max(1.1, 1.9*s);
-      ctx.beginPath();
-      ctx.ellipse(p.x, my + mouthH*.08, mouthW*.42, mouthH*.34, 0, 0, Math.PI);
-      ctx.stroke();
+    if(passed){pout = .8; hw *= .7;}
+    if(swallowing){
+      const cf = portalEffect.cfg || c;
+      if(phase === "suck"){const k = clamp01(portalEffect.timer/Math.max(.001, cf.suckTime)); hw = Math.max(hw, (mr.hw + 6)*s*(1 + .15*k)); hh = Math.max(hh, mr.hh*s*(1 - .7*k)); suck = 1;}
+      else {const k = phase === "tunnel" ? clamp01(portalEffect.timer/Math.max(.001, cf.tunnelTime)) : 1; hh = 0; puff = phase === "tunnel" ? Math.sin(Math.min(1, k*1.4)*Math.PI*.5)*(1 - k*.6) : Math.max(0, .4 - portalEffect.timer*2);}
     }
-
-    if(state === "editor"){
-      const mr = portalMonsterMouthRect(o);const mp=worldToScreen(mr.x,mr.y);ctx.setLineDash([5*s,5*s]);ctx.strokeStyle=rgbaHex(accent,.70);ctx.lineWidth=Math.max(1,1.2*s);roundRect(ctx,mp.x,mp.y,mr.w*s,mr.h*s,12*s);ctx.stroke();ctx.setLineDash([]);
+    if(fx){
+      const sm = fx.gm || (fx.gm = {});
+      const fresh = !sm.ready || dt > .2;
+      const f = (k, v, rate) => {if(fresh || !(k in sm)){sm[k] = v; return v;} sm[k] += (v - sm[k])*(1 - Math.exp(-dt*rate)); return sm[k];};
+      // the hole itself is never smoothed (it must match the catch zone); only expression is
+      pout = f("pout", pout, 6); puff = f("puff", puff, 10);
+      if(passed) hw = f("hw", hw, 6); else sm.hw = hw;
+      sm.ready = true;
+    }
+    // air sucked in while it can take you
+    if(suck > .02){
+      for(let k=0;k<9;k++){
+        const u = (time*1.6 + k/9) % 1;
+        const ang = k/9*Math.PI*2 + .3;
+        const r0 = Math.max(hw, 20*s)*(2.4 - 1.3*u), r1 = r0 - 10*s*(1 + suck);
+        ctx.strokeStyle = rgbaHex(main, .35*suck*Math.sin(u*Math.PI));
+        ctx.lineWidth = Math.max(1, 1.4*s); ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(mp.x + Math.cos(ang)*r0, mp.y + Math.sin(ang)*r0*.6); ctx.lineTo(mp.x + Math.cos(ang)*r1, mp.y + Math.sin(ang)*r1*.6); ctx.stroke();
+      }
+    }
+    drawGulperLips(mp.x, mp.y, hw, hh, lip, s, {pout, puff, smack, suck, spin:-time*(2 + 4*suck)});
+    // the tongue licks the lower lip just before it opens again
+    if(!st.open && !swallowing && !passed && st.p > .62){
+      const k = (st.p - .62)/.38;
+      const tx = mp.x + (-1 + 2*k)*hw*.7, ty = mp.y + lip*.55;
+      ctx.fillStyle = "#b44a5a";
+      ctx.beginPath(); ctx.ellipse(tx, ty, lip*.55, lip*.42*Math.sin(Math.min(1, k*1.3)*Math.PI), 0, 0, Math.PI*2); ctx.fill();
+    }
+    // a gulp: a ring slides down under the mouth while you are in the tunnel
+    if(swallowing && phase === "tunnel"){
+      const k = clamp01(portalEffect.timer/Math.max(.001, (portalEffect.cfg || c).tunnelTime));
+      ctx.strokeStyle = main; ctx.globalAlpha = 1 - k; ctx.lineWidth = Math.max(2, lip*.6);
+      ctx.beginPath(); ctx.ellipse(mp.x, mp.y + lip*(1.4 + 2.2*k), hw*.45*(1 - .4*k), lip*.4, 0, 0, Math.PI*2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    // sulking: a little puff of air
+    if(passed && fx){
+      const u = (time*.6) % 1;
+      ctx.fillStyle = rgbaHex(main, .25*(1 - u));
+      ctx.beginPath(); ctx.arc(mp.x + hw + lip + u*10*s, mp.y - u*6*s, (2 + 3*u)*s, 0, Math.PI*2); ctx.fill();
+    }
+    if(editorMode){
+      const mr2 = portalMonsterMouthRect(o);const mp2=worldToScreen(mr2.x,mr2.y);ctx.setLineDash([5*s,5*s]);ctx.strokeStyle=rgbaHex(accent,.70);ctx.lineWidth=Math.max(1,1.2*s);roundRect(ctx,mp2.x,mp2.y,mr2.w*s,mr2.h*s,12*s);ctx.stroke();ctx.setLineDash([]);
     }
     ctx.restore();
   }
@@ -14657,15 +14733,17 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(let i=0;i<14;i++){const x=(i/13)*W;const off=(p*H*1.2+i*37)%H;ctx.beginPath();ctx.moveTo(x,off-H*.5);ctx.lineTo(W/2,off+H*.1);ctx.stroke();}
     }
     if(fx.phase === "eject" && fx.exit){
+      // the same lips appear at the exit and spit you out, then pucker shut and vanish
       const ex = fx.exitCfg || portalExitConfig(fx.exit);
       const p = worldToScreen(ex.x,ex.y);
       const s=p.s;
       const t=clamp01(fx.timer/Math.max(.001,(fx.cfg?.ejectTime||.42)));
-      const openIn = easeOutCubic(clamp01(t/.30));
-      const closeOut = 1 - clamp01((t-.84)/.16)*.45;
-      const open = Math.max(.12, openIn * closeOut);
-      ctx.fillStyle="#000";ctx.beginPath();ctx.ellipse(p.x,p.y,44*s*(.72+open*.42),18*s*(.45+open*.72),0,0,Math.PI*2);ctx.fill();
-      ctx.strokeStyle=rgbaHex(trapAccent(),.85);ctx.lineWidth=Math.max(1,2*s);ctx.beginPath();ctx.ellipse(p.x,p.y,44*s*(.72+open*.42),18*s*(.45+open*.72),0,0,Math.PI*2);ctx.stroke();
+      const openIn = easeOutCubic(clamp01(t/.25));
+      const shut = clamp01((t - .55)/.3);
+      const vanish = clamp01((t - .8)/.2);
+      ctx.globalAlpha = 1 - vanish;
+      drawGulperLips(p.x, p.y, 26*s*(1 - .45*shut), 12*s*openIn*(1 - shut), 7*s, s, {pout:shut, spin:time*6});
+      ctx.globalAlpha = 1;
     }
     ctx.restore();
   }
@@ -15237,81 +15315,169 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         roundRect(ctx, hp.x, hp.y, hr.w*s, hr.h*s, 8*s); ctx.stroke();
       }
     }
+    // VOLT_GRIPS_FLINGER_V1: "the Flinger", a long many-legged creature clinging to the wall; its
+    // legs ARE the grip fingers. Only a mouth, no eye. Logic untouched; the legs now match the grab
+    // zone honestly: whenever the trap is live they reach exactly as far as the hit segments do.
+    //   just before it goes live — the legs unfold, the mouth grits its teeth (beginning)
+    //   live                     — legs out and twitching, a nasty grin; live arcs bridge the tips
+    //   it catches you           — the grin widens, then it strains (teeth clenched) while it pulls
+    //   the throw                — mouth wide open, a shout; then the legs fold back (end)
+    //   passed                   — it pouts and folds its legs
+    const cyc = c.activeTime + c.offTime;
+    const untilOn = st.active ? 0 : cyc - st.local, sinceOff = st.active ? 0 : st.local - c.activeTime;
+    const vgSm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
+    const ext = st.active ? 1 : Math.max(vgSm(1 - untilOn/.3)*.85, 1 - vgSm(sinceOff/.34));
+    const fxPhase = playerFxActive ? voltGripEffect.phase : "";
+    const passedVG = state !== "editor" && (Number(player.baseY) || 0) < rect.y - 10 && !playerFxActive;
+    const vgMain = colors.finger, vgDark = paperIsDark(vgMain);
+    const vgLo = paperShade(vgMain, vgDark ? .16 : -.3), vgHi = paperShade(vgMain, vgDark ? .32 : .25);
     const emitters = st.emitters || voltGripsEmitterRects(c);
     for(const emitter of emitters){
       const inward = emitter.side === "left" ? 1 : -1;
       const ep = worldToScreen(emitter.x, emitter.y);
       const wallX = emitter.side === "left" ? ep.x : ep.x + emitter.w*s;
-      const baseW = Math.max(10, 16*s);
-      const baseX = emitter.side === "left" ? wallX - 1*s : wallX - baseW + 1*s;
-      const baseY = p.y + rect.h*s*.11;
-      const baseH = rect.h*s*.78;
-      ctx.fillStyle = rgbaHex(colors.body, .98);
-      roundRect(ctx, baseX, baseY, baseW, baseH, 8*s);ctx.fill();
-      ctx.strokeStyle = colors.rim;
-      ctx.lineWidth = Math.max(1,2*s);
-      roundRect(ctx, baseX, baseY, baseW, baseH, 8*s);ctx.stroke();
-      ctx.fillStyle = rgbaHex(colors.hot, .16 + rt.spark*.18);
-      roundRect(ctx, baseX + 3*s, baseY + 4*s, Math.max(2, baseW - 6*s), Math.max(2, baseH - 8*s), 7*s);ctx.fill();
+      const bodyW = Math.max(12, 17*s);
+      const bodyX = wallX + inward*bodyW*.95;                // spine of the body, hugging the wall
+      const topY = p.y + fingerGap*.35, botY = p.y + rect.h*s - fingerGap*.35;
+      // ---- legs (drawn first, the body covers their roots) ----
       const sideTips = [];
       for(let i=0;i<fingerCount;i++){
         const yy = p.y + fingerGap*(i+1);
-        const phase = time*5.8 + i*.82 + c.phase + (emitter.side === "right" ? 1.2 : 0);
-        const wob = Math.sin(phase) * 6*s * (0.25 + rt.open*.75);
-        const startX = wallX + inward*4*s;
-        let idleTipX, idleTipY, targetTipX, targetTipY;
-        if(isDual){
-          idleTipX = emitter.side === "left" ? centerX - dualGap : centerX + dualGap;
-          idleTipY = yy + wob*.18;
-          if(playerTarget){
-            targetTipX = emitter.side === "left" ? playerTarget.x - 4*s : playerTarget.x + playerTarget.w + 4*s;
-            targetTipY = playerTarget.y + playerTarget.h * (.18 + (i / Math.max(1, fingerCount-1)) * .64) + wob*.08;
-          } else {
-            targetTipX = idleTipX;
-            targetTipY = idleTipY;
-          }
-        } else {
-          const fingerSpan = rect.w*s * (.20 + rt.open*.72);
-          const len = fingerSpan * (.70 + .30*Math.sin(time*4.2 + i*.74 + c.phase)*.5 + .15);
-          idleTipX = wallX + inward*(12*s + len);
-          idleTipY = yy + wob*.35;
-          targetTipX = playerTarget ? playerTarget.x + (emitter.side === "left" ? -4*s : playerTarget.w + 4*s) : idleTipX;
-          targetTipY = playerTarget ? playerTarget.y + playerTarget.h * (.22 + (i / Math.max(1, fingerCount-1)) * .56) : idleTipY;
+        const gait = Math.sin(time*7 + i*1.1 + (inward > 0 ? 0 : 1.6));
+        const twitch = (st.active ? 1 : .3)*gait*1.6*s;
+        const startX = bodyX + inward*bodyW*.3;
+        let liveTipX = isDual ? (emitter.side === "left" ? centerX - dualGap : centerX + dualGap) : wallX + inward*c.reach*s;
+        const restTipX = startX + inward*10*s;
+        let tipX = restTipX + (liveTipX - restTipX)*ext;
+        let tipY = yy + twitch*.3;
+        if(playerTarget){
+          const tx = emitter.side === "left" ? playerTarget.x - 3*s : playerTarget.x + playerTarget.w + 3*s;
+          const ty = playerTarget.y + playerTarget.h*(.18 + (i/Math.max(1, fingerCount - 1))*.64);
+          tipX += (tx - tipX)*captureBlend; tipY += (ty - tipY)*captureBlend;
         }
-        const tipX = idleTipX + (targetTipX - idleTipX) * captureBlend;
-        const tipY = idleTipY + (targetTipY - idleTipY) * captureBlend;
-        const midX = (startX + tipX) * .5 + inward * (10*s - captureBlend*6*s);
-        const midY = (yy + tipY) * .5 + wob * (isDual ? (.34 - captureBlend*.14) : .48);
+        // knee: folded high when the leg is in, almost straight when it reaches out
+        const kneeT = .38;
+        const kneeX = startX + (tipX - startX)*kneeT;
+        const kneeY = yy + (tipY - yy)*kneeT - (3*s + (1 - ext)*12*s) + twitch;
+        const lw0 = Math.max(2.4, 5.2*s), lw1 = Math.max(1.4, 2.4*s);
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.strokeStyle = vgMain;
+        ctx.lineWidth = lw0;
+        ctx.beginPath(); ctx.moveTo(startX, yy); ctx.lineTo(kneeX, kneeY); ctx.stroke();
+        ctx.lineWidth = lw1*1.6;
+        ctx.beginPath(); ctx.moveTo(kneeX, kneeY); ctx.quadraticCurveTo(kneeX + (tipX - kneeX)*.5, kneeY + (tipY - kneeY)*.3, tipX, tipY); ctx.stroke();
+        // live current running along the leg
+        if(st.active || captureBlend > .05){
+          ctx.strokeStyle = rgbaHex(TRAP_SPARK_PALETTES.electric[1], .3 + rt.spark*.5 + captureBlend*.2);
+          ctx.lineWidth = Math.max(.7, .8*s);
+          ctx.setLineDash([2*s, 9*s]); ctx.lineDashOffset = -inward*time*50*s - i*4*s;
+          ctx.beginPath(); ctx.moveTo(kneeX, kneeY); ctx.quadraticCurveTo(kneeX + (tipX - kneeX)*.5, kneeY + (tipY - kneeY)*.3, tipX, tipY); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // knee knob and a two-hook claw at the tip
+        ctx.fillStyle = vgLo;
+        ctx.beginPath(); ctx.arc(kneeX, kneeY, lw0*.55, 0, Math.PI*2); ctx.fill();
+        const ta = Math.atan2(tipY - kneeY, tipX - kneeX);
+        const hook = (3.6 + 1.6*ext)*s, close = playerTarget ? captureBlend : 0;
+        ctx.strokeStyle = vgMain; ctx.lineWidth = Math.max(1, 1.5*s);
+        for(const hk of [-1, 1]){
+          const ha = ta + hk*(.75 - .5*close);
+          ctx.beginPath(); ctx.moveTo(tipX, tipY);
+          ctx.quadraticCurveTo(tipX + Math.cos(ha)*hook, tipY + Math.sin(ha)*hook, tipX + Math.cos(ta + hk*(1.9 - close))*hook*.8 + Math.cos(ta)*hook*.6, tipY + Math.sin(ta + hk*(1.9 - close))*hook*.8 + Math.sin(ta)*hook*.6);
+          ctx.stroke();
+        }
+        if(st.active){
+          ctx.fillStyle = rgbaHex(colors.hot, .5 + rt.spark*.4);
+          ctx.beginPath(); ctx.arc(tipX, tipY, Math.max(1.2, 1.8*s), 0, Math.PI*2); ctx.fill();
+        }
         sideTips.push({x:tipX, y:tipY});
         emitterTips.push({side:emitter.side, x:tipX, y:tipY});
-        ctx.lineCap = "round";
-        const liveAlpha = st.active ? .96 : .74;
-        ctx.strokeStyle = rgbaHex(colors.finger, liveAlpha);
-        ctx.lineWidth = Math.max(2, (isDual ? 4.5 : 4.8)*s);
-        ctx.beginPath();
-        ctx.moveTo(startX, yy);
-        ctx.bezierCurveTo(startX + inward*10*s, yy + wob*.18, midX, midY, tipX, tipY);
-        ctx.stroke();
-        ctx.strokeStyle = rgbaHex(colors.hot, (st.active ? .28 : .24) + rt.spark*.34 + captureBlend*.18);
-        ctx.lineWidth = Math.max(1, 1.6*s);
-        ctx.beginPath();
-        ctx.moveTo(startX + inward*2*s, yy);
-        ctx.bezierCurveTo(startX + inward*8*s, yy + wob*.16, midX - inward*4*s, midY + wob*.18, tipX - inward*2*s, tipY);
-        ctx.stroke();
-        ctx.fillStyle = rgbaHex(colors.hot, (st.active ? .65 : .44) + rt.spark*.28 + captureBlend*.12);
-        ctx.beginPath(); ctx.arc(tipX, tipY, Math.max(1.4, 2.6*s), 0, Math.PI*2); ctx.fill();
       }
-      if(rt.spark > .03 || captureBlend > .08){
+      // ---- the body: a column of overlapping plates hugging the wall, breathing in a wave ----
+      const plates = fingerCount + 1;
+      for(let i=plates - 1;i>=0;i--){
+        const yy = topY + (botY - topY)*(i/(plates - 1));
+        const wave = Math.sin(time*(st.active ? 6 : 2) - i*.9)*(st.active ? 1.6 : .8)*s;
+        const pw = bodyW*(.62 + .1*Math.sin(i*1.7)) + wave*.3, ph = (botY - topY)/(plates - 1)*.72;
+        ctx.fillStyle = i % 2 ? vgMain : vgLo;
+        ctx.beginPath(); ctx.ellipse(bodyX + inward*wave*.4, yy, pw, Math.max(ph, 6*s), 0, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = vgHi; ctx.globalAlpha = .45; ctx.lineWidth = Math.max(.8, 1*s);
+        ctx.beginPath(); ctx.ellipse(bodyX + inward*wave*.4, yy, pw*.8, Math.max(ph, 6*s)*.7, 0, inward > 0 ? -1.2 : Math.PI + .2, inward > 0 ? -.2 : Math.PI + 1.2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      // ---- the head at the top, mouth facing inward ----
+      const headR = bodyW*1.15;
+      const hx = bodyX + inward*bodyW*.25, hy = topY - headR*.55;
+      ctx.fillStyle = vgMain;
+      ctx.beginPath(); ctx.ellipse(hx, hy, headR, headR*.82, 0, 0, Math.PI*2); ctx.fill();
+      // mouth pose
+      let mOpen = .08, mGrin = .2, teeth = 0, shout = 0;
+      if(!st.active && untilOn < .3){teeth = vgSm(1 - untilOn/.3); mOpen = .12; mGrin = .4;}       // gritting before it goes live
+      if(st.active){mOpen = .16 + .1*rt.spark; mGrin = .8; teeth = 1;}
+      if(fxPhase === "warn" || fxPhase === "encircle"){mOpen = .3; mGrin = 1.1; teeth = 1;}
+      if(fxPhase === "pull"){mOpen = .1; mGrin = .5; teeth = 1;}                                      // straining
+      if(fxPhase === "launch"){mOpen = .85; mGrin = .2; teeth = 1; shout = 1;}
+      if(passedVG){mOpen = .05; mGrin = -.5; teeth = 0;}
+      const mx = hx + inward*headR*.42, my = hy + headR*.12;
+      const mw = headR*1.05, mh = headR*(.42 + mOpen*.8);
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.scale(inward, 1);
+      ctx.fillStyle = "#3a1218";
+      ctx.beginPath();
+      ctx.moveTo(-mw*.5, -mGrin*mh*.4);
+      ctx.quadraticCurveTo(0, -mh*.5 + mGrin*mh*.2, mw*.5, -mGrin*mh*.9);
+      ctx.quadraticCurveTo(mw*.1, mh*(.5 + mGrin*.3), -mw*.5, -mGrin*mh*.4);
+      ctx.closePath(); ctx.fill();
+      if(teeth > .05){
+        ctx.save(); ctx.clip();
+        ctx.fillStyle = rgbaHex("#f4f1e8", teeth);
+        for(let k=0;k<5;k++){
+          const tx = -mw*.42 + k*mw*.2;
+          ctx.beginPath(); ctx.moveTo(tx, -mh); ctx.lineTo(tx + mw*.13, -mh); ctx.lineTo(tx + mw*.065, mh*(.05 - .25*mOpen)); ctx.closePath(); ctx.fill();
+          if(mOpen < .35){ctx.beginPath(); ctx.moveTo(tx + mw*.07, mh); ctx.lineTo(tx + mw*.2, mh); ctx.lineTo(tx + mw*.135, mh*.05); ctx.closePath(); ctx.fill();}
+        }
+        ctx.restore();
+      }
+      ctx.strokeStyle = vgHi; ctx.lineWidth = Math.max(1, 1.3*s);
+      ctx.beginPath();
+      ctx.moveTo(-mw*.5, -mGrin*mh*.4);
+      ctx.quadraticCurveTo(0, -mh*.5 + mGrin*mh*.2, mw*.5, -mGrin*mh*.9);
+      ctx.quadraticCurveTo(mw*.1, mh*(.5 + mGrin*.3), -mw*.5, -mGrin*mh*.4);
+      ctx.closePath(); ctx.stroke();
+      ctx.restore();
+      // straining sweat / shout lines
+      if(fxPhase === "pull"){
+        ctx.strokeStyle = vgHi; ctx.lineWidth = Math.max(1, 1.2*s);
+        for(let k=0;k<2;k++){ctx.beginPath(); ctx.moveTo(hx - inward*headR*.2 + k*3*s, hy - headR*.95); ctx.lineTo(hx - inward*headR*.1 + k*3*s, hy - headR*1.3); ctx.stroke();}
+      }
+      if(shout > 0){
+        ctx.strokeStyle = rgbaHex(colors.hot, .8); ctx.lineWidth = Math.max(1, 1.4*s);
+        for(const k of [-1, 0, 1]){
+          const ang = (inward > 0 ? 0 : Math.PI) + k*.45 - inward*.25;
+          ctx.beginPath(); ctx.moveTo(mx + Math.cos(ang)*headR*.6, my + Math.sin(ang)*headR*.6); ctx.lineTo(mx + Math.cos(ang)*headR*1.1, my + Math.sin(ang)*headR*1.1); ctx.stroke();
+        }
+      }
+      // two short antennae, flicking
+      ctx.strokeStyle = vgMain; ctx.lineWidth = Math.max(1, 1.3*s);
+      for(const k of [0, 1]){
+        const ang = -Math.PI/2 + inward*(.35 + k*.35) + Math.sin(time*(st.active ? 9 : 3) + k)*.15;
+        ctx.beginPath(); ctx.moveTo(hx, hy - headR*.6);
+        ctx.quadraticCurveTo(hx + Math.cos(ang)*headR*.8, hy - headR*.6 + Math.sin(ang)*headR*.8, hx + Math.cos(ang + inward*.4)*headR*1.3, hy - headR*.6 + Math.sin(ang + inward*.4)*headR*1.2);
+        ctx.stroke();
+      }
+      // live arcs between neighbouring leg tips
+      if(st.active || captureBlend > .08){
         for(let i=0;i<sideTips.length-1;i++){
           const a = sideTips[i], b = sideTips[i+1];
-          ctx.strokeStyle = rgbaHex(colors.hot, (st.active ? .42 : .28) + rt.spark*.40 + captureBlend*.20);
-          ctx.lineWidth = Math.max(1,1.35*s);
+          ctx.strokeStyle = rgbaHex(colors.hot, .3 + rt.spark*.4 + captureBlend*.2);
+          ctx.lineWidth = Math.max(1,1.2*s);
           ctx.beginPath();
           const segs = 5;
           for(let j=0;j<=segs;j++){
             const t = j / segs;
             const xx = a.x + (b.x-a.x)*t;
-            const yy2 = a.y + (b.y-a.y)*t + (j===0 || j===segs ? 0 : (Math.random()-.5)*(6 + c.arcIntensity*3 + captureBlend*5)*s);
+            const yy2 = a.y + (b.y-a.y)*t + (j===0 || j===segs ? 0 : (trapHash(j*3.3 + i*7 + Math.floor(time*24))-.5)*(6 + c.arcIntensity*3 + captureBlend*5)*s);
             if(j===0) ctx.moveTo(xx,yy2); else ctx.lineTo(xx,yy2);
           }
           ctx.stroke();
@@ -15322,7 +15488,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const leftTips = emitterTips.filter(t=>t.side === "left");
       const rightTips = emitterTips.filter(t=>t.side === "right");
       const pairs = Math.min(leftTips.length, rightTips.length);
-      for(let i=0;i<pairs;i++){
+      for(let i=0;i<pairs && (st.active || playerFxActive || state === "editor");i++){
         const a = leftTips[i], b = rightTips[i];
         ctx.strokeStyle = rgbaHex(colors.hot, playerFxActive ? (.40 + captureBlend*.42) : ((st.active ? .28 : .22) + rt.spark*.26));
         ctx.lineWidth = Math.max(1, (playerFxActive ? (1.1 + captureBlend*.7) : (st.active ? 1.15 : 1.05)) * s);
@@ -15332,7 +15498,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
           const t = j / segs;
           const xx = a.x + (b.x-a.x)*t;
           const amp = playerFxActive ? (2 + captureBlend*(8 + c.arcIntensity*5)) : (2.6 + rt.spark*4);
-          const yy = a.y + (b.y-a.y)*t + (j===0 || j===segs ? 0 : (Math.random()-.5)*amp*s);
+          const yy = a.y + (b.y-a.y)*t + (j===0 || j===segs ? 0 : (trapHash(j*5.1 + i*3 + Math.floor(time*24))-.5)*amp*s);
           if(j===0) ctx.moveTo(xx,yy); else ctx.lineTo(xx,yy);
         }
         ctx.stroke();
@@ -15467,6 +15633,20 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     };
     drawWireGrasperRange(o);
     ctx.save();
+    // WIRE_GRASPER_WEAVER_V1: "the Weaver", a living tangle of wire with one eye in the middle; its
+    // wires are arms ending in small three-fingered hands. Logic untouched (pull field only).
+    //   far     — dozing: eye heavy, hands hanging loose
+    //   you enter its field — the eye snaps open, the hands lift and spread
+    //   it grabs — the hands close on you, current runs down the wires
+    //   you sit on its eye — it squeezes the eye shut
+    // In play its field is shown honestly as a faint dotted ring that wakes with it.
+    if(state !== "editor"){
+      const ringA = .07 + engage*.16;
+      ctx.strokeStyle = rgbaHex(color.wire, ringA); ctx.lineWidth = Math.max(1, 1.3*s);
+      ctx.setLineDash([2*s, 7*s]); ctx.lineDashOffset = -time*6*s;
+      ctx.beginPath(); ctx.arc(p.x, p.y, c.range*s, 0, Math.PI*2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     const targetScreen = targetInfo.target ? worldToScreen(targetInfo.target.x, targetInfo.target.y) : null;
     const hive = c.arms >= c.hiveThreshold;
@@ -15555,55 +15735,77 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       if(armStrike > .14 || armAim > .34) drawElectricArc(startX, startY, midX, midY, endX, endY, .08 + armAim*.15 + armStrike*.28, i*1.7 + 3.1, armSpark);
 
+      // a small three-fingered hand: loose when idle, spread while aiming, a fist when it grabs
       const tipA = Math.atan2(endY-midY,endX-midX);
-      const clawLen = (5 + armAim*2.5 + armStrike*4.5) * s;
-      ctx.strokeStyle = armStrike > .18 ? color.spark : color.wireHot;
-      ctx.lineWidth = Math.max(1,1.15*s);
-      ctx.beginPath();
-      ctx.moveTo(endX,endY);
-      ctx.lineTo(endX-Math.cos(tipA-.65)*clawLen,endY-Math.sin(tipA-.65)*clawLen);
-      ctx.moveTo(endX,endY);
-      ctx.lineTo(endX-Math.cos(tipA+.65)*clawLen,endY-Math.sin(tipA+.65)*clawLen);
-      ctx.stroke();
+      const handR = (2.2 + armAim*.8 + armStrike*.6)*s;
+      const spreadH = (.25 + armAim*.75)*(1 - armStrike*.85);
+      const fingerL = (4.2 + armAim*2.4)*s*(1 - armStrike*.45);
+      ctx.fillStyle = color.wire;
+      ctx.beginPath(); ctx.arc(endX, endY, handR, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = color.wire; ctx.lineWidth = Math.max(1.1, 1.5*s);
+      for(const fk of [-1, 0, 1]){
+        const fa = tipA + fk*spreadH;
+        const bx2 = endX + Math.cos(fa)*fingerL, by2 = endY + Math.sin(fa)*fingerL;
+        const curl = armStrike*1.4 + .2;                         // fingers curl in as it grabs
+        ctx.beginPath(); ctx.moveTo(endX, endY);
+        ctx.quadraticCurveTo(endX + Math.cos(fa)*fingerL*.8, endY + Math.sin(fa)*fingerL*.8, bx2 + Math.cos(fa + Math.PI/2*fk - curl*(fk || 1))*fingerL*.35, by2 + Math.sin(fa + Math.PI/2*fk - curl*(fk || 1))*fingerL*.35);
+        ctx.stroke();
+      }
+      if(armStrike > .5){
+        ctx.fillStyle = rgbaHex(TRAP_SPARK_PALETTES.electric[0], (armStrike - .5)*1.6*(.6 + .4*Math.sin(time*30 + i)));
+        ctx.beginPath(); ctx.arc(endX, endY, handR*.6, 0, Math.PI*2); ctx.fill();
+      }
     }
 
-    const bodySquash = 1 + prep * .04 + strike * .04;
+    // ---- the tangle body ----
+    const dark = paperIsDark(color.wire);
+    const tLo = paperShade(color.wire, dark ? .2 : -.3), tHi = paperShade(color.wire, dark ? .38 : .3);
+    const breathe = 1 + .025*Math.sin(t*1.6) + prep*.04 + strike*.04;
+    const bw = c.r*1.12*s*breathe, bh = c.r*.92*s*breathe;
     ctx.globalAlpha = 1;
-    ctx.fillStyle = color.rim;
-    ctx.beginPath(); ctx.ellipse(p.x,p.y,c.r*1.25*s,c.r*.95*s*bodySquash,0,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle = color.body;
-    ctx.beginPath(); ctx.ellipse(p.x,p.y,c.r*1.04*s,c.r*.76*s*bodySquash,0,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle = active ? color.wireHot : color.wire;
-    ctx.lineWidth = Math.max(1,1.5*s);
-    ctx.beginPath(); ctx.ellipse(p.x,p.y,c.r*.82*s,c.r*.56*s,0,0,Math.PI*2); ctx.stroke();
-
-    const eyeAgg = c.eyeAggression || 1;
-    const lookX = (o.__wgLookX || 0);
-    const lookY = (o.__wgLookY || 0);
-    const jitter = prep > .35 && strike < .45 ? Math.sin(time*38) * c.r * .018 * eyeAgg * s : 0;
-    const px = lookX * c.r*(.13 + .035*eyeAgg)*s + jitter;
-    const py = lookY * c.r*(.20 + .055*eyeAgg)*s + prep * c.r * .03 * s + strike * c.r * .05 * s;
-    if(closeBlend > .72){
-      ctx.strokeStyle = color.eyeWhite; ctx.lineWidth = Math.max(2,3.1*s); ctx.lineCap="round";
-      ctx.beginPath();
-      ctx.moveTo(p.x-c.r*.42*s,p.y + closeBlend * c.r * .02 * s);
-      ctx.quadraticCurveTo(p.x,p.y+c.r*.12*s,p.x+c.r*.42*s,p.y + closeBlend * c.r * .02 * s);
-      ctx.stroke();
-    }else{
-      const eyeH = c.r * (.28 - prep*.035 - strike*.03) * s;
-      ctx.fillStyle = color.eyeWhite;
-      ctx.beginPath(); ctx.ellipse(p.x,p.y,c.r*.41*s,eyeH,0,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle = active ? color.lid : rgbaHex(color.lid, .68);
-      ctx.lineWidth = Math.max(1,1.2*s);
-      ctx.beginPath();
-      ctx.moveTo(p.x-c.r*.40*s,p.y-eyeH*.22);
-      ctx.quadraticCurveTo(p.x,p.y-eyeH*.72 + (lookY * c.r * .16 * s) + (prep * 2.5*s),p.x+c.r*.40*s,p.y-eyeH*.22);
-      ctx.stroke();
-      ctx.fillStyle = color.pupil;
-      ctx.beginPath(); ctx.arc(p.x+px,p.y+py,c.r*.118*s,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle = color.eye;
-      ctx.beginPath(); ctx.arc(p.x+px+c.r*.03*s,p.y+py-c.r*.03*s,c.r*.03*s,0,Math.PI*2); ctx.fill();
-      if(active){ ctx.strokeStyle=color.wireHot; ctx.lineWidth=Math.max(1,1.05*s); ctx.beginPath(); ctx.ellipse(p.x,p.y,c.r*.50*s,c.r*.37*s,0,0,Math.PI*2); ctx.stroke(); }
+    ctx.fillStyle = color.wire;
+    ctx.beginPath(); ctx.ellipse(p.x, p.y, bw, bh, 0, 0, Math.PI*2); ctx.fill();
+    // loops of wire wound round and round, slowly turning; faster when it is awake
+    const spin = t*(.25 + engage*.9);
+    for(let k=0;k<11;k++){
+      const h1 = trapHash(k*3.7 + c.x*.01), h2 = trapHash(k*5.3 + 1), h3 = trapHash(k*7.1 + 2);
+      const rot = h1*Math.PI*2 + spin*(k % 2 ? 1 : -1)*(.6 + h2*.6);
+      const rx = bw*(.55 + .5*h2), ry = bh*(.2 + .35*h3);
+      ctx.strokeStyle = k % 3 ? tLo : tHi;
+      ctx.globalAlpha = k % 3 ? .9 : .55;
+      ctx.lineWidth = Math.max(.8, (k % 3 ? 1.3 : 1)*s);
+      ctx.save(); ctx.beginPath(); ctx.ellipse(p.x, p.y, bw, bh, 0, 0, Math.PI*2); ctx.clip();
+      ctx.beginPath(); ctx.ellipse(p.x + (h3 - .5)*bw*.3, p.y + (h1 - .5)*bh*.3, rx, ry, rot, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    // a few loose ends sticking out of the tangle
+    ctx.strokeStyle = color.wire; ctx.lineWidth = Math.max(1, 1.2*s);
+    for(let k=0;k<5;k++){
+      const ang = trapHash(k*9.1 + 4)*Math.PI*2 + Math.sin(t*1.3 + k)*.15;
+      const x0 = p.x + Math.cos(ang)*bw*.95, y0 = p.y + Math.sin(ang)*bh*.95;
+      const ln = (3 + 3*trapHash(k + 8))*s;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo(x0 + Math.cos(ang + .6)*ln, y0 + Math.sin(ang + .6)*ln, x0 + Math.cos(ang - .2)*ln*1.6, y0 + Math.sin(ang - .2)*ln*1.6); ctx.stroke();
+    }
+    // the eye sits in a dark socket in the middle of the tangle
+    const eyeRX = c.r*.4*s, eyeRY = c.r*.5*s;
+    ctx.fillStyle = color.wire;                                  // clear the loops behind the eye
+    ctx.beginPath(); ctx.ellipse(p.x, p.y, eyeRX*1.22, eyeRY*1.14, 0, 0, Math.PI*2); ctx.fill();
+    const sleepy = 1 - engage;
+    let eOpen = .38 + .62*engage, eSquint = .04 + prep*.12 + strike*.1, eSlant = .05 + .3*prep*(1 - closeBlend), ePupil = .55 - .25*strike;
+    if(closeBlend > .05){eOpen = Math.max(.04, eOpen*(1 - closeBlend)); eSquint = Math.min(1, eSquint + closeBlend*.8);}
+    const blinkPh = (t*.23) % 1;
+    if(blinkPh < .03*(1 + sleepy)) eOpen = Math.min(eOpen, .06);
+    const jitter = prep > .35 && strike < .45 ? Math.sin(time*38)*.05*(c.eyeAggression || 1) : 0;
+    drawGuardianEye(p.x, p.y, eyeRX, eyeRY, s, color.wire, eOpen, eSquint, eSlant, ePupil, {x:(o.__wgLookX || 0)*2 + jitter, y:(o.__wgLookY || 0)*2 + (sleepy*.5)});
+    // squeezed-shut creases when you sit on its eye
+    if(closeBlend > .3){
+      ctx.strokeStyle = tHi; ctx.globalAlpha = (closeBlend - .3)/.7; ctx.lineWidth = Math.max(1, 1.2*s);
+      for(const sd of [-1, 1]){
+        ctx.beginPath(); ctx.moveTo(p.x + sd*eyeRX*1.1, p.y - eyeRY*.5); ctx.lineTo(p.x + sd*eyeRX*1.6, p.y - eyeRY*.8);
+        ctx.moveTo(p.x + sd*eyeRX*1.15, p.y); ctx.lineTo(p.x + sd*eyeRX*1.7, p.y); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
     ctx.restore();
   }
@@ -15626,13 +15828,46 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     ctx.restore(); ctx.globalAlpha=1;
   }
+  // Instead of a text badge: while the Weaver pulls you, a thin live thread runs from it to you
+  // (the pull starts the moment you enter its field); once its hands have you, its wire wraps
+  // your body above and below your eye.
   function drawWireStatusBadge(){
     if((wireEffect.visualTimer <= 0 && wireEffect.strength <= .05) || state === "dying") return;
-    const rect=playerRect(); const p=worldToScreen(rect.x+rect.w/2, rect.y-13); const s=p.s; const color = wireGrasperColors();
-    ctx.save(); ctx.globalAlpha=Math.min(.92,.34+wireEffect.strength); ctx.fillStyle=color.badge;
-    roundRect(ctx,p.x-24*s,p.y-10*s,48*s,18*s,8*s); ctx.fill();
-    ctx.fillStyle=color.badgeText; ctx.font=`${Math.max(7,8*s)}px Inter, sans-serif`; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText("PULL",p.x,p.y);
-    ctx.restore(); ctx.globalAlpha=1;
+    const rect = playerRect(); const p = worldToScreen(rect.x, rect.y); const s = p.s; const color = wireGrasperColors();
+    const E = TRAP_SPARK_PALETTES.electric;
+    const w = rect.w*s, h = rect.h*s, k = Math.min(1, wireEffect.strength*1.4);
+    const src = wireEffect.source;
+    ctx.save();
+    ctx.lineCap = "round";
+    if(src){
+      const cs = worldToScreen(wireGrasperConfig(src).x, wireGrasperConfig(src).y);
+      const tx = p.x + w/2, ty = p.y + h*.62;
+      const pts = trapBolt(cs.x, cs.y, tx, ty, 3*s, 9, Math.floor(time*24)*1.3);
+      ctx.globalAlpha = .25 + .35*k;
+      ctx.strokeStyle = color.wire; ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for(const q of pts) ctx.lineTo(q[0], q[1]); ctx.stroke();
+      ctx.globalAlpha = .4*k;
+      ctx.strokeStyle = E[1];
+      ctx.setLineDash([3*s, 9*s]); ctx.lineDashOffset = time*40*s;   // current flowing toward the creature
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for(const q of pts) ctx.lineTo(q[0], q[1]); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const held = src ? clamp01(((src.__wgArmStrike || 0) - .35)/.4) : 0;
+    if(held > 0){
+      for(const [fy, ph] of [[.16, 0], [.88, 1.7]]){
+        const y = p.y + h*fy + Math.sin(time*9 + ph)*1*s;
+        const tight = 1 + .05*Math.sin(time*14 + ph);
+        ctx.globalAlpha = held;
+        ctx.strokeStyle = color.wire; ctx.lineWidth = Math.max(1.4, 2.2*s);
+        ctx.beginPath(); ctx.ellipse(p.x + w/2, y, w*.56*tight, 2.4*s, -.08, Math.PI*.05, Math.PI*.95); ctx.stroke();
+        ctx.globalAlpha = held*.5;
+        ctx.beginPath(); ctx.ellipse(p.x + w/2, y, w*.56*tight, 2.4*s, -.08, Math.PI*1.05, Math.PI*1.95); ctx.stroke();
+        ctx.globalAlpha = held*(.4 + .4*Math.sin(time*24 + ph));
+        ctx.strokeStyle = E[1]; ctx.lineWidth = Math.max(.8, 1*s);
+        ctx.beginPath(); ctx.ellipse(p.x + w/2, y, w*.56*tight, 2.4*s, -.08, Math.PI*.2, Math.PI*.5); ctx.stroke();
+      }
+    }
+    ctx.restore(); ctx.globalAlpha = 1;
   }
 
   function sniperSide(o){return (o.side === "left") ? "left" : "right";}
@@ -18847,57 +19082,238 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   }
 
   function drawPendulumCore(o){
+    // VOLT_CORE_SWINGER_V1: "the Swinger", a round charged creature hanging by its own tail from a
+    // peg it grips with a tiny hand. It loves swinging. Visual only: the hit circle is still
+    // pendulumCoreState (r*.92) and the body is drawn at exactly r, so what you see is what kills.
+    //   end of a swing — it tucks in: eye squeezed, legs pulled up, the belly gathers charge
+    //   bottom          — it lets go: eye wide, legs fly out behind, arcs crawl over it, sparks drop
+    //   near you        — its eye finds you (except at the thrill of the bottom)
+    //   kill            — it laughs, jiggling and crackling
+    //   passed          — it watches you go up, then gets bored and swings half asleep
     const core = pendulumCoreState(o, time);
     const a = worldToScreen(core.anchorX, core.anchorY);
     const c = worldToScreen(core.x, core.y);
     const s = c.s;
     const r = core.r * s;
-    const spark = .55 + .45 * Math.sin(time * (7.5 + core.chaos * 7) + core.phase);
+    const editorMode = state === "editor";
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    const E = TRAP_SPARK_PALETTES.electric;
+    const main = trapMain();
+    const dark = paperIsDark(main);
+    const skin = main, skinLo = paperShade(main, dark ? .16 : -.3), skinHi = paperShade(main, dark ? .3 : .25);
+    const seed = (core.phase || 0)*17.3 + core.anchorX*.07;
+    const tick = Math.floor(time*30);
+    const fx = editorMode ? null : prismSmokeFor(o);
+    if(fx) prismFxBeginFrame(o);
+    const dt = fx ? (fx.dt || 0) : 0;
+    // Swing speed: 0 at the ends of a swing, ~1 at the bottom.
+    const prev = pendulumCoreState(o, time - .02);
+    const omega = (core.angle - prev.angle)/.02;
+    const omegaMax = core.swing*core.speed*(1 + core.chaos*1.6) + .001;
+    let rush = Math.min(1, Math.abs(omega)/omegaMax);
+    if(editorMode) rush = .4;
+    const charge = 1 - rush, release = rush*rush;
+    const sgn = Math.sign(omega) || 1;
+    const dying = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+    let passK = 0, passT = 0;
+    if(fx){
+      const target = !dying && state !== "dying" && (Number(player.baseY) || 0) < core.anchorY - 20 ? 1 : 0;
+      fx.passK = (fx.passK || 0) + (target - (fx.passK || 0))*Math.min(1, dt*3);
+      if(target){if(fx.passAt == null) fx.passAt = time;} else fx.passAt = null;
+      passK = fx.passK; passT = fx.passAt == null ? 0 : time - fx.passAt;
+    }
+    const bored = passK*guardSm((passT - 1.6)/1.2);
+    const dT = dying ? deathTimer : 0;
+    const laugh = dying ? Math.abs(Math.sin(dT*20)) : 0;
+
+    // ---- pose (smoothed so nothing pops) ----
+    const pcx = player.x, pcy = player.baseY - player.h/2;
+    let open = .78 + .22*rush, squint = .32*charge*charge, pupil = .45 + .25*charge, slant = 0;
+    let look = {x:Math.cos(core.angle)*sgn*.5, y:.2};             // looks where it is going
+    const ddx = pcx - core.x, ddy = pcy - core.y, dl = Math.hypot(ddx, ddy) || 1;
+    if(dl < 220 && !dying && passK < .5){look = {x:ddx/dl, y:ddy/dl};}
+    let tuck = charge*charge;                                     // legs pulled in, body squeezed
+    if(dying){open = .25; squint = .9; slant = .2; pupil = .3; tuck = .3 + .3*laugh; look = {x:0, y:-.3};}
+    if(passK > .01){
+      const tgt = {open:1 - .55*bored, squint:.1 + .3*bored, look:{x:(pcx - core.x)/200, y:-1 + .8*bored}};
+      open += (tgt.open - open)*passK; squint += (tgt.squint - squint)*passK;
+      look = {x:look.x + (tgt.look.x - look.x)*passK, y:look.y + (tgt.look.y - look.y)*passK};
+    }
+    if(fx){
+      const sm = fx.sw || (fx.sw = {});
+      const fresh = !sm.ready || dt > .2;
+      const f = (k, v, rate) => {if(fresh || !(k in sm)){sm[k] = v; return v;} sm[k] += (v - sm[k])*(1 - Math.exp(-dt*rate)); return sm[k];};
+      open = f("open", open, 16); squint = f("squint", squint, 12); pupil = f("pupil", pupil, 10); slant = f("slant", slant, 10);
+      tuck = f("tuck", tuck, 9); look = {x:f("lx", look.x, 8), y:f("ly", look.y, 8)};
+      sm.ready = true;
+    }
+    const blinkPh = (time*.31 + seed) % 1;
+    if(!dying && blinkPh < .025) open = Math.min(open, .08);
+
     ctx.save();
-    ctx.lineCap = "round";
-    ctx.strokeStyle = "rgba(0,0,0,.22)";
-    ctx.lineWidth = Math.max(2, 3.2*s);
-    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(c.x,c.y);ctx.stroke();
-    ctx.strokeStyle = rgbaHex(trapAccent(), .28 + .18*spark);
-    ctx.lineWidth = Math.max(1, 1.2*s);
-    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(c.x,c.y);ctx.stroke();
-    ctx.fillStyle = "rgba(0,0,0,.22)";
-    ctx.beginPath();ctx.arc(a.x,a.y,7*s,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle = trapMain();
-    ctx.beginPath();ctx.arc(a.x,a.y,4.4*s,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle = rgbaHex(trapMain(), .12);
-    ctx.beginPath();ctx.arc(c.x,c.y,r*1.34,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = rgbaHex(trapAccent(), .16 + .16*spark);
-    ctx.lineWidth = Math.max(1, 2*s);
-    ctx.beginPath();ctx.arc(c.x,c.y,r*1.22,0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle = trapMain();
-    ctx.beginPath();ctx.arc(c.x,c.y,r,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = rgbaHex(trapAccent(), .34 + .26*spark);
-    ctx.lineWidth = Math.max(1.3, 2.2*s);
-    ctx.beginPath();ctx.arc(c.x,c.y,r*.76,0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle = rgbaHex(trapAccent(), .08 + .10*spark);
-    ctx.beginPath();ctx.arc(c.x,c.y,r*.60,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = trapAccent();
-    ctx.lineWidth = Math.max(1.6, 2.2*s);
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+
+    // ---- the tail: a tapering, segmented tail that lags a little behind the swing ----
+    const dx = c.x - a.x, dy = c.y - a.y, L = Math.hypot(dx, dy) || 1;
+    const ux = dx/L, uy = dy/L, nx = -uy, ny = ux;
+    const bend = -sgn*Math.min(1, Math.abs(omega)/omegaMax)*Math.min(16*s, L*.1);
+    const mx = (a.x + c.x)/2 + nx*bend, my = (a.y + c.y)/2 + ny*bend;
+    const q = (u) => {const v = 1 - u; return [v*v*a.x + 2*v*u*mx + u*u*c.x, v*v*a.y + 2*v*u*my + u*u*c.y];};
+    const tailEnd = 1 - (r*.7)/L;
+    const N = Math.max(10, Math.round(L/(4*s)));
+    const tw = (u) => (1.8 + (r*.36/s - 1.8)*Math.pow(u/tailEnd, 1.5))*s;     // half-width
+    const left = [], right = [];
+    for(let i=0;i<=N;i++){
+      const u = tailEnd*i/N, p0 = q(Math.max(0, u - .01)), p1 = q(Math.min(1, u + .01));
+      const tx = p1[0] - p0[0], ty = p1[1] - p0[1], tl = Math.hypot(tx, ty) || 1;
+      const pt = q(u), w = tw(u);
+      left.push([pt[0] - ty/tl*w, pt[1] + tx/tl*w]); right.push([pt[0] + ty/tl*w, pt[1] - tx/tl*w]);
+    }
+    ctx.fillStyle = skin;
     ctx.beginPath();
-    const z = r*.42;
-    ctx.moveTo(c.x-z, c.y-r*.03);
-    ctx.lineTo(c.x-z*.55, c.y+r*.22*Math.sin(time*5+core.phase));
-    ctx.lineTo(c.x-z*.12, c.y-r*.18);
-    ctx.lineTo(c.x+z*.18, c.y+r*.20);
-    ctx.lineTo(c.x+z*.56, c.y-r*.05);
-    ctx.lineTo(c.x+z, c.y+r*.14*Math.sin(time*6.1));
-    ctx.stroke();
-    for(let i=0;i<5;i++){
-      const ang = time*(1.7+core.chaos*2.4) + core.phase + i*Math.PI*2/5;
-      const rr = r*(1.04 + .13*Math.sin(time*3+i));
-      const x = c.x + Math.cos(ang)*rr;
-      const y = c.y + Math.sin(ang)*rr;
-      ctx.strokeStyle = i%2 ? rgbaHex(trapAccent(), .68) : rgbaHex("#ffffff", .62);
-      ctx.lineWidth = Math.max(1, 1*s);
-      ctx.beginPath();ctx.moveTo(x, y);ctx.lineTo(x + Math.cos(ang+1.7)*6*s, y + Math.sin(ang+1.7)*6*s);ctx.stroke();
+    left.forEach((pt, i) => i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]));
+    for(let i=right.length - 1;i>=0;i--) ctx.lineTo(right[i][0], right[i][1]);
+    ctx.closePath(); ctx.fill();
+    // ring segments across the tail
+    ctx.strokeStyle = skinLo; ctx.lineWidth = Math.max(.8, 1.1*s);
+    const rings = Math.max(5, Math.round(L/(9*s)));
+    for(let i=1;i<rings;i++){
+      const k = Math.round(i/rings*N);
+      ctx.beginPath(); ctx.moveTo(left[k][0], left[k][1]); ctx.lineTo(right[k][0], right[k][1]); ctx.stroke();
+    }
+    // a pulse of current runs down the tail into the belly while it lets go
+    if(release > .2){
+      const u = ((time*2.2 + seed) % 1)*tailEnd;
+      const pp = q(u);
+      ctx.fillStyle = rgbaHex(E[1], .85*release);
+      ctx.beginPath(); ctx.arc(pp[0], pp[1], 2.4*s, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = rgbaHex(E[0], release);
+      ctx.beginPath(); ctx.arc(pp[0], pp[1], 1.1*s, 0, Math.PI*2); ctx.fill();
+    }
+
+    // ---- the peg and the tiny hand gripping it ----
+    ctx.fillStyle = skinLo;
+    ctx.beginPath(); ctx.arc(a.x, a.y, 3.2*s, 0, Math.PI*2); ctx.fill();
+    ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(Math.atan2(uy, ux) - Math.PI/2);
+    ctx.fillStyle = skin;
+    ctx.beginPath(); ctx.ellipse(0, 3*s, 4.2*s, 3.4*s, 0, 0, Math.PI*2); ctx.fill();
+    for(const fxo of [-1, 0, 1]){                                 // three fingers wrapped over the peg
+      ctx.strokeStyle = skin; ctx.lineWidth = Math.max(1.4, 2.1*s);
+      ctx.beginPath(); ctx.moveTo(fxo*2.6*s, 2.2*s); ctx.quadraticCurveTo(fxo*3.4*s, -3.6*s, fxo*1.2*s, -4.4*s); ctx.stroke();
     }
     ctx.restore();
+
+    // ---- body, hanging: its top faces the peg ----
+    const hang = Math.atan2(uy, ux) - Math.PI/2;
+    const jig = dying ? Math.sin(dT*40)*.06*laugh : 0;
+    const sqX = 1 + .06*tuck + jig, sqY = 1 - .06*tuck - jig;
+    // halo
+    const halo = ctx.createRadialGradient(c.x, c.y, r*.7, c.x, c.y, r*1.6);
+    halo.addColorStop(0, rgbaHex(E[2], .12 + .22*release + .15*laugh));
+    halo.addColorStop(1, rgbaHex(E[2], 0));
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(c.x, c.y, r*1.6, 0, Math.PI*2); ctx.fill();
+    ctx.save();
+    ctx.translate(c.x, c.y); ctx.rotate(hang);
+    // legs: two short legs at the bottom, trailing the swing (out at the bottom, tucked at the ends)
+    const trail = -sgn*Math.min(1, Math.abs(omega)/omegaMax);
+    for(const sd of [-1, 1]){
+      const hipX = sd*r*.42, hipY = r*.78;
+      const kick = dying ? Math.sin(dT*22 + sd)*.6 : 0;
+      const ang = Math.PI/2 + trail*.9 + sd*(.22 + .25*(1 - tuck)) + kick - tuck*sd*.55;
+      const len = r*(.62 - .3*tuck);
+      const kx = hipX + Math.cos(ang)*len*.55, ky = hipY + Math.sin(ang)*len*.55;
+      const fx2 = hipX + Math.cos(ang + trail*.4)*len, fy2 = hipY + Math.sin(ang + trail*.4)*len;
+      ctx.strokeStyle = skinLo; ctx.lineWidth = Math.max(1.6, r*.13);
+      ctx.beginPath(); ctx.moveTo(hipX, hipY); ctx.quadraticCurveTo(kx, ky, fx2, fy2); ctx.stroke();
+      ctx.fillStyle = skin;
+      ctx.beginPath(); ctx.ellipse(fx2, fy2, r*.13, r*.09, ang, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.scale(sqX, sqY);
+    // the round body
+    ctx.fillStyle = skin;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill();
+    // glass belly with the charge inside
+    const bellyY = r*.38, bellyR = r*.42;
+    const heat = .2 + .5*charge*(.6 + .4*Math.sin(time*9 + seed)) + .6*release + .5*laugh;
+    const belly = ctx.createRadialGradient(0, bellyY, 0, 0, bellyY, bellyR);
+    belly.addColorStop(0, rgbaHex(E[0], Math.min(1, .5 + .5*heat)));
+    belly.addColorStop(.5, rgbaHex(E[1], .3 + .5*heat));
+    belly.addColorStop(1, rgbaHex(E[2], .2 + .35*heat));
+    ctx.fillStyle = belly;
+    ctx.beginPath(); ctx.ellipse(0, bellyY, bellyR, bellyR*.8, 0, 0, Math.PI*2); ctx.fill();
+    // the little coil inside, wound tighter while it gathers
+    ctx.strokeStyle = rgbaHex(E[0], .55 + .45*heat); ctx.lineWidth = Math.max(.9, 1*s);
+    ctx.beginPath();
+    const coil = bellyR*.62*(1 - .3*charge);
+    for(let k=0;k<=30;k++){const u = k/30, xx = -coil + 2*coil*u, yy = bellyY + Math.sin(u*Math.PI*6 + time*7)*bellyR*.2; k ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy);}
+    ctx.stroke();
+    ctx.strokeStyle = skinLo; ctx.lineWidth = Math.max(1.2, 1.6*s);
+    ctx.beginPath(); ctx.ellipse(0, bellyY, bellyR, bellyR*.8, 0, 0, Math.PI*2); ctx.stroke();
+    // a soft paper-fold highlight on the shoulder
+    ctx.strokeStyle = skinHi; ctx.globalAlpha = .6; ctx.lineWidth = Math.max(1, 1.4*s);
+    ctx.beginPath(); ctx.arc(0, 0, r*.86, -2.5, -1.4); ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.restore();
+    // the eye stays upright (not rotated with the body) so it always reads
+    const eyeOff = r*.28;
+    const ex = c.x - ux*eyeOff*sqX, ey = c.y - uy*eyeOff*sqY;   // toward the peg end of the body
+    if(dying){
+      // laughing: a happy crescent that bounces
+      ctx.strokeStyle = eyeSkin().color; ctx.lineWidth = Math.max(2, r*.14);
+      ctx.beginPath(); ctx.arc(ex, ey + r*.08 - laugh*r*.06, r*.24, Math.PI*1.12, Math.PI*1.88); ctx.stroke();
+    } else {
+      drawGuardianEye(ex, ey, r*.34, r*.42, s, skin, Math.max(.05, open), squint, slant, pupil, look);
+    }
+
+    // ---- arcs crawl over it while it lets go (and while it laughs) ----
+    const zap = Math.max(release, laugh*.8);
+    if(zap > .05 || editorMode){
+      const arcs = Math.round(1 + zap*4);
+      for(let k=0;k<arcs;k++){
+        const bs = seed + k*19.7 + tick*2.3;
+        const a0 = trapHash(bs)*Math.PI*2, a1 = a0 + (.5 + trapHash(bs + 3)*.9)*(trapHash(bs + 5) > .5 ? 1 : -1);
+        const rr = r*1.02;
+        const pts = trapBolt(c.x + Math.cos(a0)*rr, c.y + Math.sin(a0)*rr, c.x + Math.cos(a1)*rr, c.y + Math.sin(a1)*rr, r*.3, 7, bs);
+        for(let j=1;j<pts.length - 1;j++){
+          const vx = pts[j][0] - c.x, vy = pts[j][1] - c.y, vl = Math.hypot(vx, vy) || 1;
+          const want = rr*(1 + (.12 + .14*trapHash(bs + j))*Math.sin(j/(pts.length - 1)*Math.PI));
+          pts[j][0] = c.x + vx/vl*want; pts[j][1] = c.y + vy/vl*want;
+        }
+        trapDrawBolt(pts, Math.max(1.2*s, r*.07), E, editorMode ? .5 : Math.min(1, .35 + zap));
+      }
+    }
+    // gathering at the ends of a swing: rings of charge close in on it
+    if(charge > .5 && !dying){
+      const g = (charge - .5)/.5;
+      for(let k=0;k<2;k++){
+        const u = (time*2.2 + k*.5 + seed) % 1;
+        ctx.strokeStyle = rgbaHex(E[1], g*u*.7);
+        ctx.lineWidth = Math.max(1, 1.3*s);
+        ctx.beginPath(); ctx.arc(c.x, c.y, r*(1.7 - .65*u), 0, Math.PI*2); ctx.stroke();
+      }
+    }
+    // dozing after you passed: little Zs float off
+    if(bored > .3 && !dying){
+      for(let k=0;k<2;k++){
+        const u = ((time*.5 + k*.5) % 1);
+        ctx.globalAlpha = (bored - .3)/.7*(1 - u);
+        ctx.fillStyle = skinLo;
+        ctx.font = `700 ${Math.round((7 + 4*u)*s)}px Inter, sans-serif`;
+        ctx.fillText("z", c.x + r*.7 + u*8*s, c.y - r*.9 - u*16*s);
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+
+    // ---- sparks shaken off at the bottom of the swing ----
+    if(fx){
+      const want = (heavy ? 16 : 7)*Math.max(release, laugh*.6)*dt;
+      const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+      for(let i=0;i<n;i++){
+        const ang = Math.random()*Math.PI*2;
+        trapSparkBurst(o, core.x + Math.cos(ang)*core.r, core.y + Math.sin(ang)*core.r, 1, "electric", .45, -sgn*Math.cos(core.angle)*.2, .3);
+      }
+      prismSparksUpdateDraw(o);
+    }
   }
 
   function drawCoverBlock(o){
