@@ -19940,135 +19940,321 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(o._sniperState === "firing") return sniperTargetPoint();
     return o._sniperTarget || sniperTargetPoint();
   }
+  // RAIL_SNIPER_GUNNER_V1: "the Gunner". A cannon on a wall bracket, and behind it, on a little
+  // seat, a one-eyed creature with a scope-goggle that steers the cannon by two handles. Logic is
+  // untouched: the beam still starts at sniperMuzzle and follows the real aim; only the drawn
+  // barrel eases toward the aim while it is just watching, and is locked to it while firing.
+  //   idle      — leaning back, legs swinging, eye heavy; the cannon drifts
+  //   notice    — a jolt in the seat, eye flies open
+  //   tracking  — hunched forward, squinting through the goggle, hands steering the handles
+  //   charging  — braced and shaking; energy is drawn into the muzzle
+  //   firing    — the cannon kicks, he's thrown back; muzzle flash and an impact burst at the hit
+  //   cooldown  — the barrel smokes, he sits back
+  //   kill      — arms up, laughing;  passed — watches you go, then folds his arms and sulks
   function drawPredictiveSniper(o){
     ensureSniperRuntime(o);
     const editorPreview = state === "editor";
-    // Editor preview must stay locked to the MID line of the yellow sight range.
-    // Runtime targeting can still slide vertically with the player during play/test.
     const st = editorPreview ? "idle" : (o._sniperState || "idle");
     const target = editorPreview ? null : sniperBeamTarget(o);
     const headWorld = sniperRestHeadPoint(o);
-    const aimAngle = sniperAimAngle(o, target);
-    const muzzleWorld = sniperMuzzle(o, target);
-    const cover = (!editorPreview && (st === "targeting" || st === "charging" || st === "firing")) ? sniperCoverHit(o, target, activeLevel()) : null;
-    const endWorld = cover?.point || target || {x:muzzleWorld.x + Math.cos(aimAngle) * 160, y:muzzleWorld.y + Math.sin(aimAngle) * 160};
+    const realAim = sniperAimAngle(o, (st === "idle") ? null : target);
+    const realMuzzleW = sniperMuzzle(o, (st === "idle") ? null : target);
     const head = worldToScreen(headWorld.x, headWorld.y);
-    const muzzle = worldToScreen(muzzleWorld.x, muzzleWorld.y);
-    const end = worldToScreen(endWorld.x, endWorld.y);
     const s = head.s;
     const dir = sniperDir(o);
-    const aimDelta = angleDelta(aimAngle, sniperBaseAngle(o));
-    const main = trapMain();
-    const accent = trapAccent();
-    const idle = trapIdle();
-    const hotCore = accent;
-    ctx.save();
+    const pal = flingerPalette(trapMain());
+    const fx = editorPreview ? null : prismSmokeFor(o);
+    if(fx) prismFxBeginFrame(o);
+    const dt = fx ? (fx.dt || 0) : 0;
+    const sm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    // ---- events ----
+    let noticeAge = 9, fireAge = 9, coolAge = 9;
+    const dying = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+    if(fx){
+      if(fx.prevSt !== st){
+        if(st === "targeting" && (fx.prevSt === "idle" || fx.prevSt == null)) fx.noticeAt = time;
+        if(st === "firing") fx.fireAt = time;
+        if(st === "cooldown") fx.coolAt = time;
+        fx.prevSt = st;
+      }
+      noticeAge = fx.noticeAt == null ? 9 : Math.max(0, time - fx.noticeAt);
+      fireAge = fx.fireAt == null ? 9 : Math.max(0, time - fx.fireAt);
+      coolAge = fx.coolAt == null ? 9 : Math.max(0, time - fx.coolAt);
+    }
+    const passedNow = !editorPreview && !dying && state !== "dying" && (Number(player.baseY) || 0) < headWorld.y - sniperRangeLength(o)/2 - 20;
+    let passK = 0, passT = 0;
+    if(fx){
+      fx.passK = (fx.passK || 0) + ((passedNow ? 1 : 0) - (fx.passK || 0))*(1 - Math.exp(-dt*3));
+      if(passedNow){if(fx.passAt == null) fx.passAt = time;} else fx.passAt = null;
+      passK = fx.passK; passT = fx.passAt == null ? 0 : time - fx.passAt;
+    }
+    // ---- the drawn aim: eased while watching, exact while firing ----
+    const baseA = sniperBaseAngle(o);
+    let idleDrift = st === "idle" ? Math.sin(time*.7 + headWorld.y*.01)*.12 : 0;
+    if(passK > .01) idleDrift += (-.55*dir*(dir > 0 ? 1 : -1))*passK*(dir > 0 ? -1 : 1);   // looks up after you
+    let shownAim = realAim + idleDrift;
+    if(fx){
+      if(fx.aimShown == null || dt > .2) fx.aimShown = shownAim;
+      if(st === "firing") fx.aimShown = realAim;
+      else fx.aimShown += angleDelta(shownAim, fx.aimShown)*(1 - Math.exp(-dt*(st === "idle" ? 4 : 16)));
+      shownAim = fx.aimShown;
+    }
+    // local frame: +x points out into the level (mirrored for a right-side gunner)
+    const toLocal = (a) => Math.atan2(Math.sin(a), Math.cos(a)*dir);
+    const aimL = toLocal(shownAim);
+    const kick = st === "firing" || fireAge < .35 ? Math.exp(-fireAge*10)*Math.sin(Math.min(1, fireAge*30)*Math.PI*.5) : 0;
+    const chargeK = st === "charging" ? 1 - clamp01((o._sniperTimer || 0)/Math.max(.05, Number(o.chargeTime) || .42)) : 0;
+    const shake = st === "charging" ? (trapHash(Math.floor(time*40)) - .5)*1.6*s*(.3 + chargeK) : 0;
 
-    if(st === "targeting" || st === "charging"){
-      ctx.save();
+    // ---- beam / sight line (world space, honest) ----
+    const muzzleShown = worldToScreen(headWorld.x + Math.cos(shownAim)*31, headWorld.y + Math.sin(shownAim)*31);
+    const cover = (!editorPreview && (st === "targeting" || st === "charging" || st === "firing")) ? sniperCoverHit(o, target, activeLevel()) : null;
+    const endW = cover?.point || target;
+    ctx.save();
+    if(endW && (st === "targeting" || st === "charging")){
+      const end = worldToScreen(endW.x, endW.y);
       ctx.lineCap = "round";
-      ctx.setLineDash(st === "charging" ? [3*s,3*s] : [10*s,7*s]);
-      ctx.lineDashOffset = -time * (st === "charging" ? 42 : 18);
-      ctx.strokeStyle = st === "charging" ? rgbaHex(accent, .96) : rgbaHex(main, .72);
-      ctx.lineWidth = Math.max(1.2, (st === "charging" ? 2.7 : 1.6)*s);
-      ctx.beginPath();ctx.moveTo(muzzle.x,muzzle.y);ctx.lineTo(end.x,end.y);ctx.stroke();
+      ctx.setLineDash(st === "charging" ? [2*s, 5*s] : [7*s, 8*s]);
+      ctx.lineDashOffset = -time*(st === "charging" ? 60 : 22)*s;
+      ctx.strokeStyle = rgbaHex(pal.E[2], st === "charging" ? .55 + .4*chargeK : .4);
+      ctx.lineWidth = Math.max(1, (st === "charging" ? 1.4 + 1.6*chargeK : 1.2)*s);
+      ctx.beginPath(); ctx.moveTo(muzzleShown.x, muzzleShown.y); ctx.lineTo(end.x, end.y); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.restore();
+      // the reticle on you tightens while it charges
+      const rr = (14 - 8*chargeK)*s;
+      ctx.strokeStyle = rgbaHex(pal.E[2], .5 + .4*chargeK); ctx.lineWidth = Math.max(1, 1.4*s);
+      ctx.beginPath(); ctx.arc(end.x, end.y, rr, 0, Math.PI*2); ctx.stroke();
+      for(let k=0;k<4;k++){const a = k*Math.PI/2 + time*(st === "charging" ? 4 : 1); ctx.beginPath(); ctx.moveTo(end.x + Math.cos(a)*rr*.6, end.y + Math.sin(a)*rr*.6); ctx.lineTo(end.x + Math.cos(a)*rr*1.5, end.y + Math.sin(a)*rr*1.5); ctx.stroke();}
     }
-    if(st === "firing"){
+    if(endW && st === "firing"){
+      const m = worldToScreen(realMuzzleW.x, realMuzzleW.y), end = worldToScreen(endW.x, endW.y);
       const beamW = Math.max(7*s, (Number(o.beamWidth)||15)*s);
-      ctx.save();
+      const on = .7 + .3*sm(fireAge/.04);                          // full on the very first frame (impact frame)
+      const flick = .85 + .15*Math.sin(time*70);
       ctx.lineCap = "round";
-      ctx.strokeStyle = rgbaHex(main, .92);
-      ctx.lineWidth = beamW;
-      ctx.beginPath();ctx.moveTo(muzzle.x,muzzle.y);ctx.lineTo(end.x,end.y);ctx.stroke();
-      ctx.strokeStyle = rgbaHex(accent, .96);
-      ctx.lineWidth = Math.max(2*s, beamW*.32);
-      ctx.beginPath();ctx.moveTo(muzzle.x,muzzle.y);ctx.lineTo(end.x,end.y);ctx.stroke();
-      ctx.strokeStyle = rgbaHex(hotCore, .95);
-      ctx.lineWidth = Math.max(1.2*s, beamW*.13);
-      ctx.beginPath();ctx.moveTo(muzzle.x,muzzle.y);ctx.lineTo(end.x,end.y);ctx.stroke();
-      for(let i=0;i<10;i++){
-        const t = ((time*11 + i*.173) % 1);
-        const x = muzzle.x + (end.x-muzzle.x)*t;
-        const y = muzzle.y + (end.y-muzzle.y)*t + Math.sin(time*28+i)*4*s;
-        ctx.strokeStyle = i%2 ? rgbaHex(accent, .72) : rgbaHex(hotCore, .78);
-        ctx.lineWidth = Math.max(1, 1.15*s);
-        ctx.beginPath();ctx.moveTo(x-5*s, y-2*s);ctx.lineTo(x+7*s, y+2*s);ctx.stroke();
+      ctx.strokeStyle = rgbaHex(pal.E[2], .28*on); ctx.lineWidth = beamW*2.2*flick;
+      ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+      ctx.strokeStyle = rgbaHex(pal.E[2], .95*on); ctx.lineWidth = beamW*flick;
+      ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+      ctx.strokeStyle = rgbaHex(pal.E[1], on); ctx.lineWidth = beamW*.5;
+      ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+      ctx.strokeStyle = rgbaHex(pal.E[0], on); ctx.lineWidth = Math.max(1.2*s, beamW*.2);
+      ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+      // pulses racing down the beam
+      for(let i=0;i<6;i++){
+        const u = (time*7 + i/6) % 1, x = m.x + (end.x - m.x)*u, y = m.y + (end.y - m.y)*u;
+        ctx.fillStyle = rgbaHex(pal.E[0], .9*on);
+        ctx.beginPath(); ctx.ellipse(x, y, beamW*.5, beamW*.22, Math.atan2(end.y - m.y, end.x - m.x), 0, Math.PI*2); ctx.fill();
       }
-      ctx.restore();
+      // impact at the hit point: a hard white frame first, then a burst
+      const imp = fireAge;
+      if(imp < .05){ctx.fillStyle = rgbaHex(pal.E[0], 1 - imp/.05); ctx.beginPath(); ctx.arc(end.x, end.y, beamW*2.6, 0, Math.PI*2); ctx.fill();}
+      ctx.strokeStyle = rgbaHex(pal.E[2], .8*(1 - clamp01(imp/.25))); ctx.lineWidth = Math.max(1, 2.4*s);
+      ctx.beginPath(); ctx.arc(end.x, end.y, beamW*(1 + 3*easeOutCubic(clamp01(imp/.25))), 0, Math.PI*2); ctx.stroke();
+      for(let k=0;k<8;k++){
+        const a = k/8*Math.PI*2 + trapHash(k + Math.floor(time*20))*.4, L2 = beamW*(1.2 + 1.2*trapHash(k*3 + Math.floor(time*30)));
+        ctx.strokeStyle = rgbaHex(pal.E[1], .9); ctx.lineWidth = Math.max(1, 1.4*s);
+        ctx.beginPath(); ctx.moveTo(end.x + Math.cos(a)*beamW*.5, end.y + Math.sin(a)*beamW*.5); ctx.lineTo(end.x + Math.cos(a)*L2, end.y + Math.sin(a)*L2); ctx.stroke();
+      }
+      if(fx && heavy && Math.random() < dt*30) trapSparkBurst(o, endW.x, endW.y, 2, "hot", .7);
     }
+    if(fx) prismSparksUpdateDraw(o);
+    ctx.restore();
 
-    ctx.translate(head.x, head.y);
-    const sideRight = sniperSide(o) === "right";
-    const toWall = sideRight ? 1 : -1;
-    const bodyW = 112*s, bodyH = 52*s, r = 32*s;
-    const bodyX = sideRight ? 0 : -bodyW;
-    ctx.fillStyle = "rgba(0,0,0,.16)";
-    roundRect(ctx, bodyX - (sideRight?0:4*s), -bodyH/2 - 4*s, bodyW + 8*s, bodyH + 8*s, 8*s);ctx.fill();
-    ctx.fillStyle = "#070707";
-    roundRect(ctx, bodyX, -bodyH/2, bodyW, bodyH, 8*s);ctx.fill();
-    ctx.fillStyle = rgbaHex(main, .18);
-    roundRect(ctx, bodyX + (sideRight?16*s:bodyW-78*s), -bodyH/2+9*s, 62*s, 8*s, 999);ctx.fill();
-    ctx.fillStyle = "#050505";
-    ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle = rgbaHex(main, .30);
-    ctx.beginPath();ctx.arc(0,0,r*.78,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = "#000";ctx.lineWidth = Math.max(2,4*s);ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.stroke();
-    ctx.strokeStyle = rgbaHex(accent, .90);ctx.lineWidth = Math.max(2,6*s);ctx.beginPath();ctx.arc(0,0,r*.36,0,Math.PI*2);ctx.stroke();
-    ctx.strokeStyle = "#000";ctx.lineWidth = Math.max(2,4*s);ctx.beginPath();ctx.moveTo(0,-r);ctx.lineTo(0,r);ctx.stroke();
-    const hot = st === "charging" ? (.55 + .45*Math.abs(Math.sin(time*16))) : (st === "firing" ? 1 : 0);
-    if(hot > 0){
-      ctx.fillStyle = rgbaHex(accent, .26 + hot*.26);
-      ctx.beginPath();ctx.arc(0,0,r*(.44+hot*.12),0,Math.PI*2);ctx.fill();
-      ctx.strokeStyle = rgbaHex(accent, .65 + hot*.25);ctx.lineWidth = Math.max(1,1.6*s);
-      ctx.beginPath();ctx.arc(0,0,r*(.86+Math.sin(time*17)*.04),-0.7,0.7);ctx.stroke();
-    }
+    // ---- the machine and its gunner (local frame) ----
     ctx.save();
-    ctx.rotate(aimDelta);
-    ctx.fillStyle = (st === "idle" || st === "cooldown") ? rgbaHex(idle, .78) : rgbaHex(accent, .95);
-    ctx.beginPath();ctx.arc(dir*r*.18, 0, Math.max(2.2*s, 3.2*s), 0, Math.PI*2);ctx.fill();
-    ctx.strokeStyle = (st === "idle" || st === "cooldown") ? rgbaHex(idle, .55) : rgbaHex(accent, .82);
-    ctx.lineWidth = Math.max(1, 1.2*s);
-    ctx.beginPath();ctx.moveTo(dir*r*.04, 0);ctx.lineTo(dir*r*.30, 0);ctx.stroke();
-    const toothLen = 54*s, toothH = 13*s;
-    const open = st === "firing" ? 1 : (st === "charging" ? .45 + .25*Math.abs(Math.sin(time*18)) : 0);
-    function tooth(y, ang){
-      ctx.save();
-      ctx.translate(dir*r*.70, y);
-      ctx.rotate(ang*open);
-      ctx.fillStyle = (st === "charging" || st === "firing") ? rgbaHex(main, .96) : rgbaHex(main, .38);
-      ctx.beginPath();
-      ctx.moveTo(0,0);
-      ctx.lineTo(dir*toothLen*.25, -toothH*.55);
-      ctx.lineTo(dir*toothLen*.78, -toothH*.42);
-      ctx.lineTo(dir*toothLen, 0);
-      ctx.lineTo(dir*toothLen*.78, toothH*.42);
-      ctx.lineTo(dir*toothLen*.25, toothH*.55);
-      ctx.closePath();ctx.fill();
-      ctx.strokeStyle = "#000";ctx.lineWidth = Math.max(1,2.2*s);ctx.stroke();
-      ctx.restore();
+    ctx.translate(head.x + shake, head.y);
+    ctx.scale(dir, 1);
+    const U = s;                                                    // 1 world unit
+    // The seat and the gunner are drawn G times larger around the seat's foot so he reads on a
+    // phone; the cannon keeps its real size (muzzle at 31).
+    const G = 1.6, footX = -50*U, footY = -5*U;
+    const gp = (x, y) => [footX + (x - footX)*G, footY + (y - footY)*G];
+    const seatX = -50*U, seatY = -9*U;
+    // ---- gunner pose ----
+    const r = playerRect(), pcx = r.x + r.w/2, pcy = r.y + r.h/2;
+    let lean = -2, squash = 0, eyeOpen = .6, squint = .15, pupil = .5, armsUp = 0, onHandles = .15, legSwing = 1, laugh = 0;
+    let look = {x:.6, y:.15};
+    if(st === "targeting" || st === "charging" || st === "firing"){
+      onHandles = 1; lean = 3; eyeOpen = .9; squint = .35; pupil = .4; legSwing = .2;
+      const ld = Math.atan2(pcy - headWorld.y, (pcx - headWorld.x)*dir); look = {x:Math.cos(ld), y:Math.sin(ld)};
     }
-    tooth(-18*s, -0.34*dir);
-    tooth(0, 0);
-    tooth(18*s, 0.34*dir);
-    if(st === "charging" || st === "firing"){
-      for(let i=0;i<8;i++){
-        const a = (i/8)*Math.PI*2 + time*7;
-        const sx = dir*(r*.6 + (i%3)*7)*s;
-        const sy = Math.sin(a)*(20+i%2*4)*s;
-        ctx.strokeStyle = rgbaHex(accent, .78);
-        ctx.lineWidth = Math.max(1,1.1*s);
-        ctx.beginPath();ctx.moveTo(dir*r*.45, sy*.55);ctx.lineTo(sx + dir*Math.sin(time*10+i)*7*s, sy);ctx.stroke();
+    if(st === "charging"){squint = .45 + .35*chargeK; squash = .05*chargeK; lean = 4;}
+    if(kick > .05){eyeOpen = 1; squint = 0; pupil = .3;}               // the kick startles the eye wide open
+    const notice = Math.exp(-noticeAge*7);
+    if(noticeAge < .6){eyeOpen = Math.max(eyeOpen, .8 + .2*notice); pupil = .5 - .2*notice;}
+    if(st === "cooldown" || coolAge < .5){lean = -1 - 2*sm(coolAge/.4); eyeOpen = .65; squint = .25; onHandles = 1 - .6*sm(coolAge/.5);}
+    if(dying){laugh = Math.abs(Math.sin(deathTimer*18)); armsUp = 1; onHandles = 0; eyeOpen = .3; lean = 0; legSwing = 1.6;}
+    if(passK > .01){
+      const sulk = sm((passT - .9)/.7);
+      eyeOpen += (.8 - .3*sulk - eyeOpen)*passK; onHandles *= 1 - passK; lean += (-2 - lean)*passK;
+      look = {x:look.x + (.2 - look.x)*passK, y:look.y + (-1 + .6*sulk - look.y)*passK};
+    }
+    if(fx){
+      const g = fx.gn || (fx.gn = {});
+      const fresh = !g.ready || dt > .2;
+      const f = (k, v, rate) => {if(fresh || !(k in g)){g[k] = v; return v;} g[k] += (v - g[k])*(1 - Math.exp(-dt*rate)); return g[k];};
+      lean = f("lean", lean, 8); squash = f("squash", squash, 12); eyeOpen = f("eo", eyeOpen, 14); squint = f("sq", squint, 12);
+      pupil = f("pu", pupil, 10); onHandles = f("oh", onHandles, 10); legSwing = f("ls", legSwing, 4); armsUp = f("au", armsUp, 8);
+      look = {x:f("lx", look.x, 10), y:f("ly", look.y, 10)};
+      g.ready = true;
+    }
+    const blink = !dying && ((time*.27 + head.y*.001) % 1) < .03 ? .06 : 1;
+    const hop = -notice*6*U*Math.abs(Math.sin(noticeAge*14));
+    const recoilBack = -kick*6*U;
+    const bounceLaugh = -laugh*2.5*U;
+    // body anchor (sitting on the seat)
+    const bx = seatX + 2*U + lean*U + recoilBack*.8, by = seatY - 12*U + hop + bounceLaugh;
+    // Legs: short and slim, from the seat down to the top of the arm. The near foot rests on a pedal
+    // on this side of the arm; the far leg is on the OTHER side of the machine (drawn before the
+    // arm, so the arm hides its foot and its pedal), not merely behind the near leg.
+    const drawLegs = (only) => {
+      // two black legs angling down and forward from under the body, dark oval feet on the arm
+      ctx.save(); ctx.translate(footX, footY); ctx.scale(G, G); ctx.translate(-footX, -footY);
+      for(const sd of [only]){
+        const sw = Math.sin(time*3 + (sd > 0 ? 0 : 1.7))*legSwing*.5;
+        const hx = bx + sd*3*U, hy = by + 9*U;
+        const kx = hx + 4*U + Math.sin(sw)*3*U, ky = hy + 7*U;
+        const fx2 = kx + Math.sin(sw + .4)*6*U - 1*U, fy2 = ky + 6*U;
+        ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1.6, 2.6*U); ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.quadraticCurveTo(kx, ky, fx2, fy2); ctx.stroke();
+        flingerShape(() => {ctx.beginPath(); ctx.ellipse(fx2 + 2*U, fy2 + 1*U, 3.5*U, 2*U, 0, 0, Math.PI*2);}, pal.deep, pal, s, {noHi:true, shadeDepth:.8, lw:1.1});
+      }
+      ctx.restore();
+    };
+    drawLegs(-1);                                                 // far leg: the other side of the machine, the arm covers it
+    // wall plate + bracket arm
+    flingerShape(() => {ctx.beginPath(); roundRect(ctx, -76*U, -20*U, 10*U, 40*U, 3*U);}, pal.shade, pal, s, {shadeDepth:1.6});
+    for(const by of [-13, 13]){ctx.fillStyle = pal.deep; ctx.beginPath(); ctx.arc(-71*U, by*U, 2*U, 0, Math.PI*2); ctx.fill();}
+    flingerShape(() => {ctx.beginPath(); ctx.moveTo(-68*U, -6*U); ctx.lineTo(-6*U, -5*U); ctx.lineTo(-6*U, 6*U); ctx.quadraticCurveTo(-40*U, 9*U, -68*U, 8*U); ctx.closePath();}, pal.base, pal, s, {shadeDepth:2});
+    // a contact shadow on the arm under the chair
+    ctx.fillStyle = rgbaHex(paperShadeHex(trapMain(), -.6), .28);
+    ctx.beginPath(); ctx.ellipse(-50*U, -5.6*U, 14*U, 2*U, 0, 0, Math.PI*2); ctx.fill();
+    ctx.save(); ctx.translate(footX, footY); ctx.scale(G, G); ctx.translate(-footX, -footY);
+    // the chair is ONE piece: a bucket seat whose back curves up, on a sturdy post
+    flingerShape(() => {ctx.beginPath(); roundRect(ctx, seatX - 2*U, seatY + 1*U, 4*U, 4*U, 1*U);}, pal.deep, pal, s, {noHi:true, shadeDepth:.8, lw:1.2});
+    flingerShape(() => {
+      ctx.beginPath();
+      ctx.moveTo(seatX + 11*U, seatY - 3*U);                       // front lip of the seat
+      ctx.quadraticCurveTo(seatX + 12*U, seatY + 1.5*U, seatX + 8*U, seatY + 1.5*U);
+      ctx.lineTo(seatX - 9*U, seatY + 1.5*U);
+      ctx.quadraticCurveTo(seatX - 14*U, seatY + 1.5*U, seatX - 14*U, seatY - 4*U);
+      ctx.lineTo(seatX - 15*U, seatY - 22*U);                      // the back, leaning a little
+      ctx.quadraticCurveTo(seatX - 15*U, seatY - 26*U, seatX - 11.5*U, seatY - 26*U);
+      ctx.quadraticCurveTo(seatX - 8.5*U, seatY - 26*U, seatX - 9*U, seatY - 22*U);
+      ctx.lineTo(seatX - 9*U, seatY - 6*U);
+      ctx.quadraticCurveTo(seatX - 9*U, seatY - 3.5*U, seatX - 6*U, seatY - 3.5*U);
+      ctx.lineTo(seatX + 9*U, seatY - 4*U);
+      ctx.quadraticCurveTo(seatX + 11*U, seatY - 4*U, seatX + 11*U, seatY - 3*U);
+      ctx.closePath();
+    }, pal.shade, pal, s, {shadeDepth:1.6});
+    ctx.restore();
+
+    drawLegs(1);                                                  // near leg, on this side
+    // turret (rotates with the drawn aim; recoils along its axis)
+    const recoil = -kick*4*U;
+    ctx.save();
+    ctx.rotate(aimL);
+    ctx.translate(recoil, 0);
+    // steering yoke: a stout column out of the back of the drum, ending in a tall handlebar with
+    // two grips (the far grip high, the near grip low), big enough to read as a wheel he steers by
+    const yoke = () => {ctx.beginPath(); ctx.moveTo(-6*U, -9*U); ctx.lineTo(-17*U, -24*U); ctx.lineTo(-20*U, -22*U); ctx.lineTo(-10*U, -6*U); ctx.closePath();};   // column rises up and back
+    flingerShape(yoke, pal.shade, pal, s, {shadeDepth:1, lw:1.3});
+    flingerShape(() => {ctx.beginPath(); roundRect(ctx, -23*U, -38*U, 5*U, 28*U, 2.5*U);}, pal.base, pal, s, {shadeDepth:1.2, lw:1.4});
+    const handles = [[-20.5*U, -13*U], [-20.5*U, -35*U]];            // a hand at each end, high up: [near, far]
+    for(const [hx, hy] of handles) flingerShape(() => {ctx.beginPath(); roundRect(ctx, hx - 3.4*U, hy - 3*U, 6.8*U, 6*U, 2.6*U);}, pal.deep, pal, s, {noHi:true, shadeDepth:.8, lw:1.2});
+    // barrel with bands, a muzzle brake at the real muzzle distance (31)
+    const heat = Math.max(chargeK, st === "firing" ? 1 : 0, Math.exp(-coolAge*1.6)*(fx && fx.coolAt != null ? 1 : 0));
+    flingerShape(() => {ctx.beginPath(); roundRect(ctx, 4*U, -5*U, 24*U, 10*U, 2.5*U);}, pal.base, pal, s, {shadeDepth:1.6});
+    if(heat > .02){ctx.save(); ctx.globalAlpha = heat*.75; ctx.fillStyle = pal.E[1]; ctx.beginPath(); roundRect(ctx, 14*U, -3*U, 13*U, 6*U, 2*U); ctx.fill(); ctx.restore();}
+    for(const bxp of [10, 17]){ctx.fillStyle = pal.deep; ctx.beginPath(); roundRect(ctx, bxp*U, -4.6*U, 2.2*U, 9.2*U, 1*U); ctx.fill();}
+    flingerShape(() => {ctx.beginPath(); roundRect(ctx, 25*U, -6.5*U, 8*U, 13*U, 2.4*U);}, pal.shade, pal, s, {shadeDepth:1.4});
+    for(const vy of [-3.5, 0, 3.5]){ctx.fillStyle = pal.deep; ctx.beginPath(); roundRect(ctx, 27*U, (vy - .8)*U, 4.5*U, 1.6*U, .8*U); ctx.fill();}
+    // scope on top
+    flingerShape(() => {ctx.beginPath(); roundRect(ctx, 0, -11*U, 14*U, 4.5*U, 2*U);}, pal.shade, pal, s, {shadeDepth:1.2, lw:1.2});
+    ctx.fillStyle = pal.E[0]; ctx.globalAlpha = .55 + .45*(onHandles > .5 ? 1 : 0); ctx.beginPath(); ctx.arc(13*U, -8.8*U, 1.3*U, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
+    // drum
+    flingerShape(() => {ctx.beginPath(); ctx.arc(0, 0, 13*U, 0, Math.PI*2);}, pal.base, pal, s, {shadeDepth:2.2});
+    ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(.9, 1.1*U);
+    ctx.beginPath(); ctx.arc(0, 0, 6.5*U, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = heat > .02 ? pal.E[1] : pal.deep; ctx.beginPath(); ctx.arc(0, 0, 3*U, 0, Math.PI*2); ctx.fill();
+    // charge: rings of energy drawn INTO the muzzle
+    if(chargeK > 0){
+      for(let k=0;k<3;k++){
+        const u = (time*3 + k/3) % 1;
+        ctx.strokeStyle = rgbaHex(pal.E[2], chargeK*(1 - u)*.9); ctx.lineWidth = Math.max(1, 1.4*U);
+        ctx.beginPath(); ctx.ellipse(31*U, 0, (3 + 12*(1 - u))*U, (5 + 18*(1 - u))*U, 0, 0, Math.PI*2); ctx.stroke();
+      }
+      ctx.fillStyle = rgbaHex(pal.E[0], .4 + .6*chargeK); ctx.beginPath(); ctx.arc(31*U, 0, (1.5 + 3*chargeK)*U, 0, Math.PI*2); ctx.fill();
+    }
+    // muzzle flash on the shot: a star of paper flames for a few frames
+    if(fireAge < .14){
+      const k = fireAge/.14, R0 = (14 + 10*(1 - k))*U;
+      ctx.fillStyle = rgbaHex(pal.E[0], 1 - k);
+      ctx.beginPath();
+      for(let i=0;i<10;i++){const a = i/10*Math.PI*2, rr = i % 2 ? R0*.45 : R0*(i % 4 ? .8 : 1.15); const x = 33*U + Math.cos(a)*rr*(a > Math.PI*.5 && a < Math.PI*1.5 ? .4 : 1), y = Math.sin(a)*rr*.7; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);}
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = rgbaHex(pal.E[2], 1 - k); ctx.lineWidth = Math.max(1, 1.4*U); ctx.stroke();
+    }
+    // the hand positions on the handles, in the outer (unrotated) frame
+    const hm = new DOMMatrix().rotateSelf(aimL*180/Math.PI).translateSelf(recoil, 0);
+    ctx.restore();
+    const handPts = handles.map(([hx, hy]) => {const q = hm.transformPoint(new DOMPoint(hx, hy)); return [q.x, q.y];});
+    // smoke from the barrel while it cools
+    if(fx && fx.coolAt != null && coolAge < 1.4){
+      for(let k=0;k<5;k++){
+        const u = ((coolAge*.9 + k*.2) % 1), a = aimL;
+        const mx = Math.cos(a)*30*U, my = Math.sin(a)*30*U;
+        ctx.fillStyle = rgbaHex(paperShadeHex(trapMain(), .55), .35*(1 - u)*(1 - coolAge/1.4));
+        ctx.beginPath(); ctx.arc(mx + Math.sin(u*5 + k)*3*U, my - u*22*U, (2 + 5*u)*U, 0, Math.PI*2); ctx.fill();
       }
     }
-    if(st === "firing"){
-      const flash = 18*s + Math.sin(time*60)*3*s;
-      ctx.fillStyle = rgbaHex(hotCore, .90);
-      ctx.beginPath();ctx.arc(dir*(r+8*s),0,flash,0,Math.PI*2);ctx.fill();
+    // arms: shoulder to its grip (steering), to the lap (idle), or up (cheering)
+    const drawArm = (near) => {
+      const i = near ? 0 : 1;
+      const [shX, shY] = gp(bx + (near ? 3.5 : -1.5)*U, by + (near ? 1.5 : 0)*U);
+      const lap = gp(bx + (near ? 6 : 3)*U, by + 7*U);
+      const up = gp(bx + (near ? 8 : -5)*U, by - 18*U - laugh*3*U);
+      let hx = lap[0] + (handPts[i][0] - lap[0])*onHandles, hy = lap[1] + (handPts[i][1] - lap[1])*onHandles;
+      hx += (up[0] - hx)*armsUp; hy += (up[1] - hy)*armsUp;
+      const elx = (shX + hx)/2 - 1*U, ely = Math.max(shY, hy) + 4*U;           // elbow hangs below
+      ctx.strokeStyle = near ? pal.line : paperShade(trapMain(), -.2); ctx.lineWidth = Math.max(2.4, 4.2*U); ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(shX, shY); ctx.quadraticCurveTo(elx, ely, hx, hy); ctx.stroke();
+      ctx.strokeStyle = near ? pal.base : pal.shade; ctx.lineWidth = Math.max(1.2, 2.2*U);
+      ctx.beginPath(); ctx.moveTo(shX, shY); ctx.quadraticCurveTo(elx, ely, hx, hy); ctx.stroke();
+      flingerShape(() => {ctx.beginPath(); ctx.arc(hx, hy, 3.6*U, 0, Math.PI*2);}, near ? pal.base : pal.shade, pal, s, {noHi:true, shadeDepth:.8, lw:1.1});
+    };
+    drawArm(false);
+    // ---- the gunner's body: a hooded pear with long ears, one big goggled eye ----
+    ctx.save();
+    ctx.translate(footX, footY); ctx.scale(G, G); ctx.translate(-footX, -footY);
+    ctx.translate(bx, by);
+    ctx.scale(1 + squash, 1 - squash);
+    // ears (blown back on the shot)
+    const earBack = kick*1.2 + notice*.5;
+    for(const sd of [0, 1]){
+      const ea = -2.2 - sd*.35 - earBack*.6 + Math.sin(time*2 + sd)*.05;
+      flingerShape(() => {ctx.beginPath(); ctx.moveTo(-2*U + sd*3*U, -10*U); ctx.quadraticCurveTo(Math.cos(ea)*14*U, -10*U + Math.sin(ea)*14*U, Math.cos(ea)*18*U, -10*U + Math.sin(ea)*16*U); ctx.quadraticCurveTo(Math.cos(ea)*9*U + 4*U, -12*U + Math.sin(ea)*9*U, 3*U + sd*3*U, -11*U); ctx.closePath();}, pal.shade, pal, s, {shadeDepth:1.2, lw:1.2});
     }
-    ctx.restore(); // aiming eye/teeth rotor
-    ctx.restore(); // whole sniper draw
+    flingerShape(() => {ctx.beginPath(); ctx.moveTo(0, -14*U); ctx.bezierCurveTo(9*U, -14*U, 11*U, 0, 9*U, 7*U); ctx.quadraticCurveTo(0, 12*U, -9*U, 7*U); ctx.bezierCurveTo(-11*U, 0, -9*U, -14*U, 0, -14*U); ctx.closePath();}, pal.base, pal, s, {shadeDepth:2.4});
+    // belly patch
+    ctx.fillStyle = pal.hi; ctx.globalAlpha = .45; ctx.beginPath(); ctx.ellipse(2*U, 3*U, 5*U, 4.5*U, 0, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
+    // the eye with its goggle ring
+    const ex = 3*U, ey = -6*U;
+    flingerShape(() => {ctx.beginPath(); ctx.arc(ex, ey, 6.6*U, 0, Math.PI*2);}, pal.deep, pal, s, {noHi:true, shadeDepth:1, lw:1.3});
+    if(laugh > 0 || (dying && laugh === 0)){
+      ctx.strokeStyle = eyeSkin().color; ctx.lineWidth = Math.max(1.4, 2*U);
+      ctx.beginPath(); ctx.arc(ex, ey + 1.5*U - laugh*U, 3.6*U, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
+    } else {
+      drawGuardianEye(ex, ey, 4.8*U, 5.4*U, s, pal.shade, Math.min(eyeOpen, blink), squint*.7, .1, pupil, look);
+    }
+    // goggle strap
+    ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.4*U);
+    ctx.beginPath(); ctx.moveTo(ex - 6.4*U, ey); ctx.lineTo(-9*U, ey + 1*U); ctx.stroke();
+    ctx.restore();
+    drawArm(true);
+    ctx.restore();
   }
 
   function drawShockMine(o){
