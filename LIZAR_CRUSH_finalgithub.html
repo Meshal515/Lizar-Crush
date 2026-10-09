@@ -4212,7 +4212,7 @@
 <label class="settingsRow" style="border-color: rgba(46, 36, 20, 0.15);"><span><b style="color: rgb(46, 36, 20);">Particles</b><small style="color: rgb(115, 100, 78);">Death dust, sparks, and explosion debris.</small></span><select id="perfParticlesSelect" data-lc-select="true"><option value="full">Full</option><option value="reduced">Reduced</option><option value="off">Off</option></select></label>
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Screen Shake</span><input id="perfShakeToggle" type="checkbox" checked=""></label>
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Heavy FX</span><input id="perfFxToggle" type="checkbox" checked=""></label>
-<label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Death Replay</span><input id="replayToggle" type="checkbox" checked=""></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">FPS Meter</span><input id="fpsMeterToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Frame Trace</span><input id="frameTraceToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">GPU Probe (slows frames)</span><input id="gpuProbeToggle" type="checkbox"></label><div class="settingsControlBox" id="frameTraceBox"><button id="frameTraceReportBtn" type="button">LAST RUN FRAME TRACE</button><small>Frame Trace records every frame of the run: frame gaps (P50/P95/P99/worst), logic, drawing per trap, and the time spent outside the game code. GPU Probe waits for the GPU each frame to time it exactly; it lowers fps while on.</small></div>
+<label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Death Replay</span><input id="replayToggle" type="checkbox" checked=""></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Show FPS</span><input id="showFpsToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">FPS Meter (details)</span><input id="fpsMeterToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Frame Trace</span><input id="frameTraceToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">GPU Probe (slows frames)</span><input id="gpuProbeToggle" type="checkbox"></label><div class="settingsControlBox" id="frameTraceBox"><button id="frameTraceReportBtn" type="button">LAST RUN FRAME TRACE</button><small>Frame Trace records every frame of the run: frame gaps (P50/P95/P99/worst), logic, drawing per trap, and the time spent outside the game code. GPU Probe waits for the GPU each frame to time it exactly; it lowers fps while on.</small></div>
 <div class="settingsControlBox" style="border-color: rgba(46, 36, 20, 0.15);"><button id="touchControlCustomizeBtn" type="button">CUSTOM CONTROL</button><small style="color: rgb(115, 100, 78);">Change gameplay hold/release: Button, Full Screen, or Custom touch area.</small></div>
 <div class="settingsControlBox" id="appUpdateBox" style="display:none;"><button id="appUpdateCheckBtn" type="button">CHECK FOR UPDATE</button><small id="appUpdateVersion">App version</small></div>
 <div class="settingsDangerBox" style="border-color: rgba(46, 36, 20, 0.15);">
@@ -4503,6 +4503,7 @@
   const perfFxToggle = document.getElementById("perfFxToggle");
   const replayToggle = document.getElementById("replayToggle");
   const fpsMeterToggle = document.getElementById("fpsMeterToggle");
+  const showFpsToggle = document.getElementById("showFpsToggle");
   const frameTraceToggle = document.getElementById("frameTraceToggle");
   const gpuProbeToggle = document.getElementById("gpuProbeToggle");
   const settingsCloseBtn = document.getElementById("settingsCloseBtn");
@@ -5225,6 +5226,7 @@
     if(perfFxToggle) perfFxToggle.checked = !!perfSettings.heavyFx;
     if(replayToggle) replayToggle.checked = perfSettings.replay !== false;
     if(fpsMeterToggle) fpsMeterToggle.checked = !!perfSettings.fpsMeter;
+    if(showFpsToggle) showFpsToggle.checked = !!perfSettings.showFps;
     if(frameTraceToggle) frameTraceToggle.checked = !!perfSettings.frameTrace;
     if(gpuProbeToggle) gpuProbeToggle.checked = !!perfSettings.gpuProbe;
     syncLcGameSelects();
@@ -5248,6 +5250,7 @@
       heavyFx:!!perfFxToggle?.checked,
       replay:!!replayToggle?.checked,
       fpsMeter:!!fpsMeterToggle?.checked,
+      showFps:!!showFpsToggle?.checked,
       frameTrace:!!frameTraceToggle?.checked,
       gpuProbe:!!gpuProbeToggle?.checked
     };
@@ -13900,7 +13903,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   });
   friendLevelsList?.addEventListener("click", ev => {if(!canInput("menu")) return; const btn = ev.target.closest(".friendMiniBtn"); if(!btn) return; const item = btn.closest(".friendLevelItem"); const id = item?.dataset.id; const entry = friendLevels.find(x => x.id === id); if(!entry) return; const action = btn.dataset.action; if(action === "play") selectFriendLevel(id, true); else if(action === "copy"){const code = encodeFriendLevelCode(entry.level, entry.title, entry.author); copyTextToClipboard(code).catch(()=>{}); prompt("Copy friend level code:", code);} else if(action === "delete"){if(confirm("Delete this friend level from this phone?")){friendLevels = friendLevels.filter(x => x.id !== id); if(friendPlayId === id){friendPlayId=null;friendPlayLevel=null;} if(lastImportedFriendId === id) lastImportedFriendId=null; persistFriendLevels(); renderFriendLevelsPanel(); updateLabels();}}});
   setupLcGameSelects(settingsPanel || document);
-  [perfModeSelect, perfFpsCapSelect, perfRenderDistanceSelect, perfParticlesSelect, perfShakeToggle, perfFxToggle, replayToggle, fpsMeterToggle, frameTraceToggle, gpuProbeToggle].forEach(el => el?.addEventListener("change", updatePerformanceSettingFromUI));
+  [perfModeSelect, perfFpsCapSelect, perfRenderDistanceSelect, perfParticlesSelect, perfShakeToggle, perfFxToggle, replayToggle, fpsMeterToggle, showFpsToggle, frameTraceToggle, gpuProbeToggle].forEach(el => el?.addEventListener("change", updatePerformanceSettingFromUI));
   settingsCloseBtn?.addEventListener("click", () => {MenuScreenController.back("main");});
   touchControlCustomizeBtn?.addEventListener("click", ev => {ev.preventDefault();ev.stopPropagation();openTouchCustomize();});
   touchControlIntro?.addEventListener("pointerdown", ev => {ev.preventDefault();ev.stopPropagation();}, {passive:false});
@@ -26891,8 +26894,40 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     finally{time = C.time; cameraY = C.cameraY; player.x = C.px; player.baseY = C.pb; player.h = C.ph; player.w = C.pw;}
   }
 
+  // SHOW_FPS_V1 (Settings > Show FPS): frames actually drawn in the last second (counted from the
+  // frame timestamps, every screen included) and the 1% low (the fps of the slowest 1% of frames in
+  // that second, where stutter shows). Refreshed 4 times a second in a small label.
+  const showFpsState = {stamps:[], el:null, next:0};
+  function showFpsFrame(now){
+    const st = showFpsState;
+    if(!perfSettings.showFps){if(st.el) st.el.style.display = "none"; st.stamps.length = 0; return;}
+    if(!st.el){
+      st.el = document.createElement("div");
+      st.el.id = "showFpsBadge";
+      st.el.style.cssText = "position:fixed;left:8px;top:calc(env(safe-area-inset-top) + 4px);z-index:2147483000;pointer-events:none;padding:2px 7px;border-radius:8px;background:rgba(0,0,0,.62);color:#fff;font:800 11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;";
+      document.body.appendChild(st.el);
+    }
+    st.el.style.display = "block";
+    st.stamps.push(now);
+    while(st.stamps.length && st.stamps[0] < now - 1000) st.stamps.shift();
+    if(now < st.next) return;
+    st.next = now + 250;
+    const n = st.stamps.length;
+    let low = n;
+    if(n > 2){
+      const gaps = [];
+      for(let i=1;i<n;i++) gaps.push(st.stamps[i] - st.stamps[i - 1]);
+      gaps.sort((a, b) => b - a);
+      const k = Math.max(1, Math.round(gaps.length*.01));
+      let sum = 0; for(let i=0;i<k;i++) sum += gaps[i];
+      low = Math.round(1000/(sum/k));
+    }
+    st.el.textContent = `${n} FPS  1% low ${low}`;
+  }
+
   function loop(now){
     if(shouldThrottleGameFrame(now)){requestAnimationFrame(loop); return;}
+    showFpsFrame(now);
     const cbStart = performance.now();
     const gapMs = now - last;
     const dt = Math.min(.033, (now - last) / 1000);last = now;
