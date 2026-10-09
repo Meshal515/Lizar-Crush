@@ -3911,6 +3911,8 @@
       font-size:clamp(26px,7.2vh,48px)!important;
     }
   }
+  /* the menu is transparent while playing; its looping animations kept running behind the game */
+  body.playing #menu *, body.countdown #menu *{animation-play-state:paused!important;}
   /* PERF_NO_HIDDEN_BLUR_V1: the menu and the result overlay stay in the page (transparent) while
      playing; a backdrop filter on them, even blur(0), can make the browser re-filter the whole screen
      behind them on every frame. They are invisible then, so nothing visible changes. */
@@ -4212,7 +4214,7 @@
 <label class="settingsRow" style="border-color: rgba(46, 36, 20, 0.15);"><span><b style="color: rgb(46, 36, 20);">Particles</b><small style="color: rgb(115, 100, 78);">Death dust, sparks, and explosion debris.</small></span><select id="perfParticlesSelect" data-lc-select="true"><option value="full">Full</option><option value="reduced">Reduced</option><option value="off">Off</option></select></label>
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Screen Shake</span><input id="perfShakeToggle" type="checkbox" checked=""></label>
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Heavy FX</span><input id="perfFxToggle" type="checkbox" checked=""></label>
-<label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Death Replay</span><input id="replayToggle" type="checkbox" checked=""></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Show FPS</span><input id="showFpsToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">FPS Meter (details)</span><input id="fpsMeterToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Frame Trace</span><input id="frameTraceToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">GPU Probe (slows frames)</span><input id="gpuProbeToggle" type="checkbox"></label><div class="settingsControlBox" id="frameTraceBox"><button id="frameTraceReportBtn" type="button">LAST RUN FRAME TRACE</button><small>Frame Trace records every frame of the run: frame gaps (P50/P95/P99/worst), logic, drawing per trap, and the time spent outside the game code. GPU Probe waits for the GPU each frame to time it exactly; it lowers fps while on.</small></div>
+<label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Death Replay</span><input id="replayToggle" type="checkbox" checked=""></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Show FPS</span><input id="showFpsToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">FPS Meter (details)</span><input id="fpsMeterToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Frame Trace</span><input id="frameTraceToggle" type="checkbox"></label><div class="settingsControlBox" id="frameTraceBox"><button id="frameTraceReportBtn" type="button">LAST RUN FRAME TRACE</button><button id="perfBenchBtn" type="button">RUN PERFORMANCE TEST (60 s)</button><small>Frame Trace records every frame of the run: frame gaps (P50/P95/P99/worst), logic, drawing per trap, and what each late frame waited for. The performance test plays fixed scenes with one thing changed at a time (no traps drawn, page layers hidden, 1x pixels, low-latency canvas) to show where the frame time goes. Do not touch the screen while it runs.</small></div>
 <div class="settingsControlBox" style="border-color: rgba(46, 36, 20, 0.15);"><button id="touchControlCustomizeBtn" type="button">CUSTOM CONTROL</button><small style="color: rgb(115, 100, 78);">Change gameplay hold/release: Button, Full Screen, or Custom touch area.</small></div>
 <div class="settingsControlBox" id="appUpdateBox" style="display:none;"><button id="appUpdateCheckBtn" type="button">CHECK FOR UPDATE</button><small id="appUpdateVersion">App version</small></div>
 <div class="settingsDangerBox" style="border-color: rgba(46, 36, 20, 0.15);">
@@ -4505,7 +4507,6 @@
   const fpsMeterToggle = document.getElementById("fpsMeterToggle");
   const showFpsToggle = document.getElementById("showFpsToggle");
   const frameTraceToggle = document.getElementById("frameTraceToggle");
-  const gpuProbeToggle = document.getElementById("gpuProbeToggle");
   const settingsCloseBtn = document.getElementById("settingsCloseBtn");
   const touchHoldButton = document.getElementById("touchHoldButton");
   const touchControlIntro = document.getElementById("touchControlIntro");
@@ -4853,6 +4854,8 @@
   }catch(_err){}
 
   let W = 0, H = 0, DPR = 1;
+  // performance test switches (Settings > RUN PERFORMANCE TEST); all off in normal play
+  const perfBench = {active:false, noTraps:false, dpr1:false, frames:null};
 
   let trapPreviewWorldToScreenOverride = null;
   const WORLD_W = 390;
@@ -5228,7 +5231,6 @@
     if(fpsMeterToggle) fpsMeterToggle.checked = !!perfSettings.fpsMeter;
     if(showFpsToggle) showFpsToggle.checked = !!perfSettings.showFps;
     if(frameTraceToggle) frameTraceToggle.checked = !!perfSettings.frameTrace;
-    if(gpuProbeToggle) gpuProbeToggle.checked = !!perfSettings.gpuProbe;
     syncLcGameSelects();
   }
   function applyPerformanceSettings({resizeCanvas=false}={}){
@@ -5252,7 +5254,7 @@
       fpsMeter:!!fpsMeterToggle?.checked,
       showFps:!!showFpsToggle?.checked,
       frameTrace:!!frameTraceToggle?.checked,
-      gpuProbe:!!gpuProbeToggle?.checked
+      gpuProbe:false
     };
     savePerformanceSettings();
     applyPerformanceSettings({resizeCanvas:true});
@@ -5961,7 +5963,7 @@
   }
 
   function resize(){
-    DPR = Math.max(1, Math.min(perfProfile().dprCap || 1.5, window.devicePixelRatio || 1));
+    DPR = perfBench.dpr1 ? 1 : Math.max(1, Math.min(perfProfile().dprCap || 1.5, window.devicePixelRatio || 1));
     const vp = stableViewportSize();
     W = vp.w;
     H = vp.h;
@@ -13903,7 +13905,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   });
   friendLevelsList?.addEventListener("click", ev => {if(!canInput("menu")) return; const btn = ev.target.closest(".friendMiniBtn"); if(!btn) return; const item = btn.closest(".friendLevelItem"); const id = item?.dataset.id; const entry = friendLevels.find(x => x.id === id); if(!entry) return; const action = btn.dataset.action; if(action === "play") selectFriendLevel(id, true); else if(action === "copy"){const code = encodeFriendLevelCode(entry.level, entry.title, entry.author); copyTextToClipboard(code).catch(()=>{}); prompt("Copy friend level code:", code);} else if(action === "delete"){if(confirm("Delete this friend level from this phone?")){friendLevels = friendLevels.filter(x => x.id !== id); if(friendPlayId === id){friendPlayId=null;friendPlayLevel=null;} if(lastImportedFriendId === id) lastImportedFriendId=null; persistFriendLevels(); renderFriendLevelsPanel(); updateLabels();}}});
   setupLcGameSelects(settingsPanel || document);
-  [perfModeSelect, perfFpsCapSelect, perfRenderDistanceSelect, perfParticlesSelect, perfShakeToggle, perfFxToggle, replayToggle, fpsMeterToggle, showFpsToggle, frameTraceToggle, gpuProbeToggle].forEach(el => el?.addEventListener("change", updatePerformanceSettingFromUI));
+  [perfModeSelect, perfFpsCapSelect, perfRenderDistanceSelect, perfParticlesSelect, perfShakeToggle, perfFxToggle, replayToggle, fpsMeterToggle, showFpsToggle, frameTraceToggle].forEach(el => el?.addEventListener("change", updatePerformanceSettingFromUI));
   settingsCloseBtn?.addEventListener("click", () => {MenuScreenController.back("main");});
   touchControlCustomizeBtn?.addEventListener("click", ev => {ev.preventDefault();ev.stopPropagation();openTouchCustomize();});
   touchControlIntro?.addEventListener("pointerdown", ev => {ev.preventDefault();ev.stopPropagation();}, {passive:false});
@@ -20711,6 +20713,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const st = prismSmokeFor(o);
     const dt = st.dt;
     if(!st.parts.length) return;
+    if(perfBench.noSmoke){st.parts.length = 0; return;}
     const dragX = Math.pow(.32, dt), dragY = Math.pow(.62, dt);
     ctx.save();
     for(let i=st.parts.length - 1; i>=0; i--){
@@ -21874,6 +21877,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
   }
   function drawObstaclesSafe(lvl){
+    if(perfBench.noTraps) return;
     const list = lizarRenderObstacles(lvl);
     if(frameTrace.on){
       for(const o of list){const t0 = performance.now(); drawObstacleSafe(o); frameTraceType(o.type || "?", performance.now() - t0);}
@@ -26846,12 +26850,23 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   let pacingSkip = 0, pacingLastCall = 0, pacingIdx = 0;
   const pacingDeltas = new Float32Array(31);
   let pacingRefreshMs = 1000/60;
+  // the real display refresh, from the Android app when it runs inside it (a busy frame loop can
+  // not tell a slow screen from a slow phone; Android knows the screen's actual mode)
+  function androidDisplayInfo(){
+    try{const j = window.LizarNative?.getDisplayInfo?.(); return j ? JSON.parse(j) : null;}catch(_err){return null;}
+  }
+  function androidDisplayText(){
+    const d = androidDisplayInfo();
+    if(!d) return "n/a";
+    return `${(+d.refresh).toFixed(1)} Hz now, modes [${(d.modes||[]).map(m => (+m).toFixed(0)).join(", ")}], requested ${(+d.requested || 0).toFixed(0)}`;
+  }
+  let androidRefreshAt = -1e9;
   function shouldThrottleGameFrame(now){
     if(pacingLastCall){
       const d = now - pacingLastCall;
       if(d > 3 && d < 60){
         pacingDeltas[pacingIdx++ % pacingDeltas.length] = d;
-        if(pacingIdx % 15 === 0 && pacingIdx >= pacingDeltas.length){
+        if(pacingIdx % 15 === 0 && pacingIdx >= pacingDeltas.length && !androidDisplayInfo()){
           // the display's own interval: the quick end of the deltas (a busy phone makes most frames
           // late, so the median would read a slow phone as a slow screen), snapped to a real rate
           const sorted = Array.from(pacingDeltas).sort((a,b)=>a-b);
@@ -26863,6 +26878,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
     }
     pacingLastCall = now;
+    if(now - androidRefreshAt > 2000){
+      androidRefreshAt = now;
+      const d = androidDisplayInfo();
+      if(d && +d.refresh > 20) pacingRefreshMs = 1000/(+d.refresh);
+    }
     const cap = perfGameFpsCap();
     if(!Number.isFinite(cap) || cap <= 0){pacingSkip = 0; return false;}
     const refreshHz = 1000/Math.max(1, pacingRefreshMs);
@@ -26928,6 +26948,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function loop(now){
     if(shouldThrottleGameFrame(now)){requestAnimationFrame(loop); return;}
     showFpsFrame(now);
+    if(perfBench.frames) perfBench.frames.push(now);
     const cbStart = performance.now();
     const gapMs = now - last;
     const dt = Math.min(.033, (now - last) / 1000);last = now;
@@ -26946,15 +26967,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(frameTrace.on) frameTrace.lastMark = tB;
       if(!shouldSkipWorldDraw()) drawFrameInterpolated();
       const tC = performance.now();
-      let gpuMs = -1;
-      if(frameTrace.on && perfSettings.gpuProbe){
-        // GPU Probe: reading one pixel back waits until the GPU has finished this frame's drawing,
-        // so this is the real GPU time of the frame (it stops the GPU from overlapping frames)
-        try{ctx.getImageData(0, 0, 1, 1);}catch(_err){}
-        gpuMs = performance.now() - tC;
-      }
+      // (a GPU probe that read a pixel back was removed: on Android a canvas that is read back gets
+      // moved off the GPU, so it timed software drawing, not the GPU)
+      const gpuMs = -1;
       if(perfSettings.fpsMeter) fpsMeterFrame(now, tB - tA, tC - tB);
       frameTraceEnd(now, gapMs, cbStart - now, tB - tA, steps, tC - tB, gpuMs, performance.now() - cbStart);
+      if(perfBench.frames) perfBench.code.push(performance.now() - cbStart);
     }catch(err){reportRuntimeError("main loop", err);}
     requestAnimationFrame(loop);
   }
@@ -27045,7 +27063,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     lines.push(`LIZAR CRUSH frame trace  ${new Date(r.startedAt).toISOString()}`);
     lines.push(`level: ${r.level}`);
     lines.push(`device: ${navigator.userAgent}`);
-    lines.push(`screen ${W}x${H} css px, canvas ${canvas.width}x${canvas.height} (x${DPR.toFixed(2)}), refresh ${hz.toFixed(0)} Hz (${f2(refresh)} ms), fps cap ${perfSettings.fpsCap || "auto"}, mode ${perfSettings.mode}, heavy fx ${perfSettings.heavyFx ? "on" : "off"}, gpu probe ${perfSettings.gpuProbe ? "ON (it lowers fps while on)" : "off"}`);
+    lines.push(`screen ${W}x${H} css px, canvas ${canvas.width}x${canvas.height} (x${DPR.toFixed(2)}), refresh ${hz.toFixed(0)} Hz (${f2(refresh)} ms), fps cap ${perfSettings.fpsCap || "auto"}, mode ${perfSettings.mode}, heavy fx ${perfSettings.heavyFx ? "on" : "off"}, android display ${androidDisplayText()}`);
     lines.push(`frames ${n} in ${f2(dur)} s = ${f1((n - 1)/Math.max(.001, dur))} fps average (target ${hz.toFixed(0)})`);
     lines.push(`late frames (gap > 1.25x refresh): ${late} of ${n - 1} (${f1(100*late/(n - 1))}%), refreshes missed in total: ${missed}`);
     lines.push(`late frames caused by: game code ${cCode}, main thread busy before the frame ${cMain}, GPU/compositor ${cGpu}`);
@@ -27123,6 +27141,158 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(r) frameTraceGraph(c, r);
   }
   document.getElementById("frameTraceReportBtn")?.addEventListener("click", showFrameTraceReport);
+
+  // PERF_BENCH_V1: plays fixed scenes for 3 s each (after 0.7 s to settle) and changes one thing at a
+  // time, so the difference between two lines is the cost of that one thing on this phone:
+  //   empty vs heavy        the traps (drawing + logic)
+  //   heavy vs no-traps     drawing the traps only (their logic still runs)
+  //   * vs ui-hidden        the page layers over the canvas (compositing)
+  //   * vs 1x pixels        how much is pixel fill (GPU) rather than per-shape work
+  //   * vs low-latency      the browser compositor path for the canvas
+  // The test never changes the game: the scenes are throwaway levels and every switch is undone.
+  const BENCH_EMPTY = {name:"Perf test: empty", hint:"", height:1100, goalY:60, maxH:420, obstacles:[]};
+  const BENCH_HEAVY = {name:"Perf test: 7 traps", hint:"", height:1100, goalY:60, maxH:420, obstacles:[
+    {type:"orbitSaw", cx:195, y:520, orbitR:110, sawR:22, speed:1.35, phase:0},
+    {type:"orbitSaw", cx:195, y:520, orbitR:110, sawR:22, speed:1.35, phase:3.1},
+    {type:"beam", y:560, x:34, w:322, thick:11, on:1.2, off:2.4, phase:0, shootFrom:"left"},
+    {type:"beam", y:630, x:34, w:322, thick:11, on:1.2, off:2.4, phase:1.2, shootFrom:"right"},
+    {type:"beam", y:700, x:34, w:322, thick:11, on:1.2, off:2.4, phase:2.4, shootFrom:"left"},
+    {type:"pendulumCore", anchorX:110, y:740, len:110, r:15, swing:.9, speed:1.3, chaos:.3, phase:0},
+    {type:"pendulumCore", anchorX:280, y:740, len:110, r:15, swing:.9, speed:1.3, chaos:.3, phase:2},
+    {type:"slider", x1:40, x2:350, y:470, len:86, thick:18, speed:45, phase:0},
+    {type:"predictiveSniper", side:"left", y:900, range:40, targetTime:.84, chargeTime:.42, fireTime:.22, cooldown:.82, beamWidth:15}
+  ]};
+  function benchHideUi(on){
+    if(on){
+      perfBench.hidden = [];
+      let node = canvas;
+      while(node && node !== document.body){
+        const parent = node.parentElement;
+        for(const sib of parent ? parent.children : []){
+          if(sib !== node && sib.id !== "perfBenchLabel" && sib.tagName !== "SCRIPT" && sib.tagName !== "STYLE"){perfBench.hidden.push([sib, sib.style.display]); sib.style.display = "none";}
+        }
+        node = parent;
+      }
+    } else if(perfBench.hidden){
+      for(const [el, d] of perfBench.hidden) el.style.display = d;
+      perfBench.hidden = null;
+    }
+  }
+  function benchLowLatency(on){
+    if(on){
+      const c = document.createElement("canvas");
+      c.width = canvas.width; c.height = canvas.height;
+      c.style.cssText = canvas.style.cssText + ";position:absolute;inset:0;";
+      const g = c.getContext("2d", {alpha:false, desynchronized:true});
+      if(!g) return false;
+      g.setTransform(DPR, 0, 0, DPR, 0, 0);
+      canvas.parentElement.insertBefore(c, canvas.nextSibling);
+      perfBench.ll = {c, saved:ctx, ok:!!(g.getContextAttributes && g.getContextAttributes().desynchronized)};
+      canvas.style.visibility = "hidden";
+      ctx = g; bgGradCache = null; goalSprite = null;
+      return true;
+    }
+    if(perfBench.ll){ctx = perfBench.ll.saved; perfBench.ll.c.remove(); canvas.style.visibility = ""; perfBench.ll = null; bgGradCache = null; goalSprite = null;}
+    return false;
+  }
+  function benchStats(ts, code){
+    const gaps = []; for(let i=1;i<ts.length;i++) gaps.push(ts[i] - ts[i - 1]);
+    const q = (a, p) => {const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.min(b.length - 1, Math.floor(p*(b.length - 1) + .5))] : 0;};
+    const dur = ts.length > 1 ? (ts[ts.length - 1] - ts[0])/1000 : 1;
+    const late = gaps.filter(g => g > pacingRefreshMs*1.25).length;
+    return {fps:(ts.length - 1)/dur, g50:q(gaps, .5), g95:q(gaps, .95), g99:q(gaps, .99), gmax:q(gaps, 1), c50:q(code, .5), c95:q(code, .95), late, n:gaps.length};
+  }
+  async function runPerfBench(){
+    if(perfBench.active) return;
+    perfBench.active = true;
+    const label = document.createElement("div");
+    label.id = "perfBenchLabel";
+    label.style.cssText = "position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top) + 30px);z-index:2147483000;pointer-events:none;padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:800 11px/1.4 ui-monospace,Menlo,Consolas,monospace;text-align:center;";
+    document.body.appendChild(label);
+    try{closeMenuPanels();}catch(_err){try{settingsPanel?.classList.remove("open");}catch(_e){}}
+    const only = (types) => ({...BENCH_HEAVY, obstacles:BENCH_HEAVY.obstacles.filter(o => types.includes(o.type))});
+    const SNIPERS = {...BENCH_HEAVY, obstacles:[
+      {type:"predictiveSniper", side:"left", y:900, range:40, targetTime:.84, chargeTime:.42, fireTime:.22, cooldown:.82, beamWidth:15},
+      {type:"predictiveSniper", side:"right", y:640, range:40, targetTime:.84, chargeTime:.42, fireTime:.22, cooldown:.82, beamWidth:15}]};
+    const scenes = [
+      ["empty", BENCH_EMPTY, {}],
+      ["empty, ui hidden", BENCH_EMPTY, {ui:true}],
+      ["7 traps", BENCH_HEAVY, {}],
+      ["7 traps, traps not drawn", BENCH_HEAVY, {noTraps:true}],
+      ["7 traps, 1x pixels", BENCH_HEAVY, {dpr1:true}],
+      ["7 traps, no smoke", BENCH_HEAVY, {noSmoke:true}],
+      ["7 traps, DIAG no gradients", BENCH_HEAVY, {diag:"grad"}],
+      ["7 traps, DIAG no drawImage", BENCH_HEAVY, {diag:"image"}],
+      ["7 traps, ui hidden", BENCH_HEAVY, {ui:true}],
+      ["7 traps, low-latency canvas", BENCH_HEAVY, {ll:true}],
+      ["only 2 snipers", SNIPERS, {}],
+      ["only 3 laser pairs", only(["beam"]), {}],
+      ["only 2 orbit saws", only(["orbitSaw"]), {}],
+      ["only 2 volt cores", only(["pendulumCore"]), {}],
+      ["only 1 electric link", only(["slider"]), {}]
+    ];
+    const results = [];
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    const saved = {friend:friendPlayLevel, friendId:friendPlayId};
+    let llOk = null;
+    for(let k=0;k<scenes.length;k++){
+      const [name, lvl, opt] = scenes[k];
+      label.textContent = `Performance test ${k + 1}/${scenes.length}: ${name}. Do not touch the screen.`;
+      friendPlayLevel = JSON.parse(JSON.stringify(lvl)); friendPlayId = null;
+      perfBench.noTraps = !!opt.noTraps; perfBench.noSmoke = !!opt.noSmoke;
+      if(opt.dpr1){perfBench.dpr1 = true; resize();}
+      if(opt.ui) benchHideUi(true);
+      if(opt.ll){benchLowLatency(true); llOk = perfBench.ll ? perfBench.ll.ok : false;}
+      if(opt.diag === "grad"){const fake = {addColorStop(){}}; ctx.createLinearGradient = () => fake; ctx.createRadialGradient = () => fake;}
+      if(opt.diag === "image") ctx.drawImage = function(){};
+      resetLevel(true);
+      holding = false;
+      setGameMode("playing", "perf-test"); syncModeClasses();
+      await wait(700);
+      perfBench.frames = []; perfBench.code = [];
+      let restarts = 0;
+      const t0 = performance.now();
+      while(performance.now() - t0 < 3000){
+        await wait(100);
+        holding = false;
+        if(state !== "playing"){restarts++; resetLevel(true); setGameMode("playing", "perf-test"); syncModeClasses();}
+      }
+      const st = benchStats(perfBench.frames, perfBench.code);
+      perfBench.frames = null;
+      st.name = name; st.restarts = restarts;
+      results.push(st);
+      if(opt.diag){delete ctx.clip; delete ctx.createLinearGradient; delete ctx.createRadialGradient; delete ctx.drawImage; bgGradCache = null;}
+      if(opt.ll) benchLowLatency(false);
+      if(opt.ui) benchHideUi(false);
+      if(opt.dpr1){perfBench.dpr1 = false; resize();}
+      perfBench.noTraps = false; perfBench.noSmoke = false;
+    }
+    friendPlayLevel = saved.friend; friendPlayId = saved.friendId;
+    label.remove();
+    perfBench.active = false;
+    goMainMenu();
+    const f1 = (v) => v.toFixed(1);
+    const lines = [];
+    lines.push(`LIZAR CRUSH performance test  ${new Date().toISOString()}`);
+    lines.push(`device: ${navigator.userAgent}`);
+    lines.push(`android display: ${androidDisplayText()}`);
+    lines.push(`screen ${W}x${H} css px, canvas ${canvas.width}x${canvas.height} (x${DPR.toFixed(2)}), refresh used ${f1(1000/pacingRefreshMs)} Hz, fps cap ${perfSettings.fpsCap || "auto"}, mode ${perfSettings.mode}, heavy fx ${perfSettings.heavyFx ? "on" : "off"}, low-latency canvas supported: ${llOk === null ? "?" : (llOk ? "yes" : "no")}`);
+    lines.push("");
+    lines.push("scene                         fps    gap p50  p95   p99   max  | code p50  p95 | late");
+    for(const r of results) lines.push(`${r.name.padEnd(29)} ${f1(r.fps).padStart(5)}  ${f1(r.g50).padStart(5)} ${f1(r.g95).padStart(5)} ${f1(r.g99).padStart(5)} ${f1(r.gmax).padStart(5)} | ${r.c50.toFixed(2).padStart(5)} ${r.c95.toFixed(2).padStart(5)} | ${r.late}/${r.n}${r.restarts ? " (restarted " + r.restarts + ")" : ""}`);
+    lines.push("");
+    lines.push("gap = time between frames in ms (what you see), code = all our frame work in ms.");
+    lines.push("DIAG lines switch one canvas feature off on purpose (the picture is wrong during them) to show what it costs.");
+    lines.push("Compare lines that differ in one thing: that difference is what it costs on this phone.");
+    perfBench.report = lines.join("\n");
+    showPerfBenchReport();
+  }
+  function showPerfBenchReport(){
+    showFrameTraceReport();
+    const panel = document.getElementById("frameTracePanel");
+    if(panel && perfBench.report){panel.querySelector("#ftText").textContent = perfBench.report; const c = panel.querySelector("#ftGraph"); c.getContext("2d").clearRect(0, 0, c.width, c.height);}
+  }
+  document.getElementById("perfBenchBtn")?.addEventListener("click", () => {runPerfBench().catch(err => {perfBench.active = false; reportRuntimeError("perf test", err);});});
 
   // FPS_METER_V1 (Settings > FPS Meter): what the phone really delivers. fps over the last second,
   // the worst frame gap in the last two seconds, and how long game logic and drawing took (CPU side;

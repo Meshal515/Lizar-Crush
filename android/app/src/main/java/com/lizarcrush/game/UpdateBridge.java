@@ -56,6 +56,21 @@ public class UpdateBridge {
     @JavascriptInterface
     public String getVersionName() { return BuildConfig.VERSION_NAME; }
 
+    /** The display's current refresh rate, its supported rates and the rate the app asked for (JSON). */
+    @JavascriptInterface
+    public String getDisplayInfo() {
+        JSONObject out = new JSONObject();
+        try {
+            android.view.Display d = activity.getWindowManager().getDefaultDisplay();
+            out.put("refresh", d.getRefreshRate());
+            JSONArray modes = new JSONArray();
+            for (android.view.Display.Mode m : d.getSupportedModes()) modes.put(m.getRefreshRate());
+            out.put("modes", modes);
+            out.put("requested", activity.getWindow().getAttributes().preferredRefreshRate);
+        } catch (Exception ignored) { }
+        return out.toString();
+    }
+
     /** Looks for the newest build-N release with an APK. manual=true when the player tapped the button. */
     @JavascriptInterface
     public void checkForUpdate(final boolean manual) {
