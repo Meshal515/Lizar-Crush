@@ -5952,6 +5952,7 @@
     H = vp.h;
     const pixelW = Math.max(1, Math.floor(W * DPR));
     const pixelH = Math.max(1, Math.floor(H * DPR));
+    const sizeChanged = canvas.width !== pixelW || canvas.height !== pixelH;
     if(canvas.width !== pixelW) canvas.width = pixelW;
     if(canvas.height !== pixelH) canvas.height = pixelH;
     canvas.style.left = "0px";
@@ -5959,6 +5960,8 @@
     canvas.style.width = W + "px";
     canvas.style.height = H + "px";
     ctx.setTransform(DPR,0,0,DPR,0,0);
+    // A resized canvas is blank (black, since it is opaque) until the next frame draws: repaint now.
+    if(sizeChanged && typeof drawBackground === "function"){try{drawBackground();}catch(_err){}}
   }
 
   function scheduleViewportRecovery(reason="viewport"){
@@ -12715,6 +12718,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(type === "laser" && deathCulprit.type === "beam") return .95;
       if(type === "fan" && deathCulprit.type === "sideSweeper") return 1.0;
       if(type === "saw" && deathCulprit.type === "orbitSaw") return 1.0;   // time for the paper to float down
+      if(type === "electric" && deathCulprit.type === "pendulumCore") return 1.0;
+      if(type === "saw" && deathCulprit.type === "twinStutterSaws") return 1.0;
+      if(type === "laser" && deathCulprit.type === "predictiveSniper") return 1.15;
+      if(type === "shockMine") return 1.2;
     }
     if(type === "gate") return 1.0;
     if(type === "ink") return 1.95;
@@ -16961,7 +16968,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       if(o.type === "wheel"){const x = wavePosition(o, time);if(circleRectCollide(x, o.y, o.r, p)) return startDeath("The wheel hit you.", "wheel", null, o);}
       if(o.type === "orbitSaw"){const saw = orbitSawState(o, time);if(circleRectCollide(saw.x, saw.y, o.sawR, p)) return startDeath("The orbit saw sliced you.", "saw", {x:saw.x, y:saw.y, ang:saw.ang}, o);}
-      if(o.type === "twinStutterSaws"){const st = twinStutterSawsState(o, time); for(const saw of st.saws){if(circleRectCollide(saw.x, saw.y, st.c.sawR, p)) return startDeath("The stutter saw sliced you.", "saw", null, o);}}
+      if(o.type === "twinStutterSaws"){const st = twinStutterSawsState(o, time); for(const saw of st.saws){if(circleRectCollide(saw.x, saw.y, st.c.sawR, p)) return startDeath("The stutter saw sliced you.", "saw", {x:saw.x, y:saw.y}, o);}}
       if(o.type === "scanner"){const band = {x:0, y:o.y - o.h/2, w:WORLD_W, h:o.h};if(rectsOverlap(p, band) && cur.h > scannerLimit(o)){return startDeath("You were too tall for the scanner guard.", "scanner", null, o);}}
       if(o.type === "clamp"){const info = clampBeamData(o);const br = info.blocks;const left = {x:br.leftX, y:br.y, w:br.size, h:br.size};const right = {x:br.rightX, y:br.y, w:br.size, h:br.size};if(rectsOverlap(p,left) || rectsOverlap(p,right)){return startDeath("The energy core burned you.", "gate", null, o);}if(info.progress > .12){if((info.leftSeg.w > 0 && rectsOverlap(p,info.leftSeg)) || (info.rightSeg.w > 0 && rectsOverlap(p,info.rightSeg))){return startDeath("The energy gate crushed you with light.", "gate", null, o);}}}
       if(o.type === "stillCrusher"){const info = stillCrusherState(o, time);if(rectsOverlap(p, info.left) || rectsOverlap(p, info.right)) return triggerStillCrusherCrush(o, info, "The still crusher caught you outside the safe slot.");if(stillCrusherMoved(o, cur, info)) return triggerStillCrusherCrush(o, info, "You moved inside the still crusher.");}
@@ -16972,7 +16979,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const k = Math.max(0, Math.min(1, ((cur.x + cur.w/2 - hitBlade.a.x)*bx + (cur.y + cur.h/2 - hitBlade.a.y)*by)/bl));
         const hitX = hitBlade.a.x + bx*k, hitY = hitBlade.a.y + by*k;
         return startDeath("The blade fan caught you.", "fan", {ang:hitBlade.ang, hitX, hitY, pivotX:o.x, pivotY:o.y, omega:(Number(o.speed) || 0)*3.8}, o);}}
-      if(o.type === "pendulumCore"){const core = pendulumCoreState(o, time);if(circleRectCollide(core.x, core.y, core.r * .92, p)) return startDeath("The volt core shocked you.", "electric", null, o);}
+      if(o.type === "pendulumCore"){const core = pendulumCoreState(o, time);if(circleRectCollide(core.x, core.y, core.r * .92, p)) return startDeath("The volt core shocked you.", "electric", {x:core.x, y:core.y}, o);}
       if(o.type === "shockMine"){
         const c = shockMineConfig(o);
         if(!o._shockSpent && o._shockState === "exploding" && circleRectCollide(c.x, c.y, c.explosionRadius, p)) return startDeath("The mine exploded while you were too close.", "shockMine", {x:c.x, y:c.y}, o);
@@ -16985,7 +16992,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const line = sniperFireLine(o, target);
         const cover = sniperCoverHit(o, line.b, lvl);
         const end = cover?.point || line.b;
-        if(capsuleRectCollide(line.a, end, Math.max(4, (Number(o.beamWidth)||15)*.38), p)) return startDeath("The rail sniper burned through you.", "laser", {worldY:line.b.y}, o);
+        if(capsuleRectCollide(line.a, end, Math.max(4, (Number(o.beamWidth)||15)*.38), p)){
+          // where the shot crosses the cube: the paper burn starts there (same data Prism Pulse gives)
+          const pcx = p.x + p.w/2, pcy = p.y + p.h/2, vx = end.x - line.a.x, vy = end.y - line.a.y, vv = vx*vx + vy*vy || 1;
+          const k = Math.max(0, Math.min(1, ((pcx - line.a.x)*vx + (pcy - line.a.y)*vy)/vv));
+          const hitX = line.a.x + vx*k, hitY = line.a.y + vy*k;
+          return startDeath("The rail sniper burned through you.", "laser", {worldY:hitY, ang:Math.atan2(vy, vx), hitX, hitY, ax:line.a.x, ay:line.a.y, bx:end.x, by:end.y}, o);
+        }
       }
     }
   }
@@ -22265,7 +22278,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.globalAlpha = 1 - Math.max(0, t-.72)*3.2;
 
     // Still Crusher: the crumple is drawn on top of the jaws by drawCrusherDeathOverlay.
-    if(deathType === "electric" && deathCulprit?.type === "slider"){
+    if(deathType === "electric" && (deathCulprit?.type === "slider" || deathCulprit?.type === "pendulumCore")){
       // ELECTRIC_LINK_DEATH_V2 (paper): the current pins and shakes the sheet while branching burn
       // marks — lightning scorched into paper — race across it from the side the link touched, their
       // tips glowing. An overload flash, then the scorched sheet breaks into charred pieces that
@@ -22294,9 +22307,17 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
             }
           }
         };
-        for(let r=0;r<3;r++){
-          const y0 = h*(.22 + r*.28 + (trapHash(r*4.7) - .5)*.1);
-          grow(side > 0 ? w : 0, y0, (side > 0 ? Math.PI : 0) + (trapHash(r*2.1) - .5)*.6, w*.32, 0, r*.05);
+        if(deathCulprit?.type === "pendulumCore" && Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y)){
+          // Volt Core: the charged ball struck one spot, so the burn tree fans out from that spot
+          const bx = (deathImpact.x - p.x)*s, by = (deathImpact.y - p.y)*s;
+          const cx0 = Math.max(0, Math.min(w, bx)), cy0 = Math.max(0, Math.min(h, by));
+          const inA = Math.atan2(h/2 - cy0, w/2 - cx0);
+          for(let r=0;r<3;r++) grow(cx0, cy0, inA + (r - 1)*.62 + (trapHash(r*2.1) - .5)*.3, Math.min(w, h)*.36, 0, r*.04);
+        } else {
+          for(let r=0;r<3;r++){
+            const y0 = h*(.22 + r*.28 + (trapHash(r*4.7) - .5)*.1);
+            grow(side > 0 ? w : 0, y0, (side > 0 ? Math.PI : 0) + (trapHash(r*2.1) - .5)*.6, w*.32, 0, r*.05);
+          }
         }
         fx.tree = segsT;
       }
@@ -22508,7 +22529,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       ctx.restore();
       return;
-    } else if(deathType === "laser"){
+    } else if(deathType === "laser" && deathCulprit?.type !== "predictiveSniper"){
       const impactScreen = deathImpact?.worldY !== undefined ? worldToScreen(player.x, deathImpact.worldY).y : y + h*.48;
       const cutY = Math.max(y + 5*s, Math.min(y + h - 5*s, impactScreen + Math.sin(time*18)*.9*s));
       const cutRatio = clamp01((cutY - y) / Math.max(1,h));
@@ -22548,44 +22569,118 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       ctx.globalAlpha = 1;
     } else if(deathType === "shockMine"){
-      const blast = easeOutCubic(clamp01(t/.48));
-      const fade = 1 - clamp01((t-.72)/.30);
-      const squash = 1 - Math.sin(Math.min(1,t)*Math.PI)*.12;
-      const dustAlpha = .28 + blast*.28;
-      ctx.save();
-      ctx.translate(cx + Math.sin(time*70)*(1-t)*3*s, cy + Math.cos(time*61)*(1-t)*2*s);
-      ctx.rotate(Math.sin(time*34)*(1-t)*.035);
-      ctx.globalAlpha = Math.max(.16, fade);
-      ctx.fillStyle = cubeBodyPaint(ctx, x, y, w, h, cube);
-      roundRect(ctx, -w*.50, -h*.50 + blast*2*s, w, h*squash, Math.max(7*s, cube.radius*s));
-      ctx.fill();
-      ctx.globalAlpha = dustAlpha*fade;
-      ctx.fillStyle = "#3c3c38";
-      for(let i=0;i<18;i++){
-        const px = -w*.42 + ((i*37)%100)/100*w*.84;
-        const py = -h*.42 + ((i*53)%100)/100*h*.84;
-        ctx.beginPath();ctx.arc(px, py, (1.2 + (i%4)*.75)*s, 0, Math.PI*2);ctx.fill();
-      }
-      ctx.globalAlpha = fade;
-      const eyeX = 0;
-      const eyeY = Math.min(h*.48, normalH*.50*s) - 1.1*s - h/2;
-      ctx.strokeStyle = eyeTone.color;
-      ctx.lineWidth = Math.max(2.2, 3.2*s);
-      ctx.lineCap = "round";
-      const ex = 8*s, ey = 6*s;
-      ctx.beginPath();ctx.moveTo(eyeX-ex, eyeY-ey);ctx.lineTo(eyeX+ex, eyeY+ey);ctx.moveTo(eyeX+ex, eyeY-ey);ctx.lineTo(eyeX-ex, eyeY+ey);ctx.stroke();
-      ctx.strokeStyle = "rgba(255,255,255,.78)";
-      ctx.lineWidth = Math.max(1,1.1*s);
-      for(let i=0;i<6;i++){
-        const a = i*Math.PI*2/6 + time*4;
-        ctx.beginPath();ctx.moveTo(Math.cos(a)*w*.24, Math.sin(a)*h*.20);ctx.lineTo(Math.cos(a+.18)*w*.38, Math.sin(a+.18)*h*.32);ctx.stroke();
-      }
-      ctx.restore();
-      ctx.globalAlpha = (1-t)*.42;
-      ctx.strokeStyle = trapAccent();
-      ctx.lineWidth = Math.max(2, 4*s*(1-t));
-      ctx.beginPath();ctx.arc(cx, cy, w*(.55 + blast*1.35), 0, Math.PI*2);ctx.stroke();
+      // SHOCK_MINE_DEATH_V2 (paper): the blast hits the sheet from the mine's side. A white-hot flash
+      // and a scorch on the near edge, the sheet buckles away from the blast for an instant, then it
+      // is blown apart along cracks that start at the scorch. The pieces fly out from the mine (the
+      // nearest ones fastest), lose their speed in the air and float down turning over like paper,
+      // their burnt edges glowing and cooling. The eye dies on whichever piece carries it.
       ctx.globalAlpha = 1;
+      const key = deathPlayerSnapshot || deathCulprit;
+      const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 0);
+      const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
+      const T = deathTimer, burstAt = .09;
+      const eyeY = trapCubeEyeY(h, s, normalH);
+      // blast centre and the point of the sheet it hits first (cube-local px)
+      const hasB = Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y);
+      let bx = hasB ? (deathImpact.x - p.x)*s : w/2, by = hasB ? (deathImpact.y - p.y)*s : h + 20*s;
+      if(bx > 0 && bx < w && by > 0 && by < h){by = h + 6*s;}            // a mine under the sheet: hit from below
+      const C = [Math.max(0, Math.min(w, bx)), Math.max(0, Math.min(h, by))];
+      const R = Math.hypot(w, h);
+      const scorch = (heat) => {
+        // charred near the blast, browning further in; a glowing rim while it is hot
+        const g = ctx.createRadialGradient(C[0], C[1], 0, C[0], C[1], R*.95);
+        g.addColorStop(0, "rgba(20,10,4,.92)");
+        g.addColorStop(.28, "rgba(48,24,8,.62)");
+        g.addColorStop(.55, "rgba(120,70,20,.22)");
+        g.addColorStop(1, "rgba(120,70,20,0)");
+        ctx.fillStyle = g; ctx.fillRect(-4, -4, w + 8, h + 8);
+        if(heat > .02){
+          const r2 = ctx.createRadialGradient(C[0], C[1], 0, C[0], C[1], R*.45);
+          r2.addColorStop(0, `rgba(255,236,190,${.85*heat})`);
+          r2.addColorStop(.45, `rgba(255,120,30,${.5*heat})`);
+          r2.addColorStop(1, "rgba(255,80,0,0)");
+          ctx.fillStyle = r2; ctx.fillRect(-4, -4, w + 8, h + 8);
+        }
+      };
+      const eye = () => drawDyingPlayerEye(ctx, w/2, eyeY, s, eyeTone, Math.min(1, t*1.5), 1.2);
+      // crack pattern, built once per death: jagged rays from the hit point, each wedge split again
+      // by a cross crack, so the pieces near the blast are small and the far ones large
+      if(!fx.mine){
+        // the cracks fan only across the sheet: from the hit point, between the two extreme corners
+        const base = Math.atan2(h/2 - C[1], w/2 - C[0]);
+        let aMin = 0, aMax = 0;
+        for(const q of [[0,0],[w,0],[w,h],[0,h]]){
+          if(Math.hypot(q[0] - C[0], q[1] - C[1]) < 1) continue;
+          let d = Math.atan2(q[1] - C[1], q[0] - C[0]) - base;
+          while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
+          aMin = Math.min(aMin, d); aMax = Math.max(aMax, d);
+        }
+        aMin -= .08; aMax += .08;
+        const N = 5, rays = [];
+        for(let i=0;i<N;i++){
+          const a = base + aMin + (aMax - aMin)*i/(N - 1) + (i > 0 && i < N - 1 ? (trapHash(i*3.7 + 1) - .5)*.22 : 0);
+          const dx = Math.cos(a), dy = Math.sin(a), nx = -dy, ny = dx;
+          const j1 = (trapHash(i*5.1) - .5)*R*.08, j2 = (trapHash(i*6.3 + 2) - .5)*R*.1;
+          rays.push([[C[0] + dx*R*.3 + nx*j1, C[1] + dy*R*.3 + ny*j1], [C[0] + dx*R*.65 + nx*j2, C[1] + dy*R*.65 + ny*j2], [C[0] + dx*R*2.2, C[1] + dy*R*2.2]]);
+        }
+        const toRect = (q) => {q = trapClipPoly(q, -1, 0, 0); q = trapClipPoly(q, 1, 0, w); q = trapClipPoly(q, 0, -1, 0); q = trapClipPoly(q, 0, 1, h); return q;};
+        const area = (q) => {let A = 0; for(let i=0;i<q.length;i++){const u = q[i], v = q[(i + 1) % q.length]; A += u[0]*v[1] - v[0]*u[1];} return Math.abs(A)/2;};
+        const pieces = [];
+        for(let i=0;i<N - 1;i++){
+          const r0 = rays[i], r1 = rays[i + 1];
+          const wedge = toRect([C, r0[0], r0[1], r0[2], r1[2], r1[1], r1[0]]);
+          if(wedge.length < 3 || area(wedge) < 4*s*s) continue;
+          // cross crack: a half-plane across the wedge's middle direction
+          const ma = Math.atan2((r0[1][1] + r1[1][1])/2 - C[1], (r0[1][0] + r1[1][0])/2 - C[0]);
+          const ux = Math.cos(ma), uy = Math.sin(ma), d = ux*C[0] + uy*C[1] + R*(.32 + trapHash(i*9.1)*.12);
+          for(const part of [trapClipPoly(wedge, ux, uy, d), trapClipPoly(wedge, -ux, -uy, -d)]){
+            if(part.length >= 3 && area(part) > 3*s*s) pieces.push(part);
+          }
+        }
+        // only the cracks are burnt, not the sheet's own outer edges
+        const onBorder = (e) => (e[0] < .5 && e[2] < .5) || (e[0] > w - .5 && e[2] > w - .5) || (e[1] < .5 && e[3] < .5) || (e[1] > h - .5 && e[3] > h - .5);
+        fx.mine = pieces.map((poly, i) => {
+          let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
+          let vx = mx - bx, vy = my - by; const dl = Math.hypot(vx, vy) || 1; vx /= dl; vy /= dl;
+          const near = clamp01(1 - Math.hypot(mx - C[0], my - C[1])/R);
+          const sp = (260 + 300*near + trapHash(i*4.9)*90)*s;
+          return {poly, my, vx:vx*sp, vy:vy*sp - (70 + trapHash(i*2.7)*80)*s,
+            edges:poly.map((q, j) => [q[0], q[1], poly[(j + 1) % poly.length][0], poly[(j + 1) % poly.length][1]]).filter(e => !onBorder(e))};
+        });
+      }
+      const rect = [[0,0],[w,0],[w,h],[0,h]];
+      if(T < burstAt){
+        // the impact: flash and scorch, the sheet pushed and squeezed away from the blast
+        const k = T/burstAt, ax = (w/2 - C[0]), ay = (h/2 - C[1]), al = Math.hypot(ax, ay) || 1;
+        const push = Math.sin(k*Math.PI*.5)*4*s;
+        drawPaperShard(art, x + ax/al*push, y + ay/al*push, rect, {}, {s, onTop:() => {
+          scorch(1); eye();
+          ctx.fillStyle = `rgba(255,252,238,${.9*(1 - k*.6)})`; ctx.fillRect(0, 0, w, h);
+        }});
+      } else {
+        if(!fx.burst && deathCulprit){
+          fx.burst = true;
+          trapSparkBurst(deathCulprit, p.x + C[0]/s, p.y + C[1]/s, 22, "hot", 1.2);
+          trapSparkBurst(deathCulprit, p.x + C[0]/s, p.y + C[1]/s, 10, "electric", 1);
+          for(let i=0;i<7;i++) prismSmokeEmit(deathCulprit, p.x + p.w*trapHash(i*3.3), p.y + p.h*trapHash(i*5.9), 0, 1, 1);
+        }
+        const TA = T - burstAt;
+        const heat = clamp01(1 - TA*1.3);
+        fx.mine.forEach((pc, i) => {
+          const f = paperFlutter(30 + i, TA, pc.vx, pc.vy, s, h - pc.my + 6*s);
+          drawPaperShard(art, x, y, pc.poly, f, {s, edge:"char", heat, edges:pc.edges, onTop:() => {scorch(heat*.6); eye();}});
+        });
+        // ash flakes torn off the scorched edge
+        const body = cube?.body || "#111111";
+        for(let i=0;i<8;i++){
+          const a = Math.atan2(h/2 - C[1], w/2 - C[0]) + (trapHash(i*4.4) - .5)*2.4;
+          const sp = (90 + trapHash(i*2.2)*120)*s;
+          const f = paperFlutter(60 + i, TA, Math.cos(a)*sp, Math.sin(a)*sp - 40*s, s);
+          ctx.globalAlpha = 1 - Math.max(0, t - .55)*2.2;
+          drawPaperScrap(x + C[0] + f.dx, y + C[1] + f.dy, (1.3 + trapHash(i*7.7)*2)*s, f.rot*3, f.flip, i % 3 ? "#2a1608" : body);
+        }
+        ctx.globalAlpha = 1;
+      }
       ctx.restore();
       return;
     } else if(deathType === "electric"){
@@ -22649,7 +22744,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.stroke();
       ctx.restore();
       return;
-    } else if(deathType === "saw" && deathCulprit?.type === "orbitSaw" && Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y)){
+    } else if(deathType === "saw" && (deathCulprit?.type === "orbitSaw" || deathCulprit?.type === "twinStutterSaws") && Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y)){
       // ORBIT_SAW_DEATH_V3 (paper tear): the blade rips the sheet along its path — a jagged tear with
       // white fibres, and a side tear that starts but never finishes, like real paper. The halves
       // part, then float down (drag, sway, turning over); paper scraps whirl off the blade.
@@ -22702,8 +22797,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       ctx.restore();
       return;
-    } else if(deathType === "prismPulse"){
-      // PRISM_PULSE_DEATH_V4: the cube burns away like paper, starting exactly where the beam
+    } else if(deathType === "prismPulse" || (deathType === "laser" && deathCulprit?.type === "predictiveSniper")){
+      // PRISM_PULSE_DEATH_V4 (also the Rail Sniper: its shot burns the sheet from the line it crossed): the cube burns away like paper, starting exactly where the beam
       // touched it and closing in on its last unburned spot (see PRISM_BURN_V1). The real beam is
       // still drawn by the trap, so nothing extra is drawn for it here.
       ctx.globalAlpha = 1;
