@@ -15559,55 +15559,49 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     else if(player.x > maxX){player.x = maxX; if(p.bank > 0) p.bank = -p.bank*.45;}
     clampPlayerToWorld();
   }
-  // Top-down paper dart, nose up, in the card's box. Banking lowers one wing (it foreshortens and
-  // falls into shade) and tilts the nose toward the turn. The card's eye rides on the fold.
+  // Top-down paper dart, nose up, centred on the card's box (PAPER_PLANE_ART_V2, after the owner's
+  // reference): a sharp nose, two folded wings with a lighter trailing facet each, a V-notched tail,
+  // a fine crease down the spine and the card's eye riding on the crease. Banking foreshortens the
+  // lowered wing and tilts the nose into the turn.
   function drawPaperPlane(x, y, w, h, s){
     const cube = cubeSkin(), eyeTone = eyeSkin();
     const body = cube?.body || "#111111";
     const dark = paperIsDark(body);
+    const tone = (k) => paperShade(body, dark ? k : -k*.8);
     const bank = vgClampBank(planeMode.bank);
     const cx = x + w/2, cy = y + h/2;
+    const hw = w*.68, L = w*1.5;                      // half span, nose-to-tail length
+    const top = cy - L*.52;
+    const P = (u, v, side) => [cx + u*hw*side*(side < 0 ? 1 + .06*Math.max(0, bank) - .2*Math.max(0, -bank) : 1 + .06*Math.max(0, -bank) - .2*Math.max(0, bank)), top + v*L];
     ctx.save();
-    ctx.translate(cx, cy); ctx.rotate(bank*.32); ctx.translate(-cx, -cy);
-    const span = w*.62, noseY = y - h*.16, tailY = y + h*.92, keelY = y + h*1.02;
-    const spanL = span*(1 + .14*Math.max(0, bank) - .42*Math.max(0, -bank));
-    const spanR = span*(1 + .14*Math.max(0, -bank) - .42*Math.max(0, bank));
-    const tipY = y + h*.84;
-    // shadow on the paper below (the plane flies above the grid)
-    ctx.fillStyle = "rgba(0,0,0,.12)";
-    ctx.beginPath(); ctx.moveTo(cx + 7*s, noseY + 10*s); ctx.lineTo(cx - spanL + 7*s, tipY + 10*s); ctx.lineTo(cx + 7*s, tailY + 10*s); ctx.lineTo(cx + spanR + 7*s, tipY + 10*s); ctx.closePath(); ctx.fill();
-    // trailing air streaks off the wing tips
-    ctx.strokeStyle = dark ? "rgba(0,0,0,.18)" : "rgba(0,0,0,.12)"; ctx.lineWidth = Math.max(1, 1.2*s); ctx.lineCap = "round";
-    const fl = (Math.sin(time*9)*.5 + .5)*4*s;
-    ctx.beginPath();
-    ctx.moveTo(cx - spanL, tipY + 4*s); ctx.lineTo(cx - spanL + 2*s, tipY + 16*s + fl);
-    ctx.moveTo(cx + spanR, tipY + 4*s); ctx.lineTo(cx + spanR - 2*s, tipY + 16*s + (4*s - fl));
-    ctx.stroke();
-    const lit = paperShade(body, dark ? .2 : .12), mid = cubeBodyPaint(ctx, x, y, w, h, cube), shade = paperShade(body, dark ? -.25 : -.2);
-    const wing = (side, sp, fill) => {
-      ctx.beginPath(); ctx.moveTo(cx, noseY); ctx.lineTo(cx + side*sp, tipY); ctx.lineTo(cx + side*4*s, tailY); ctx.closePath();
-      ctx.fillStyle = fill; ctx.fill();
+    ctx.translate(cx, cy); ctx.rotate(bank*.2); ctx.translate(-cx, -cy);
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    const poly = (pts, fill) => {
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+      for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+      ctx.strokeStyle = fill; ctx.lineWidth = Math.max(1, 1.4*s); ctx.stroke();   // rounds the paper corners
     };
-    // the lowered wing is in shade, the raised one catches the light
-    wing(-1, spanL, bank < -.05 ? shade : (bank > .05 ? lit : mid));
-    wing(1, spanR, bank > .05 ? shade : (bank < -.05 ? lit : mid));
-    // keel: the folded middle seen from above, a narrow darker spine
-    ctx.fillStyle = paperShade(body, dark ? -.35 : -.3);
-    ctx.beginPath(); ctx.moveTo(cx, noseY + 2*s); ctx.lineTo(cx - 3.5*s, tailY); ctx.lineTo(cx, keelY); ctx.lineTo(cx + 3.5*s, tailY); ctx.closePath(); ctx.fill();
-    // crease lines
-    ctx.strokeStyle = dark ? "rgba(255,255,255,.22)" : "rgba(0,0,0,.16)"; ctx.lineWidth = Math.max(.8, 1*s);
-    ctx.beginPath();
-    ctx.moveTo(cx, noseY); ctx.lineTo(cx, keelY);
-    ctx.moveTo(cx - 1*s, noseY + 6*s); ctx.lineTo(cx - spanL*.55, tipY - 3*s);
-    ctx.moveTo(cx + 1*s, noseY + 6*s); ctx.lineTo(cx + spanR*.55, tipY - 3*s);
-    ctx.stroke();
-    // eye on the fold, looking where it turns
-    const ex = cx + bank*3*s, ey = y + h*.4, erx = 6.2*s, ery = 7.6*s;
+    for(const sd of [-1, 1]){
+      const lowered = sd*bank > .05;
+      const nose = P(0, 0, sd), tip = P(1, .9, sd), fold = P(.33, .875, sd), crease = P(.62, .62, sd), tail = P(0, 1, sd), spine = P(.1, .52, sd);
+      poly([nose, tip, fold], lowered ? tone(-.12) : tone(0));              // outer wing
+      poly([crease, tip, fold], lowered ? tone(.04) : tone(.16));           // trailing fold facet
+      poly([nose, spine, fold, tail], lowered ? tone(-.08) : tone(.03));     // inner body panel
+      // faint light along the leading edge
+      ctx.strokeStyle = dark ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.4)"; ctx.lineWidth = Math.max(.8, .9*s);
+      ctx.beginPath(); ctx.moveTo(nose[0], nose[1] + 1*s); ctx.lineTo(tip[0], tip[1] - 1*s); ctx.stroke();
+    }
+    // spine crease
+    ctx.strokeStyle = dark ? "rgba(255,255,255,.28)" : "rgba(0,0,0,.18)"; ctx.lineWidth = Math.max(.7, .8*s);
+    ctx.beginPath(); ctx.moveTo(cx, top + 1*s); ctx.lineTo(cx, top + L); ctx.stroke();
+    // the card's eye on the crease
+    const ex = cx, ey = top + L*.43, erx = hw*.22, ery = hw*.29;
     ctx.fillStyle = eyeTone.color;
     ctx.beginPath(); ctx.ellipse(ex, ey, erx, ery, 0, 0, Math.PI*2); ctx.fill();
     strokeCustomEyeOutline(ctx, ex, ey, erx, ery, s, eyeTone);
-    ctx.fillStyle = "#111";
-    ctx.beginPath(); ctx.arc(ex + bank*2.6*s, ey - 2.2*s, 1.9*s, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = eyeTone.pupil || "#111";
+    ctx.beginPath(); ctx.arc(ex + bank*erx*.35, ey, Math.max(1.2*s, erx*.3), 0, Math.PI*2); ctx.fill();
     ctx.restore();
   }
   function vgClampBank(v){v = Number(v) || 0; return Math.max(-1, Math.min(1, v));}
