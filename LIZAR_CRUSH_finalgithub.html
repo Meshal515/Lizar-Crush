@@ -11810,7 +11810,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function formatRunTime(sec){sec = Math.max(0, Number(sec)||0); const m = Math.floor(sec/60); const s = sec - m*60; return m ? `${m}:${s.toFixed(2).padStart(5,"0")}` : `${s.toFixed(2)}s`;}
   function currentRecordLabel(){const label = activeLevelLabel().replace(/^TEST —\s*/i, "");return friendPlayLevel ? "Friend · " + label : label;}
   function markRunStart(){if(editorTesting) return; currentRunDeaths = 0; const s = ensurePlayStats(); s.totalPlays += 1; savePlayRecords(); renderRecordsPanel();}
-  function startRunCapture(){simAcc = 0; simPrevOk = false; frameTraceNewSession(); runFrames = []; lastRunFrameAt = -99; lastReplayWorldAt = -99; replayPruneIdx = 0; deathReplayShown = false; updateRunTimer();}
+  function startRunCapture(){planePrewarm(); simAcc = 0; simPrevOk = false; frameTraceNewSession(); runFrames = []; lastRunFrameAt = -99; lastReplayWorldAt = -99; replayPruneIdx = 0; deathReplayShown = false; updateRunTimer();}
   function safeReplayClone(value){
     try{return JSON.parse(JSON.stringify(value));}
     catch(err){return null;}
@@ -13035,6 +13035,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function resetLevel(keepMenu = true){
     resetVoidseamEscapeRuntime();
     exitPlaneMode();
+    planeFoldFx = {active:false};
     const lvl = activeLevel();
     restorePlayerRenderState();
     clearLevelRuntimeState(lvl);
@@ -14142,7 +14143,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     wireReleaseBypass = false;
   }
   function touchHoldPointerDown(ev){
-    if(planeMode.active) return;   // the plane steers by screen halves (handled by pointerDown)
+    if(planeMode.active || planeFoldFx.active) return;   // the plane steers by screen halves (handled by pointerDown)
     if(!canInput("game") || !isPlayState() || (touchControlSettings.mode||"full") !== "button") return;
     ev.preventDefault(); ev.stopPropagation();
     unlockAudio();
@@ -14179,6 +14180,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     unlockAudio();
     if(!canInput("game")) return;
     if(!shouldStartStretchFromPointer(ev)) return;
+    if(planeFoldFx.active) return;
     if(isPlayState() && !holding){beginFreshStretchInput();gameplayStretchPointerId = ev.pointerId ?? null;holding = true;lastInputTime = time;ev.preventDefault();ev.stopPropagation();}
   }
   function pointerUp(ev){
@@ -14243,7 +14245,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(canInput("menu")) { startGame(); return; }
     }
 
-    if(!canInput("game") || !isPlayState() || planeMode.active) return;
+    if(!canInput("game") || !isPlayState() || planeMode.active || planeFoldFx.active) return;
     keyboardStretchKeysDown.add(ev.code);
     if(!holding && !ev.repeat){
       beginFreshStretchInput();
@@ -15553,7 +15555,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     p.bank += (steer - p.bank)*Math.min(1, dt*(steer !== 0 ? 6.5 : 4.2));
     player.h += (player.normalH - player.h)*Math.min(1, dt*14);
     player.x += p.bank*p.side*dt;
-    player.baseY -= p.speed*dt;
+    p.boost = (Number(p.boost) || 0)*Math.exp(-dt*2.4);
+    player.baseY -= (p.speed + p.boost)*dt;
     const minX = player.w/2, maxX = WORLD_W - player.w/2;
     if(player.x < minX){player.x = minX; if(p.bank < 0) p.bank = -p.bank*.45;}
     else if(player.x > maxX){player.x = maxX; if(p.bank > 0) p.bank = -p.bank*.45;}
@@ -15573,9 +15576,32 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const hw = w*.68, L = w*1.5;                      // half span, nose-to-tail length
     const top = cy - L*.52;
     const P = (u, v, side) => [cx + u*hw*side*(side < 0 ? 1 + .06*Math.max(0, bank) - .2*Math.max(0, -bank) : 1 + .06*Math.max(0, -bank) - .2*Math.max(0, bank)), top + v*L];
+    // AIR_FX_V1: air rushing past (time-driven, smooth at any fps), denser when boosted
+    const rush = clamp01(.45 + (Number(planeMode.boost) || 0)/220);
+    ctx.save();
+    ctx.lineCap = "round";
+    for(let i=0;i<7;i++){
+      const lane = (trapHash(i*4.31) - .5)*w*2.6, speed = .9 + trapHash(i*2.7)*.8;
+      const u = (time*speed*(1 + rush) + trapHash(i*9.1)) % 1;
+      const yy = cy - L*.9 + u*L*2.4, len = (10 + 14*rush)*s*(.6 + trapHash(i*1.9)*.6);
+      const a = Math.sin(u*Math.PI)*(.18 + .3*rush);
+      ctx.strokeStyle = dark ? `rgba(0,0,0,${a*.55})` : `rgba(0,0,0,${a*.4})`;
+      ctx.lineWidth = Math.max(.8, (1 + trapHash(i)*.8)*s);
+      const xx = cx + lane - bank*u*10*s;
+      ctx.beginPath(); ctx.moveTo(xx, yy); ctx.lineTo(xx + bank*4*s, yy + len); ctx.stroke();
+    }
+    ctx.restore();
     ctx.save();
     ctx.translate(cx, cy); ctx.rotate(bank*.2); ctx.translate(-cx, -cy);
     ctx.lineJoin = "round"; ctx.lineCap = "round";
+    // wing-tip trails: two soft ribbons that swing out as it banks
+    for(const sd of [-1, 1]){
+      const tp = P(1, .9, sd), sway = Math.sin(time*7 + sd)*2*s;
+      const g2 = ctx.createLinearGradient(tp[0], tp[1], tp[0], tp[1] + (18 + 16*rush)*s);
+      g2.addColorStop(0, dark ? "rgba(0,0,0,.22)" : "rgba(0,0,0,.14)"); g2.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.strokeStyle = g2; ctx.lineWidth = Math.max(1, 1.6*s);
+      ctx.beginPath(); ctx.moveTo(tp[0], tp[1]); ctx.quadraticCurveTo(tp[0] - bank*6*s + sway, tp[1] + 12*s, tp[0] - bank*10*s, tp[1] + (18 + 16*rush)*s); ctx.stroke();
+    }
     const poly = (pts, fill) => {
       ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
       for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]);
@@ -15605,6 +15631,687 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.restore();
   }
   function vgClampBank(v){v = Number(v) || 0; return Math.max(-1, Math.min(1, v));}
+
+  // =====================================================================================
+  // PLANE_TRAPS_V1: traps for the paper-plane mode. The plane only climbs and slides
+  // sideways, so every hazard here is either on the walls or stands lengthwise in the lane
+  // so it can be steered around. All static art (cardboard, spikes, bodies) is painted once
+  // into small cached sprites and stamped with drawImage; only eyes, smoke and moving parts
+  // are drawn per frame (no clip, no patterns, no shadowBlur), so they cost almost nothing.
+  //   planeWallSpikes  cardboard spike strip on a wall (not a creature)
+  //   planeGapWall     a spiked cardboard wall across the lane with one gap and a watching eye
+  //   planeSpikeTotem  a tall spiky totem creature standing in the lane
+  //   planeDrifter     a tall spiky pod creature drifting left and right
+  //   planeSerpent     a long spiky serpent hanging in the lane, swaying in an S
+  //   planeFolders     two sleepy paper creatures: ENTER folds the card into a plane and
+  //                    slingshots it; EXIT catches the plane and unfolds it back into the card
+  // =====================================================================================
+  const PLANE_SPRITES = new Map();
+  function planeSprite(key, wPx, hPx, paint){
+    let c = PLANE_SPRITES.get(key);
+    if(c) return c;
+    if(PLANE_SPRITES.size > 72) PLANE_SPRITES.clear();
+    c = document.createElement("canvas");
+    c.width = Math.max(1, Math.ceil(wPx)); c.height = Math.max(1, Math.ceil(hPx));
+    const g = c.getContext("2d");
+    try{paint(g);}catch(err){console.warn("plane sprite", key, err);}
+    PLANE_SPRITES.set(key, c);
+    return c;
+  }
+  function planeNum(v, d, lo, hi){v = Number(v); if(!Number.isFinite(v)) v = d; return Math.max(lo, Math.min(hi, v));}
+  function planeSm(u){u = clamp01(u); return u*u*(3 - 2*u);}
+  function planeOut3(u){u = clamp01(u); return 1 - Math.pow(1 - u, 3);}
+  function planeColors(){
+    const m = trapMain(), a = trapAccent(), i = trapIdle();
+    return {main:m, accent:a, idle:i, lit:paperShade(m, .2), mid:m, shade:paperShade(m, -.28), deep:paperShade(m, -.48), edge:paperShade(m, .38)};
+  }
+  function planeColorKey(){return trapMain() + "|" + trapAccent();}
+  function planeScaleKey(s){return Math.round(s*100);}
+
+  // one cardboard spike (pointing along +x) in local px: lit upper facet, shaded lower facet,
+  // a soft shadow under it and a bright cut edge on top
+  function planePaintSpike(g, x0, y0, len, half, col){
+    g.fillStyle = "rgba(0,0,0,.16)";
+    g.beginPath(); g.moveTo(x0, y0 - half + 2); g.lineTo(x0 + len + 2, y0 + 3); g.lineTo(x0, y0 + half + 3); g.closePath(); g.fill();
+    g.fillStyle = col.lit;
+    g.beginPath(); g.moveTo(x0, y0 - half); g.lineTo(x0 + len, y0); g.lineTo(x0, y0); g.closePath(); g.fill();
+    g.fillStyle = col.shade;
+    g.beginPath(); g.moveTo(x0, y0); g.lineTo(x0 + len, y0); g.lineTo(x0, y0 + half); g.closePath(); g.fill();
+    g.strokeStyle = col.edge; g.lineWidth = Math.max(1, half*.12); g.lineCap = "round";
+    g.beginPath(); g.moveTo(x0 + 1, y0 - half + 1); g.lineTo(x0 + len - 1, y0); g.stroke();
+  }
+  // a cardboard plank: face, darker lower lip, light top edge, tiny corrugation dashes
+  function planePaintPlank(g, x, y, w, h, col, r){
+    g.fillStyle = col.deep; roundRect(g, x, y + h*.12, w, h, r); g.fill();
+    g.fillStyle = col.mid; roundRect(g, x, y, w, h*.9, r); g.fill();
+    g.fillStyle = "rgba(255,255,255,.16)"; roundRect(g, x + r*.4, y + h*.08, w - r*.8, h*.18, r*.5); g.fill();
+    g.strokeStyle = "rgba(0,0,0,.12)"; g.lineWidth = Math.max(1, h*.05);
+    g.beginPath();
+    for(let k = x + r + 4; k < x + w - r - 4; k += Math.max(6, h*.55)){g.moveTo(k, y + h*.45); g.lineTo(k + Math.max(3, h*.22), y + h*.45);}
+    g.stroke();
+  }
+  // one shared eye (the cards' own almond-free round eye family): white ball, iris that
+  // tracks a world point, skin lid from the top. open 0..1, look -1..1.
+  function planeEye(x, y, r, lookX, lookY, open, lid, col){
+    if(open < .2){
+      // asleep: no eyeball, just the closed lid line curving down
+      ctx.strokeStyle = col.deep; ctx.lineWidth = Math.max(1.4, r*.22); ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(x - r*.95, y); ctx.quadraticCurveTo(x, y + r*.7, x + r*.95, y); ctx.stroke();
+      ctx.lineWidth = Math.max(1, r*.12);
+      ctx.beginPath(); ctx.moveTo(x - r*.5, y + r*.32); ctx.lineTo(x - r*.62, y + r*.62); ctx.moveTo(x + r*.5, y + r*.32); ctx.lineTo(x + r*.62, y + r*.62); ctx.stroke();
+      return;
+    }
+    ctx.fillStyle = "rgba(0,0,0,.18)";
+    ctx.beginPath(); ctx.arc(x, y + r*.12, r*1.18, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = col.deep;
+    ctx.beginPath(); ctx.arc(x, y, r*1.16, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#fffaf3";
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+    const ix = x + lookX*r*.38, iy = y + lookY*r*.34;
+    ctx.fillStyle = "#16070f";
+    ctx.beginPath(); ctx.arc(ix, iy, r*.42, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(ix - r*.14, iy - r*.16, r*.12, 0, Math.PI*2); ctx.fill();
+    const o = clamp01(open);
+    if(o < .985){
+      const ly = y - r + 2*r*(1 - o);
+      ctx.fillStyle = lid;
+      ctx.beginPath();
+      ctx.arc(x, y, r*1.06, Math.PI, 0, false);
+      ctx.lineTo(x + r*1.06, Math.min(y + r*1.06, ly));
+      ctx.quadraticCurveTo(x, Math.min(y + r*1.1, ly + r*.3*o), x - r*1.06, Math.min(y + r*1.06, ly));
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = col.deep; ctx.lineWidth = Math.max(1, r*.14); ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(x + r*.98, Math.min(y + r, ly)); ctx.quadraticCurveTo(x, Math.min(y + r*1.08, ly + r*.3*o), x - r*.98, Math.min(y + r, ly)); ctx.stroke();
+    }
+  }
+  function planeBlink(seed){
+    const per = 3.2 + trapHash(seed)*2.4, ph = (time + trapHash(seed + 3.1)*per) % per;
+    return ph < .15 ? Math.sin(ph/.15*Math.PI) : 0;
+  }
+  function planeLookAt(wx, wy){
+    const pr = playerRect();
+    const dx = pr.x + pr.w/2 - wx, dy = pr.y + pr.h/2 - wy, d = Math.hypot(dx, dy) || 1;
+    const out = {x:dx/d, y:dy/d};
+    return out;
+  }
+  function planeDeath(reason, o, rect){
+    const impact = {x:rect.x + rect.w/2, y:rect.y + rect.h/2};
+    const r = {reason, type:"saw", impact, culprit:o};
+    return r;
+  }
+
+  // ---------------- 1) Wall Spikes ----------------
+  function planeWallSpikesCfg(o){
+    const side = o.side === "left" || o.side === "right" ? o.side : "both";
+    const c = {side, y:Number(o.y) || 700, length:planeNum(o.length, 320, 60, 2400), depth:planeNum(o.depth, 24, 14, 44)};
+    c.y0 = c.y - c.length/2; c.y1 = c.y + c.length/2;
+    return c;
+  }
+  const PLANE_BOARD = 7, PLANE_PITCH = 16;
+  function planeWallSpikesRects(c){
+    const reach = PLANE_BOARD + c.depth*.72, out = [];
+    if(c.side !== "right") out.push({x:0, y:c.y0, w:reach, h:c.length});
+    if(c.side !== "left") out.push({x:WORLD_W - reach, y:c.y0, w:reach, h:c.length});
+    return out;
+  }
+  function drawPlaneWallSpikes(o){
+    const c = planeWallSpikesCfg(o);
+    const p0 = worldToScreen(0, c.y0), s = p0.s;
+    const tileN = 8, tileH = tileN*PLANE_PITCH, wPx = (PLANE_BOARD + c.depth + 6)*s, hPx = (tileH + 6)*s;
+    const key = "ws|" + planeColorKey() + "|" + planeScaleKey(s) + "|" + c.depth;
+    const tile = planeSprite(key, wPx, hPx, g => {
+      const col = planeColors();
+      g.scale(s, s);
+      g.fillStyle = col.deep; g.fillRect(0, 0, PLANE_BOARD, tileH);
+      g.fillStyle = col.mid; g.fillRect(0, 0, PLANE_BOARD - 2, tileH);
+      for(let k=0;k<tileN;k++) planePaintSpike(g, PLANE_BOARD - .5, k*PLANE_PITCH + PLANE_PITCH/2, c.depth, PLANE_PITCH*.5, col);
+    });
+    const sides = c.side === "both" ? ["left","right"] : [c.side];
+    for(const sd of sides){
+      ctx.save();
+      if(sd === "right"){const pr = worldToScreen(WORLD_W, c.y0); ctx.translate(pr.x, 0); ctx.scale(-1, 1); ctx.translate(-p0.x, 0);}
+      let done = 0;
+      while(done < c.length - .5){
+        const seg = Math.min(tileH, c.length - done);
+        const py = worldToScreen(0, c.y0 + done).y;
+        ctx.drawImage(tile, 0, 0, tile.width, Math.max(1, seg*s), p0.x, py, tile.width, Math.max(1, seg*s));
+        done += seg;
+      }
+      // cardboard end caps
+      const col = planeColors();
+      ctx.fillStyle = col.deep;
+      roundRect(ctx, p0.x, worldToScreen(0, c.y0 - 4).y, (PLANE_BOARD + 3)*s, 6*s, 2*s); ctx.fill();
+      roundRect(ctx, p0.x, worldToScreen(0, c.y1 - 2).y, (PLANE_BOARD + 3)*s, 6*s, 2*s); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // ---------------- 2) Spike gate with one gap and one eye ----------------
+  function planeGapWallCfg(o){
+    const gapW = planeNum(o.gapW, 110, 80, 200);
+    const c = {y:Number(o.y) || 700, gapW, gapX:planeNum(o.gapX, WORLD_W/2, gapW/2 + 10, WORLD_W - gapW/2 - 10), thick:22, spike:12};
+    c.left = c.gapX - gapW/2; c.right = c.gapX + gapW/2;
+    // the eye sits in the middle of the longer piece, never over the gap
+    const leftLen = c.left, rightLen = WORLD_W - c.right;
+    c.eyeX = leftLen >= rightLen ? leftLen/2 : c.right + rightLen/2;
+    c.eyeR = Math.max(6, Math.min(12, Math.max(leftLen, rightLen)/2 - 6));
+    return c;
+  }
+  function planeGapWallRects(c){
+    const h = c.thick + c.spike*1.4, y = c.y - h/2, out = [];
+    if(c.left > 1) out.push({x:0, y, w:c.left, h});
+    if(c.right < WORLD_W - 1) out.push({x:c.right, y, w:WORLD_W - c.right, h});
+    return out;
+  }
+  function planeGapPiece(len, s, c){
+    const key = "gw|" + planeColorKey() + "|" + planeScaleKey(s) + "|" + Math.round(len);
+    const pad = c.spike + 4;
+    return planeSprite(key, (len + 2)*s, (c.thick + pad*2)*s, g => {
+      const col = planeColors();
+      g.scale(s, s); g.translate(1, pad);
+      // spikes up and down, then the plank over their roots
+      for(let x = 2; x + PLANE_PITCH*.5 <= len; x += PLANE_PITCH){
+        const cx = x + PLANE_PITCH*.5 - 2;
+        g.save(); g.translate(cx, 2); g.rotate(-Math.PI/2); planePaintSpike(g, 0, 0, c.spike + 2, PLANE_PITCH*.46, col); g.restore();
+        g.save(); g.translate(cx, c.thick - 2); g.rotate(Math.PI/2); planePaintSpike(g, 0, 0, c.spike + 2, PLANE_PITCH*.46, col); g.restore();
+      }
+      planePaintPlank(g, 0, 0, len, c.thick, col, Math.min(8, c.thick*.4));
+    });
+  }
+  function drawPlaneGapWall(o){
+    const c = planeGapWallCfg(o);
+    const p = worldToScreen(0, c.y), s = p.s, pad = c.spike + 4;
+    const yTop = p.y - (c.thick/2 + pad)*s;
+    if(c.left > 1){const spr = planeGapPiece(c.left, s, c); ctx.drawImage(spr, worldToScreen(0, 0).x - 1*s, yTop);}
+    if(c.right < WORLD_W - 1){const spr = planeGapPiece(WORLD_W - c.right, s, c); ctx.drawImage(spr, worldToScreen(c.right, 0).x - 1*s, yTop);}
+    // gap markers: two small light chevrons pointing into the gap so it reads at a glance
+    const col = planeColors();
+    ctx.fillStyle = col.edge;
+    for(const gx of [c.left, c.right]){
+      const gp = worldToScreen(gx, c.y), dir = gx === c.left ? 1 : -1;
+      ctx.beginPath(); ctx.moveTo(gp.x - dir*1*s, gp.y - 5*s); ctx.lineTo(gp.x + dir*5*s, gp.y); ctx.lineTo(gp.x - dir*1*s, gp.y + 5*s); ctx.closePath(); ctx.fill();
+    }
+    // the watching eye
+    const ep = worldToScreen(c.eyeX, c.y), look = planeLookAt(c.eyeX, c.y);
+    const pr = playerRect(), pcy = pr.y + pr.h/2;
+    const near = clamp01(1 - Math.abs(pcy - c.y)/220);
+    const passed = state === "editor" ? 0 : planeSm((c.y - 30 - (pr.y + pr.h))/80);
+    const open = Math.max(.12, (.62 + .38*near - .5*passed)*(1 - .95*planeBlink(c.y*.37 + 1)));
+    planeEye(ep.x, ep.y, c.eyeR*s, look.x, look.y, open, col.mid, col);
+  }
+
+  // ---------------- 3) Spike Totem ----------------
+  function planeTotemCfg(o){
+    const c = {x:planeNum(o.x, WORLD_W/2, 24, WORLD_W - 24), y:Number(o.y) || 700, height:planeNum(o.height, 220, 90, 700), width:planeNum(o.width, 34, 24, 64), spike:12};
+    return c;
+  }
+  function planeTotemRect(c){
+    const hw = c.width/2 + c.spike*.7;
+    const r = {x:c.x - hw, y:c.y - c.height/2 - 6, w:hw*2, h:c.height + 12};
+    return r;
+  }
+  function drawPlaneTotem(o){
+    const c = planeTotemCfg(o);
+    const p = worldToScreen(c.x, c.y), s = p.s;
+    const W2 = c.width + c.spike*2 + 8, H2 = c.height + 26;
+    const key = "tt|" + planeColorKey() + "|" + planeScaleKey(s) + "|" + c.width + "|" + c.height;
+    const spr = planeSprite(key, W2*s, H2*s, g => {
+      const col = planeColors();
+      g.scale(s, s); g.translate(W2/2, H2/2);
+      const hw = c.width/2, hh = c.height/2;
+      // side spikes
+      for(let y = -hh + 26; y < hh - 8; y += PLANE_PITCH){
+        g.save(); g.translate(hw - 1, y + PLANE_PITCH/2); planePaintSpike(g, 0, 0, c.spike, PLANE_PITCH*.45, col); g.restore();
+        g.save(); g.translate(-hw + 1, y + PLANE_PITCH/2); g.scale(-1, 1); planePaintSpike(g, 0, 0, c.spike, PLANE_PITCH*.45, col); g.restore();
+      }
+      // crown of three spikes on the head
+      for(const a of [-.5, 0, .5]){g.save(); g.translate(Math.sin(a)*hw*.6, -hh + 2); g.rotate(-Math.PI/2 + a); planePaintSpike(g, 0, 0, c.spike*.9, PLANE_PITCH*.42, col); g.restore();}
+      // body: lit left half, shaded right half, rounded like a folded tube
+      g.fillStyle = "rgba(0,0,0,.16)"; roundRect(g, -hw + 3, -hh + 4, c.width, c.height, hw); g.fill();
+      g.fillStyle = col.shade; roundRect(g, -hw, -hh, c.width, c.height, hw); g.fill();
+      g.fillStyle = col.mid; roundRect(g, -hw, -hh, c.width*.62, c.height, hw*.9); g.fill();
+      g.fillStyle = "rgba(255,255,255,.2)"; roundRect(g, -hw + 4, -hh + 8, c.width*.16, c.height - 16, 3); g.fill();
+      // carved bands like a totem
+      g.strokeStyle = "rgba(0,0,0,.18)"; g.lineWidth = 1.4;
+      for(let y = -hh + c.width*1.3; y < hh - 10; y += 22){g.beginPath(); g.moveTo(-hw + 3, y); g.quadraticCurveTo(0, y + 3, hw - 3, y); g.stroke();}
+    });
+    ctx.drawImage(spr, p.x - spr.width/2, p.y - spr.height/2);
+    // its eye near the top: glares at you, blinks
+    const col = planeColors();
+    const ey = c.y - c.height/2 + c.width*.62, ep = worldToScreen(c.x, ey), look = planeLookAt(c.x, ey);
+    const er = c.width*.36*s;
+    planeEye(ep.x, ep.y, er, look.x, look.y, (.8)*(1 - .95*planeBlink(c.x*.7 + c.y*.13)), col.mid, col);
+    // heavy V brow (glaring) and a gritted cardboard mouth
+    ctx.strokeStyle = col.deep; ctx.lineWidth = Math.max(2, 3.6*s); ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(ep.x - er*1.25, ep.y - er*1.55); ctx.lineTo(ep.x, ep.y - er*1.05); ctx.lineTo(ep.x + er*1.25, ep.y - er*1.55); ctx.stroke();
+    const my = ep.y + er*1.75, mw = er*1.15;
+    ctx.fillStyle = "#2a0f1b"; roundRect(ctx, ep.x - mw, my - er*.32, mw*2, er*.64, er*.2); ctx.fill();
+    ctx.strokeStyle = "#fffaf3"; ctx.lineWidth = Math.max(1, 1.1*s);
+    ctx.beginPath(); for(let k=-2;k<=2;k++){ctx.moveTo(ep.x + k*mw*.4, my - er*.3); ctx.lineTo(ep.x + k*mw*.4, my + er*.3);} ctx.moveTo(ep.x - mw, my); ctx.lineTo(ep.x + mw, my); ctx.stroke();
+  }
+
+  // ---------------- 4) Drifter ----------------
+  function planeDrifterCfg(o){
+    const c = {y:Number(o.y) || 700, height:planeNum(o.height, 170, 80, 500), width:planeNum(o.width, 38, 24, 60), travel:planeNum(o.travel, 110, 0, 170), speed:planeNum(o.speed, .35, .05, 1.5), phase:Number(o.phase) || 0, spike:14};
+    const lim = c.width/2 + c.spike + 4;
+    c.cx = planeNum(o.x, WORLD_W/2, lim + c.travel, WORLD_W - lim - c.travel);
+    if(!Number.isFinite(c.cx)) c.cx = WORLD_W/2;
+    return c;
+  }
+  function planeDrifterPos(c, t=time){
+    const a = (t + c.phase)*c.speed*Math.PI*2;
+    const out = {x:c.cx + Math.sin(a)*c.travel, vx:Math.cos(a)*c.travel*c.speed*Math.PI*2};
+    return out;
+  }
+  function planeDrifterRect(c, x){
+    const hw = c.width/2 + c.spike*.65;
+    const r = {x:x - hw, y:c.y - c.height/2, w:hw*2, h:c.height};
+    return r;
+  }
+  function drawPlaneDrifter(o){
+    const c = planeDrifterCfg(o), pos = planeDrifterPos(c);
+    const p = worldToScreen(pos.x, c.y), s = p.s;
+    const W2 = c.width + c.spike*2 + 10, H2 = c.height + 28;
+    const key = "dr|" + planeColorKey() + "|" + planeScaleKey(s) + "|" + c.width + "|" + c.height;
+    const spr = planeSprite(key, W2*s, H2*s, g => {
+      const col = planeColors();
+      g.scale(s, s); g.translate(W2/2, H2/2);
+      const hw = c.width/2, hh = c.height/2;
+      // a seed pod: pointed both ends, spikes fanning out along both sides
+      const pod = () => {g.beginPath(); g.moveTo(0, -hh); g.bezierCurveTo(hw*1.5, -hh*.55, hw*1.5, hh*.55, 0, hh); g.bezierCurveTo(-hw*1.5, hh*.55, -hw*1.5, -hh*.55, 0, -hh); g.closePath();};
+      for(let k = 1; k < 9; k++){
+        const v = k/9, y = -hh + c.height*v, wv = Math.sin(v*Math.PI)*hw*1.1;
+        g.save(); g.translate(wv - 1, y); g.rotate(-.25 + v*.5); planePaintSpike(g, 0, 0, c.spike*(.6 + .4*Math.sin(v*Math.PI)), PLANE_PITCH*.4, col); g.restore();
+        g.save(); g.translate(-wv + 1, y); g.scale(-1, 1); g.rotate(-.25 + v*.5); planePaintSpike(g, 0, 0, c.spike*(.6 + .4*Math.sin(v*Math.PI)), PLANE_PITCH*.4, col); g.restore();
+      }
+      g.save(); g.translate(3, 4); pod(); g.fillStyle = "rgba(0,0,0,.15)"; g.fill(); g.restore();
+      pod(); g.fillStyle = col.shade; g.fill();
+      g.save(); g.scale(.7, 1); g.translate(-hw*.22, 0); pod(); g.fillStyle = col.mid; g.fill(); g.restore();
+      g.strokeStyle = "rgba(255,255,255,.22)"; g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(-hw*.45, -hh*.6); g.quadraticCurveTo(-hw*.75, 0, -hw*.45, hh*.6); g.stroke();
+      g.strokeStyle = "rgba(0,0,0,.18)"; g.lineWidth = 1.2;
+      g.beginPath(); g.moveTo(0, -hh + 6); g.lineTo(0, hh - 6); g.stroke();
+    });
+    // it leans into its drift a little (and the lean eases, it never snaps)
+    const lean = Math.max(-.12, Math.min(.12, pos.vx*.0009));
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(lean);
+    ctx.drawImage(spr, -spr.width/2, -spr.height/2);
+    ctx.restore();
+    // a lazy, half-shut eye that still follows you
+    const col = planeColors();
+    const ey = c.y - c.height*.18, ex = pos.x + Math.sin(lean)*(c.height*.32);
+    const ep = worldToScreen(ex, ey), look = planeLookAt(ex, ey);
+    planeEye(ep.x, ep.y, c.width*.3*s, look.x, look.y, .5*(1 - .95*planeBlink(c.cx + c.y*.21)), col.mid, col);
+  }
+
+  // ---------------- 5) Serpent ----------------
+  function planeSerpentCfg(o){
+    const c = {x:planeNum(o.x, WORLD_W/2, 40, WORLD_W - 40), y:Number(o.y) || 700, length:planeNum(o.length, 320, 140, 900), amp:planeNum(o.amp, 34, 0, 90), speed:planeNum(o.speed, 2.2, .3, 6), thick:planeNum(o.thick, 15, 10, 26), phase:Number(o.phase) || 0};
+    c.n = Math.max(10, Math.min(40, Math.round(c.length/(c.thick*.95))));
+    return c;
+  }
+  // tail at the top, head at the bottom facing the plane coming up
+  function planeSerpentPoints(c, t=time){
+    const pts = [];
+    for(let i=0;i<c.n;i++){
+      const v = i/(c.n - 1);
+      const env = .25 + .75*Math.sin(Math.min(1, v*1.15)*Math.PI*.5);
+      const x = c.x + Math.sin(v*Math.PI*2.2 - (t + c.phase)*c.speed)*c.amp*env;
+      const y = c.y - c.length/2 + c.length*v;
+      const r = c.thick*(.45 + .55*Math.min(1, v*1.6))*(v > .94 ? 1.12 : 1);
+      pts.push({x, y, r});
+    }
+    return pts;
+  }
+  function drawPlaneSerpent(o){
+    const c = planeSerpentCfg(o), pts = planeSerpentPoints(c), col = planeColors();
+    const s = worldToScreen(0, 0).s;
+    const S = pts.map(q => {const p = worldToScreen(q.x, q.y); const out = {x:p.x, y:p.y, r:q.r*s}; return out;});
+    // shadow, spikes (one path), body (one path), belly light (one path)
+    ctx.fillStyle = "rgba(0,0,0,.14)"; ctx.beginPath();
+    for(const q of S){ctx.moveTo(q.x + 3*s + q.r, q.y + 4*s); ctx.arc(q.x + 3*s, q.y + 4*s, q.r, 0, Math.PI*2);}
+    ctx.fill();
+    ctx.fillStyle = col.shade; ctx.beginPath();
+    for(let i=1;i<S.length - 2;i+=2){
+      const a = S[i - 1], b = S[i + 1], q = S[i];
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, nx = -dy/d, ny = dx/d, sd = (i >> 1) % 2 ? 1 : -1;
+      const len = q.r*1.15 + 4*s;
+      ctx.moveTo(q.x + dx/d*q.r*.55, q.y + dy/d*q.r*.55); ctx.lineTo(q.x + nx*sd*(q.r + len), q.y + ny*sd*(q.r + len)); ctx.lineTo(q.x - dx/d*q.r*.55, q.y - dy/d*q.r*.55); ctx.closePath();
+    }
+    ctx.fill();
+    ctx.fillStyle = col.mid; ctx.beginPath();
+    for(const q of S){ctx.moveTo(q.x + q.r, q.y); ctx.arc(q.x, q.y, q.r, 0, Math.PI*2);}
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.2)"; ctx.beginPath();
+    for(const q of S){ctx.moveTo(q.x - q.r*.25 + q.r*.32, q.y - q.r*.3); ctx.arc(q.x - q.r*.25, q.y - q.r*.3, q.r*.32, 0, Math.PI*2);}
+    ctx.fill();
+    // head: one eye, a flicking paper tongue
+    const h = S[S.length - 1], hw = pts[pts.length - 1];
+    const look = planeLookAt(hw.x, hw.y);
+    planeEye(h.x, h.y - h.r*.1, h.r*.55, look.x, look.y, .9*(1 - .95*planeBlink(c.x + c.y)), col.mid, col);
+    const fl = Math.sin(time*9 + c.phase)*.5 + .5;
+    ctx.strokeStyle = col.accent; ctx.lineWidth = Math.max(1.2, 1.8*s); ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(h.x, h.y + h.r*.9); ctx.lineTo(h.x, h.y + h.r*(1.4 + .5*fl)); ctx.lineTo(h.x - 2.5*s, h.y + h.r*(1.75 + .5*fl)); ctx.moveTo(h.x, h.y + h.r*(1.4 + .5*fl)); ctx.lineTo(h.x + 2.5*s, h.y + h.r*(1.75 + .5*fl)); ctx.stroke();
+  }
+
+  // ---------------- 6) The Folders (ENTER / EXIT) ----------------
+  // Two paper creatures asleep on wall pegs: Giggles (left, laughs) and Snooze (right, lazy).
+  let planeFoldFx = {active:false};
+  function planeFoldersCfg(o){
+    const c = {mode:o.mode === "exit" ? "exit" : "enter", y:Number(o.y) || 700, trigger:planeNum(o.trigger, 150, 60, 400),
+      planeSpeed:planeNum(o.planeSpeed, 135, 60, 400), steerSpeed:planeNum(o.steerSpeed, 170, 60, 400), pull:planeNum(o.pull, 70, 0, 200), launch:planeNum(o.launch, 2.4, 1, 5)};
+    return c;
+  }
+  const PLANE_FOLD_T = {wake:.3, grab:.24, fold:.7, pull1:.4, pull2:.34, quiver:.18};
+  const PLANE_UNFOLD_T = {startle:.28, grab:.24, fold:.6, settle:.22};
+  function planeFoldersTryStart(o, rect){
+    if(planeFoldFx.active || !isPlayState()) return false;
+    const c = planeFoldersCfg(o);
+    if((o._foldLock || 0) > time) return false;
+    if(c.mode === "enter" && planeMode.active) return false;
+    if(c.mode === "exit" && !planeMode.active) return false;
+    const cy = rect.y + rect.h/2;
+    if(Math.abs(cy - c.y) > c.trigger*.5 + rect.h*.5) return false;
+    planeFoldFx = {active:true, trap:o, cfg:c, mode:c.mode, t0:time, phase:c.mode === "enter" ? "wake" : "startle", x0:player.x, y0:player.baseY, folded:false, puff:0};
+    o._foldLock = time + 4;
+    holding = false; gameplayStretchPointerId = null;
+    player.shrinkTimer = 0; player.shrinkTotalDuration = 0;
+    shake = Math.max(shake, 1.5);
+    try{tone(520, 0, .08, "triangle", .04, 880);}catch(_e){}
+    return true;
+  }
+  function planeFoldStep(dt){
+    const fx = planeFoldFx; if(!fx.active) return;
+    if(!isPlayState()){planeFoldFx = {active:false}; return;}
+    const c = fx.cfg, e = time - fx.t0;
+    const next = (name, dur) => {if(e >= dur){fx.phase = name; fx.t0 += dur; return true;} return false;};
+    player.h += (player.normalH - player.h)*Math.min(1, dt*16);
+    holding = false;
+    if(fx.mode === "enter"){
+      const T = PLANE_FOLD_T;
+      if(fx.phase === "wake") next("grab", T.wake);
+      else if(fx.phase === "grab"){
+        // the hands pull the card to the middle of the lane
+        player.x += (WORLD_W/2 - player.x)*Math.min(1, dt*9);
+        next("fold", T.grab);
+      } else if(fx.phase === "fold"){
+        player.x += (WORLD_W/2 - player.x)*Math.min(1, dt*9);
+        if(!fx.folded && e >= T.fold*.62){
+          fx.folded = true;
+          const keepX = player.x;
+          enterPlaneMode({speed:c.planeSpeed, side:c.steerSpeed});
+          player.x = keepX;
+          try{noiseBurst(0, .22, .05); tone(320, 0, .12, "sine", .04, 640);}catch(_e){}
+        }
+        if(next("pull1", T.fold)) fx.yA = player.baseY;
+      } else if(fx.phase === "pull1"){
+        player.baseY = fx.yA + c.pull*.45*planeSm(e/T.pull1);
+        next("pull2", T.pull1);
+      } else if(fx.phase === "pull2"){
+        player.baseY = fx.yA + c.pull*(.45 + .55*planeSm(e/T.pull2));
+        next("quiver", T.pull2);
+      } else if(fx.phase === "quiver"){
+        player.baseY = fx.yA + c.pull;
+        if(next("done", T.quiver)){
+          planeMode.boost = c.planeSpeed*(c.launch - 1);
+          shake = Math.max(shake, 4);
+          try{noiseBurst(0, .16, .06); tone(260, 0, .18, "sawtooth", .03, 1200);}catch(_e){}
+          fx.trap._foldRelease = time;
+          planeFoldFx = {active:false};
+          return;
+        }
+      }
+    } else {
+      const T = PLANE_UNFOLD_T;
+      if(fx.phase === "startle") next("grab", T.startle);
+      else if(fx.phase === "grab"){player.x += (WORLD_W/2 - player.x)*Math.min(1, dt*8); next("fold", T.grab);}
+      else if(fx.phase === "fold"){
+        if(!fx.folded && e >= T.fold*.6){
+          fx.folded = true; exitPlaneMode();
+          try{noiseBurst(0, .2, .05); tone(640, 0, .12, "sine", .04, 320);}catch(_e){}
+        }
+        next("settle", T.fold);
+      } else if(fx.phase === "settle"){
+        if(next("done", T.settle)){fx.trap._foldRelease = time; planeFoldFx = {active:false}; return;}
+      }
+    }
+    clampPlayerToWorld();
+  }
+  function planeFoldersUpdate(rect){
+    if(planeFoldFx.active) return;
+    const lvl = activeLevel();
+    if(!lvl) return;
+    for(const o of lizarActiveObstacles(lvl)){
+      if(o.type !== "planeFolders" || obstacleDisabledByPower(o)) continue;
+      if(planeFoldersTryStart(o, rect)) return;
+    }
+  }
+  // per-frame smoke: deterministic puffs from the trap's own clock (smooth at any fps)
+  function planeDrawSmoke(cx, cy, amount, t0, s, col){
+    if(amount <= .01) return;
+    for(let i=0;i<16;i++){
+      const a = trapHash(i*3.7)*Math.PI*2, life = .55 + trapHash(i*1.3)*.35;
+      const age = ((time - t0)*1.4 + trapHash(i*5.1)) % life / life;
+      const dist = (6 + 30*planeOut3(age))*s, rr = (12 + 14*age + trapHash(i)*7)*s;
+      ctx.globalAlpha = amount*(1 - age*.8)*.95;
+      const sx = cx + Math.cos(a)*dist, sy = cy + Math.sin(a)*dist*.8 - age*10*s;
+      ctx.fillStyle = "rgba(60,40,40,.16)";
+      ctx.beginPath(); ctx.arc(sx + 2*s, sy + 3*s, rr, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = i % 4 ? "#ece6df" : "#ddd5cc";
+      ctx.beginPath(); ctx.arc(sx, sy, rr, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#fffdf9";
+      ctx.beginPath(); ctx.arc(sx - rr*.25, sy - rr*.28, rr*.55, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  // one Folder creature: a round origami body folded into eight facets (lit top-left, shaded
+  // bottom-right), a big eye, a paper beak that opens toward the lane, a peg holding it to the
+  // wall. Snooze (right) wears a folded nightcap. d = +1 faces right (toward the lane).
+  function planeDrawFolder(px, py, d, s, col, mood, cap){
+    const R = 25*s;
+    const by = py + mood.bob*s;
+    ctx.save(); ctx.translate(px, by); ctx.scale(d, 1); ctx.rotate(mood.tilt);
+    // wall peg (it sits on it)
+    ctx.fillStyle = col.deep; roundRect(ctx, -R*1.25, R*.62, R*1.25, R*.26, R*.1); ctx.fill();
+    // soft shadow
+    ctx.fillStyle = "rgba(0,0,0,.15)"; ctx.beginPath(); ctx.arc(3*s, 4*s, R, 0, Math.PI*2); ctx.fill();
+    // eight folded facets
+    for(let k=0;k<12;k++){
+      const a0 = k*Math.PI/6 - Math.PI/12, a1 = a0 + Math.PI/6, mid = (a0 + a1)/2;
+      const light = Math.cos(mid + Math.PI*.75);          // faces toward the top-left are lit
+      ctx.fillStyle = light > .45 ? col.lit : (light > -.35 ? col.mid : col.shade);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a0)*R, Math.sin(a0)*R*.96); ctx.lineTo(Math.cos(a1)*R, Math.sin(a1)*R*.96); ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = "rgba(0,0,0,.12)"; ctx.lineWidth = Math.max(1, .9*s); ctx.beginPath();
+    for(let k=0;k<12;k+=3){const a0 = k*Math.PI/6 - Math.PI/12; ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a0)*R, Math.sin(a0)*R*.96);}
+    ctx.stroke();
+    // beak: two paper flaps opening toward the lane
+    const m = clamp01(mood.mouth), bx = R*.62, byy = R*.42;
+    ctx.fillStyle = "#2a0f1b";
+    ctx.beginPath(); ctx.moveTo(bx, byy - R*.06); ctx.lineTo(bx + R*.7, byy - m*R*.42); ctx.lineTo(bx + R*.7, byy + m*R*.5); ctx.lineTo(bx, byy + R*.08); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = col.lit;
+    ctx.beginPath(); ctx.moveTo(bx - R*.08, byy - R*.2); ctx.lineTo(bx + R*.78, byy - m*R*.44); ctx.lineTo(bx - R*.02, byy + R*.02); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = col.shade;
+    ctx.beginPath(); ctx.moveTo(bx - R*.02, byy + R*.04); ctx.lineTo(bx + R*.74, byy + m*R*.52); ctx.lineTo(bx - R*.08, byy + R*.24); ctx.closePath(); ctx.fill();
+    if(cap){
+      // folded paper nightcap with a little tassel
+      ctx.fillStyle = col.deep;
+      ctx.beginPath(); ctx.moveTo(-R*.8, -R*.6); ctx.lineTo(R*.55, -R*.78); ctx.lineTo(-R*.55 - mood.bob*.4*s, -R*1.65); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = col.shade;
+      ctx.beginPath(); ctx.moveTo(-R*.15, -R*.69); ctx.lineTo(R*.55, -R*.78); ctx.lineTo(-R*.55 - mood.bob*.4*s, -R*1.65); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#fffaf3"; ctx.beginPath(); ctx.arc(-R*.58 - mood.bob*.4*s, -R*1.7, R*.14, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+    // eye (unflipped so the iris looks the right way)
+    const ex = px + d*R*.05, ey = by - R*.12;
+    planeEye(ex, ey, R*.4, mood.lookX, mood.lookY, mood.open, col.lit, col);
+    if(mood.alarm > .01){
+      ctx.globalAlpha = clamp01(mood.alarm); ctx.fillStyle = col.accent;
+      ctx.font = `900 ${Math.round(18*s)}px Inter, Arial`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("!", ex + d*R*.75, ey - R*1.2); ctx.globalAlpha = 1;
+    }
+    if(mood.zzz > .01){
+      ctx.fillStyle = col.deep; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      for(let k=0;k<2;k++){
+        const zt = (time*.5 + k*.5 + (d > 0 ? 0 : .25)) % 1;
+        ctx.globalAlpha = clamp01(mood.zzz)*Math.sin(zt*Math.PI)*.85;
+        ctx.font = `800 ${Math.round((8 + zt*7)*s)}px Inter, Arial`;
+        ctx.fillText("z", ex + d*R*(.5 + zt*.7), ey - R*(1 + zt*1.4));
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+  function planeDrawArm(sx, sy, hx, hy, s, col, curl, wob){
+    const mx = (sx + hx)/2, my = Math.min(sy, hy) - 12*s + wob;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = col.deep; ctx.lineWidth = Math.max(2, 5*s);
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(mx, my, hx, hy); ctx.stroke();
+    ctx.strokeStyle = col.mid; ctx.lineWidth = Math.max(1.4, 3*s);
+    ctx.beginPath(); ctx.moveTo(sx, sy - .8*s); ctx.quadraticCurveTo(mx, my - .8*s, hx, hy - .8*s); ctx.stroke();
+    ctx.fillStyle = col.shade;
+    ctx.beginPath(); ctx.arc(hx, hy + .8*s, (6.2 - curl)*s, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = col.mid;
+    ctx.beginPath(); ctx.arc(hx, hy, (6 - curl)*s, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = col.lit;
+    ctx.beginPath(); ctx.arc(hx - 1.8*s, hy - 1.8*s, 2.2*s, 0, Math.PI*2); ctx.fill();
+  }
+  function drawPlaneFolders(o){
+    const c = planeFoldersCfg(o), col = planeColors();
+    const p = worldToScreen(0, c.y), s = p.s;
+    const fx = planeFoldFx.active && planeFoldFx.trap === o ? planeFoldFx : null;
+    const editor = state === "editor";
+    const lx = worldToScreen(30, c.y).x, rx = worldToScreen(WORLD_W - 30, c.y).x, y = p.y;
+    const pr = playerRect(), pc = worldToScreen(pr.x + pr.w/2, pr.y + pr.h/2);
+    const sinceRel = time - (Number(o._foldRelease) || -99);
+    // moods: asleep by default; awake while the routine runs; Giggles keeps laughing a moment
+    // after the release while Snooze yawns and nods back off
+    let wake = editor ? .35 : 0, alarm = 0, laugh = 0, yawn = 0, armK = 0, wiggle = 0, smoke = 0, tremble = 0;
+    if(fx){
+      const e = time - fx.t0;
+      wake = 1;
+      if(fx.mode === "enter"){
+        const T = PLANE_FOLD_T;
+        if(fx.phase === "wake"){wake = planeOut3(e/T.wake); alarm = Math.sin(clamp01(e/T.wake)*Math.PI);}
+        else if(fx.phase === "grab") armK = planeSm(e/T.grab);
+        else if(fx.phase === "fold"){armK = 1; wiggle = 1; smoke = Math.sin(clamp01(e/T.fold)*Math.PI)*1.1;}
+        else {armK = 1; tremble = fx.phase === "quiver" ? 1 : (fx.phase === "pull2" ? .5 : .2); laugh = fx.phase === "quiver" ? .4 : 0;}
+      } else {
+        const T = PLANE_UNFOLD_T;
+        if(fx.phase === "startle"){wake = planeOut3(e/T.startle); alarm = Math.sin(clamp01(e/T.startle)*Math.PI)*1.2;}
+        else if(fx.phase === "grab") armK = planeSm(e/T.grab);
+        else if(fx.phase === "fold"){armK = 1; wiggle = 1; smoke = Math.sin(clamp01(e/T.fold)*Math.PI)*1.1;}
+        else armK = 1 - planeSm(e/T.settle);
+      }
+    } else if(sinceRel >= 0 && sinceRel < 1.6){
+      wake = 1 - planeSm((sinceRel - .9)/.7);
+      laugh = 1 - planeSm((sinceRel - .9)/.6);
+      yawn = Math.sin(clamp01(sinceRel/1.1)*Math.PI);
+      armK = 1 - planeSm(sinceRel/.22);
+    }
+    const lookL = planeLookAt(30, c.y), lookR = planeLookAt(WORLD_W - 30, c.y);
+    const breathe = Math.sin(time*1.8)*.8;
+    const gigMood = {bob:breathe*(1 - wake) + laugh*Math.abs(Math.sin(time*18))*-3, tilt:laugh*Math.sin(time*16)*.08, mouth:Math.max(.08*wake, laugh*(.5 + .5*Math.abs(Math.sin(time*16))), alarm*.5), open:.08 + .92*wake, lookX:lookL.x, lookY:lookL.y, alarm, zzz:1 - wake};
+    const snzMood = {bob:breathe*(1 - wake*.5), tilt:-.06*yawn, mouth:Math.max(.05*wake, yawn*.9, alarm*.5), open:Math.max(.08, .08 + .92*wake - .55*yawn - .3*laugh*0), lookX:lookR.x, lookY:lookR.y, alarm, zzz:Math.max(1 - wake, yawn*.6)};
+    snzMood.open = Math.min(snzMood.open, .08 + .6*wake + alarm*.4);
+    // arms reach from each creature to the card / plane (behind the bodies' faces)
+    if(armK > .01){
+      const reachL = 22*s + (pc.x - pr.w*.5*s - 5*s - lx - 22*s)*armK, reachR = 22*s + (rx - (pc.x + pr.w*.5*s + 5*s) - 22*s)*armK;
+      const wg = wiggle ? Math.sin(time*38)*7*s*wiggle : 0, tr = tremble ? Math.sin(time*52)*1.6*s*tremble : 0;
+      const hyL = y + (pc.y - y)*armK, hyR = y + (pc.y - y)*armK;
+      for(const k of [-1, 1]){
+        planeDrawArm(lx + 18*s, y + 8*s, lx + reachL + wg*k + tr, hyL + k*6*s + tr, s, col, wiggle*.8, 0);
+        planeDrawArm(rx - 18*s, y + 8*s, rx - reachR - wg*k - tr, hyR + k*6*s - tr, s, col, wiggle*.8, 0);
+      }
+    }
+    planeDrawFolder(lx, y, 1, s, col, gigMood, false);
+    planeDrawFolder(rx, y, -1, s, col, snzMood, true);
+    if(fx && smoke > 0) planeDrawSmoke(pc.x, pc.y, Math.min(1, smoke), fx.t0, s, col);
+    if(editor){
+      ctx.fillStyle = col.deep; ctx.font = `900 ${Math.round(9*s)}px Inter, Arial`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(c.mode === "exit" ? "PLANE EXIT" : "PLANE ENTER", worldToScreen(WORLD_W/2, c.y).x, y);
+      ctx.strokeStyle = rgbaHex(col.main, .35); ctx.setLineDash([6*s, 5*s]); ctx.lineWidth = Math.max(1, 1.2*s);
+      const tt = worldToScreen(0, c.y - c.trigger/2).y, tb = worldToScreen(0, c.y + c.trigger/2).y;
+      ctx.strokeRect(worldToScreen(0, 0).x, tt, WORLD_W*s, tb - tt); ctx.setLineDash([]);
+    }
+  }
+
+  // ---------------- registry ----------------
+  const PLANE_TRAPS = {
+    planeWallSpikes:{
+      label:"Wall Spikes", help:"Plane mode: cardboard spikes on the walls",
+      make:(x,y) => ({_id:newObjectId(), type:"planeWallSpikes", y, side:"both", length:320, depth:24}),
+      bounds:o => {const c = planeWallSpikesCfg(o); return {x:0, y:c.y0, w:WORLD_W, h:c.length};},
+      draw:drawPlaneWallSpikes,
+      hit:(o, p) => {for(const r of planeWallSpikesRects(planeWallSpikesCfg(o))) if(rectsOverlap(p, r)) return planeDeath("The wall spikes tore the plane.", o, p); return null;},
+      inspector:o => fieldHTML("Y", "y", o.y) + selectHTML("Side", "side", o.side || "both", ["both","left","right"]) + fieldHTML("Length", "length", o.length ?? 320) + fieldHTML("Spike Depth", "depth", o.depth ?? 24),
+      sanitize:o => {const c = planeWallSpikesCfg(o); o.side = c.side; o.length = c.length; o.depth = c.depth;},
+      drag:(o, x) => {}
+    },
+    planeGapWall:{
+      label:"Spike Gate", help:"Plane mode: spiked wall with one gap and a watching eye",
+      make:(x,y) => ({_id:newObjectId(), type:"planeGapWall", y, gapX:Math.round(x), gapW:110}),
+      bounds:o => {const c = planeGapWallCfg(o); return {x:0, y:c.y - 26, w:WORLD_W, h:52};},
+      draw:drawPlaneGapWall,
+      hit:(o, p) => {for(const r of planeGapWallRects(planeGapWallCfg(o))) if(rectsOverlap(p, r)) return planeDeath("The spike gate caught the plane.", o, p); return null;},
+      inspector:o => fieldHTML("Y", "y", o.y) + fieldHTML("Gap Position (X)", "gapX", Math.round(planeGapWallCfg(o).gapX)) + fieldHTML("Gap Size (80-200)", "gapW", planeGapWallCfg(o).gapW, "number", "min='80' max='200'") + `<p class="inspEmpty">The eye moves itself to the longer side so it never covers the gap.</p>`,
+      sanitize:o => {const c = planeGapWallCfg(o); o.gapW = c.gapW; o.gapX = Math.round(c.gapX);},
+      drag:(o, x) => {o.gapX = Math.round(x); PLANE_TRAPS.planeGapWall.sanitize(o);}
+    },
+    planeSpikeTotem:{
+      label:"Spike Totem", help:"Plane mode: tall spiky totem, fly around it",
+      make:(x,y) => ({_id:newObjectId(), type:"planeSpikeTotem", x:Math.round(x), y, height:220, width:34}),
+      bounds:o => {const c = planeTotemCfg(o), r = planeTotemRect(c); return r;},
+      draw:drawPlaneTotem,
+      hit:(o, p) => rectsOverlap(p, planeTotemRect(planeTotemCfg(o))) ? planeDeath("The spike totem skewered the plane.", o, p) : null,
+      inspector:o => fieldHTML("Y", "y", o.y) + fieldHTML("X", "x", o.x ?? WORLD_W/2) + fieldHTML("Height", "height", o.height ?? 220) + fieldHTML("Width", "width", o.width ?? 34),
+      sanitize:o => {const c = planeTotemCfg(o); o.x = Math.round(c.x); o.height = c.height; o.width = c.width;},
+      drag:(o, x) => {o.x = Math.round(Math.max(24, Math.min(WORLD_W - 24, x)));}
+    },
+    planeDrifter:{
+      label:"Drifter", help:"Plane mode: spiky pod drifting left and right",
+      make:(x,y) => ({_id:newObjectId(), type:"planeDrifter", x:WORLD_W/2, y, height:170, width:38, travel:110, speed:.35, phase:0}),
+      bounds:o => {const c = planeDrifterCfg(o); return {x:c.cx - c.travel - c.width, y:c.y - c.height/2, w:(c.travel + c.width)*2, h:c.height};},
+      draw:drawPlaneDrifter,
+      hit:(o, p) => {const c = planeDrifterCfg(o); return rectsOverlap(p, planeDrifterRect(c, planeDrifterPos(c).x)) ? planeDeath("The drifter speared the plane.", o, p) : null;},
+      inspector:o => fieldHTML("Y", "y", o.y) + fieldHTML("Center X", "x", o.x ?? WORLD_W/2) + fieldHTML("Travel (each side)", "travel", o.travel ?? 110) + fieldHTML("Speed (sways/s)", "speed", o.speed ?? .35, "number", "step='0.05'") + fieldHTML("Height", "height", o.height ?? 170) + fieldHTML("Width", "width", o.width ?? 38) + fieldHTML("Phase", "phase", o.phase || 0, "number", "step='0.1'"),
+      sanitize:o => {const c = planeDrifterCfg(o); o.x = Math.round(c.cx); o.travel = c.travel; o.speed = c.speed; o.height = c.height; o.width = c.width;},
+      drag:(o, x) => {o.x = Math.round(x); PLANE_TRAPS.planeDrifter.sanitize(o);}
+    },
+    planeSerpent:{
+      label:"Serpent", help:"Plane mode: long spiky serpent swaying in an S",
+      make:(x,y) => ({_id:newObjectId(), type:"planeSerpent", x:Math.round(x), y, length:320, amp:34, speed:2.2, thick:15, phase:0}),
+      bounds:o => {const c = planeSerpentCfg(o); return {x:c.x - c.amp - c.thick*2, y:c.y - c.length/2 - c.thick, w:(c.amp + c.thick*2)*2, h:c.length + c.thick*3};},
+      draw:drawPlaneSerpent,
+      hit:(o, p) => {const c = planeSerpentCfg(o); for(const q of planeSerpentPoints(c)) if(circleRectCollide(q.x, q.y, q.r*.9 + 2, p)) return planeDeath("The serpent's spines shredded the plane.", o, p); return null;},
+      inspector:o => fieldHTML("Y", "y", o.y) + fieldHTML("X", "x", o.x ?? WORLD_W/2) + fieldHTML("Length", "length", o.length ?? 320) + fieldHTML("Sway Width", "amp", o.amp ?? 34) + fieldHTML("Sway Speed", "speed", o.speed ?? 2.2, "number", "step='0.1'") + fieldHTML("Thickness", "thick", o.thick ?? 15) + fieldHTML("Phase", "phase", o.phase || 0, "number", "step='0.1'"),
+      sanitize:o => {const c = planeSerpentCfg(o); o.x = Math.round(c.x); o.length = c.length; o.amp = c.amp; o.speed = c.speed; o.thick = c.thick;},
+      drag:(o, x) => {o.x = Math.round(Math.max(40, Math.min(WORLD_W - 40, x)));}
+    },
+    planeFolders:{
+      label:"Plane Folders", help:"ENTER folds you into a plane, EXIT unfolds you",
+      make:(x,y) => ({_id:newObjectId(), type:"planeFolders", y, mode:"enter", trigger:150, planeSpeed:135, steerSpeed:170, pull:70, launch:2.4}),
+      bounds:o => {const c = planeFoldersCfg(o); return {x:0, y:c.y - Math.max(40, c.trigger/2), w:WORLD_W, h:Math.max(80, c.trigger)};},
+      draw:drawPlaneFolders,
+      hit:() => null,
+      inspector:o => fieldHTML("Y", "y", o.y) + selectHTML("Mode", "mode", o.mode || "enter", ["enter","exit"]) + fieldHTML("Wake Distance", "trigger", o.trigger ?? 150) + fieldHTML("Plane Speed", "planeSpeed", o.planeSpeed ?? 135) + fieldHTML("Steer Speed", "steerSpeed", o.steerSpeed ?? 170) + fieldHTML("Slingshot Pull", "pull", o.pull ?? 70) + fieldHTML("Launch Power (x)", "launch", o.launch ?? 2.4, "number", "step='0.1'") + `<p class="inspEmpty">ENTER: they wake when you come close, fold the card into a paper plane, pull it back like a slingshot and let go. EXIT: they catch the plane and unfold it back into the card.</p>`,
+      sanitize:o => {const c = planeFoldersCfg(o); o.mode = c.mode; o.trigger = c.trigger; o.planeSpeed = c.planeSpeed; o.steerSpeed = c.steerSpeed; o.pull = c.pull; o.launch = c.launch;},
+      drag:() => {}
+    }
+  };
+  function isPlaneTrapType(type){return Object.prototype.hasOwnProperty.call(PLANE_TRAPS, String(type || ""));}
+  // Build every plane-trap sprite of the level before the run starts (into a throwaway 1x1
+  // context), so no trap pays its one-off sprite cost mid-run when it first scrolls into view.
+  let planePrewarmCanvas = null;
+  function planePrewarm(lvl=activeLevel()){
+    const list = (lvl?.obstacles || []).filter(o => o && isPlaneTrapType(o.type));
+    if(!list.length) return;
+    if(!planePrewarmCanvas){planePrewarmCanvas = document.createElement("canvas"); planePrewarmCanvas.width = planePrewarmCanvas.height = 1;}
+    const old = ctx;
+    ctx = planePrewarmCanvas.getContext("2d");
+    try{for(const o of list){try{PLANE_TRAPS[o.type].draw(o);}catch(_e){}}}
+    finally{ctx = old;}
+  }
 
   // ---- FLINGER_ART_V1: cut-cardstock drawing kit (fill, crescent shade, top rim light, paper
   // grain, dark outline). Every piece goes through flingerShape so they all read as one style.
@@ -17114,6 +17821,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     for(const o of lizarActiveObstacles(lvl)){
       if(o.type === "powerButton") continue;
       if(obstacleDisabledByPower(o)) continue;
+      if(isPlaneTrapType(o.type)){
+        const d = PLANE_TRAPS[o.type].hit(o, p, cur);
+        if(d) return startDeath(d.reason, d.type, d.impact, d.culprit);
+        continue;
+      }
       if(o.type === "modTrap"){
         const hit = modTrapCollisionResult(o, p, cur);
         if(hit.hit){
@@ -17442,14 +18154,15 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       updatePortalMonsterEffect(worldDt);
       const beforeRect = playerRect();
       const inputFrozenByMod = modPlayerFreezeTimer > 0;
-      if(planeMode.active) updatePlane(worldDt);
+      if(planeFoldFx.active) planeFoldStep(worldDt);
+      else if(planeMode.active) updatePlane(worldDt);
       else if(holding && !wireEffect.postReleaseLock && !inputFrozenByMod && player.shrinkTimer <= 0 && !voltGripEffect.active && !portalIsBusy()){
         const requestedGrowth = player.stretchSpeed * (wireEffect.stretchMult || 1) * dt;
         const upwardWirePull = Math.max(0, -(wireEffect.framePullDelta || 0));
         const safeGrowth = Math.max(0, requestedGrowth - upwardWirePull);
         player.h = Math.min(player.maxH, player.h + safeGrowth);
       }
-      if(player.shrinkTimer > 0 && !inputFrozenByMod && !planeMode.active){
+      if(player.shrinkTimer > 0 && !inputFrozenByMod && !planeMode.active && !planeFoldFx.active){
         const totalShrinkDuration = Math.max(.001, Number(player.shrinkTotalDuration) || player.shrinkDuration);
         player.shrinkTimer = Math.max(0, player.shrinkTimer - dt);
         const t = clamp01(1 - player.shrinkTimer / totalShrinkDuration);
@@ -17472,6 +18185,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       let hitSweep = sweptRect(beforeRect, currentRect);
       updatePowerButtons(currentRect, hitSweep);
       updateModTraps(worldDt, currentRect, hitSweep);
+      planeFoldersUpdate(playerRect());
       currentRect = playerRect();
       hitSweep = sweptRect(beforeRect, currentRect);
       if(!voltGripEffect.active) tryStartVoltGripHit(hitSweep);
@@ -17717,7 +18431,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     else if(o.type === "orbitSaw") o.phase = (Number(o.phase)||0) - delta * speed;
     else if(o.type === "sideSweeper") o.phase = (Number(o.phase)||0) - delta * speed * 3.8;
     else if(o.type === "pendulumCore") o.phase = (Number(o.phase)||0) - delta * speed;
-    else if(["beam","clamp","stillCrusher","portalMonster","voltGrips","prismPulse","twinStutterSaws","wireGrasper"].includes(o.type)) o.phase = (Number(o.phase)||0) - delta;
+    else if(["beam","clamp","stillCrusher","portalMonster","voltGrips","prismPulse","twinStutterSaws","wireGrasper","planeDrifter","planeSerpent"].includes(o.type)) o.phase = (Number(o.phase)||0) - delta;
     else if(o.type === "modTrap" || o.type === "nuclearApexCore" || o.type === "voidTrap" || o.type === "voidReaper") o.phase = (Number(o.phase)||0) - delta * (Number(o.speed)||1);
   }
   function syncPowerFreezeRuntime(o, pState, now=time){
@@ -22015,6 +22729,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   }
 
   function drawObstacleCore(o){
+    if(isPlaneTrapType(o.type)){PLANE_TRAPS[o.type].draw(o);return;}
     if(o.type === "modTrap"){drawModTrap(o);return;}
     if(o.type === "nuclearApexCore"){drawNuclearApexCore(o);return;}
     if(o.type === "voidTrap"){drawModTrap(o);return;}
@@ -23826,6 +24541,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     {id:"voidTrap", label:"Void Trap", icon:"voidTrap", help:"Pull, collapse, erase"},
     {id:"voidReaper", label:"Void Reaper", icon:"voidReaper", help:"Wakes, drags, and devours"},
     {id:"voidseamRift", label:"Voidseam", icon:"voidseamRift", help:"Captures into a glitch escape world"},
+    {id:"planeFolders", label:"Plane Folders", icon:"planeTrap", help:"ENTER folds you into a plane, EXIT unfolds you", plane:true},
+    {id:"planeWallSpikes", label:"Wall Spikes", icon:"planeTrap", help:"Plane mode: cardboard spikes on the walls", plane:true},
+    {id:"planeGapWall", label:"Spike Gate", icon:"planeTrap", help:"Plane mode: spiked wall with one gap and a watching eye", plane:true},
+    {id:"planeSpikeTotem", label:"Spike Totem", icon:"planeTrap", help:"Plane mode: tall spiky totem, fly around it", plane:true},
+    {id:"planeDrifter", label:"Drifter", icon:"planeTrap", help:"Plane mode: spiky pod drifting left and right", plane:true},
+    {id:"planeSerpent", label:"Serpent", icon:"planeTrap", help:"Plane mode: long spiky serpent swaying in an S", plane:true},
     {id:"powerButton", label:"Power Button", icon:"powerButton", help:"Red button links to traps"},
     {id:"ink", label:"Rising Ink", icon:"ink", help:"Level chase setting"}
   ];
@@ -25356,7 +26077,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ? TRAP_PACKS.filter(p => trapLibraryMatches({id:p.id,label:p.label,help:p.help}, "official")).map(trapLibraryPackButtonHTML).join("")
       : "";
     const visibleTools = TRAP_LIBRARY.filter(t => !(escapeEdit && (t.id === "voidseamRift" || t.id === "ink")));
-    const normalOfficialTools = visibleTools.filter(t => !trapLibraryIsBossItem(t) && trapLibraryMatches(t, "official"));
+    const normalOfficialTools = visibleTools.filter(t => !t.plane && !trapLibraryIsBossItem(t) && trapLibraryMatches(t, "official"));
+    const planeTools = visibleTools.filter(t => t.plane && trapLibraryMatches(t, "official"));
     const bossOfficialTools = visibleTools.filter(t => trapLibraryIsBossItem(t));
     const officialBossTools = [...bossOfficialTools, ...officialBundledBossLibraryTools()].filter(t => trapLibraryMatches(t, "boss"));
     const normalMods = [];
@@ -25372,7 +26094,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const mods = normalMods.map(m => trapPreviewButtonHTML({id:m.id,label:m.name,help:m.help || "Added by mod"}, "modTrap:" + m.id, "", {kind:"mod"})).join("");
     const showImporter = (trapLibraryFilter === "all" || trapLibraryFilter === "mod") && trapLibraryMatches({id:"import mod",label:"Import Mod",help:"Paste JS trap code"}, "mod");
     const importer = showImporter ? `<button class="trapTool modImportCard" data-tool="__importModCode" data-preview-kind="mod" data-preview-label="Import Mod" data-preview-help="Paste JS trap code" data-search="import mod paste js trap code modded"><div class="trapIcon"><span>+</span></div><b>Import Mod</b><small>Paste JS trap code</small></button>` : "";
-    const html = (official ? trapSectionHTML("NORMAL TRAPS","Official") + official : "") + (bosses ? trapSectionHTML("BOSS TRAPS","Heavy") + bosses : "") + (mods || importer ? trapSectionHTML("MODDED TRAPS","Imported only") + mods + importer : "");
+    const planeHTML = planeTools.map(t => trapPreviewButtonHTML(t, t.id)).join("");
+    const html = (official ? trapSectionHTML("NORMAL TRAPS","Official") + official : "") + (planeHTML ? trapSectionHTML("PLANE TRAPS","Paper plane mode") + planeHTML : "") + (bosses ? trapSectionHTML("BOSS TRAPS","Heavy") + bosses : "") + (mods || importer ? trapSectionHTML("MODDED TRAPS","Imported only") + mods + importer : "");
     trapLibraryGrid.innerHTML = html || trapLibraryEmptyHTML();
     updateTrapFilterUI();
     renderTrapQuickShelf();
@@ -25410,6 +26133,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     y = editorSnapValue(Math.max(70, Math.min((editorLevel.height || 1800)-120, y)));
     x = Math.max(24, Math.min(WORLD_W-24, x));
     if(String(type||"").startsWith("modTrap:")) return makeModTrap(String(type).slice(8), x, y);
+    if(isPlaneTrapType(type)) return PLANE_TRAPS[type].make(x, y);
     if(type === "nuclearApexCore"){
       const obj = {_id:newObjectId(), type:"nuclearApexCore", x:editorSnapValue(x), y:editorSnapValue(y), phase:0};
       Object.assign(obj, deepClone(BUILTIN_NUCLEAR_APEX_MOD.defaults || {}));
@@ -25485,10 +26209,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function trapLabel(o){
     if(!o) return "Map Settings";
     if(o.type === "modTrap") return customTrapModById(o.modId)?.name || o.modName || "Mod Trap";
+    if(isPlaneTrapType(o.type)) return PLANE_TRAPS[o.type].label;
     return ({slider:"Electric Link", beam:"Laser / Pulse Beam", scanner:"Scanner Guard", orbitSaw:"Orbit Saw", clamp:"Energy Gate", sideSweeper:"Blade Fan", pendulumCore:"Volt Core", wireGrasper:"Wire Grasper", voltGrips:"Volt Grips", portalMonster:"Portal Mouth", portalExit:"Portal Exit", stillCrusher:"Still Crusher", predictiveSniper:"Rail Sniper", coverBlock:"Cover Block", shockMine:"Shock Mine", prismPulse:"Prism Pulse", twinStutterSaws:"Twin Stutter Saws", nuclearApexCore:"Nuclear Apex", voidTrap:"Void Trap", voidReaper:"Void Reaper", voidseamRift:"Voidseam", plasma_core_real_lightning_final:"Plasma Core: Real Lightning", wire_titan_six_cord_awakening:"Wire Titan: Six-Cord Awakening", powerButton:"Power Button"})[o.type] || o.type;
   }
   function editorTrapBounds(o){
     if(!o) return null;
+    if(isPlaneTrapType(o.type)) return PLANE_TRAPS[o.type].bounds(o);
     if(o.type === "slider") {const minX = Math.min(o.x1,o.x2) - (o.len||80)/2 - 18; const maxX = Math.max(o.x1,o.x2) + (o.len||80)/2 + 18; return {x:minX,y:o.y-(o.thick||18)*2,w:maxX-minX,h:(o.thick||18)*4};}
     if(o.type === "beam") return {x:o.x ?? 0,y:o.y-(o.thick||12)*2,w:o.w ?? WORLD_W,h:(o.thick||12)*4};
     if(o.type === "scanner") return {x:0,y:o.y-(o.h||74)/2,w:WORLD_W,h:o.h||74};
@@ -25598,7 +26324,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const y = snapped.y;
     const x = snapped.x;
     o.y = y;
-    if(o.type === "slider"){
+    if(isPlaneTrapType(o.type)){PLANE_TRAPS[o.type].drag(o, x, y);}
+    else if(o.type === "slider"){
       const span = Math.max(10, Math.abs(o.x2-o.x1));
       let c = Math.max(span/2+20, Math.min(WORLD_W-span/2-20, x));
       o.x1 = Math.round(c - span/2); o.x2 = Math.round(c + span/2);
@@ -26239,6 +26966,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     else if(o.type === "stillCrusher") html = fieldHTML("Y", "y", o.y) + fieldHTML("Height", "h", o.h || 118) + fieldHTML("Safe Gap", "safeGap", o.safeGap || 58) + fieldHTML("Open Gap", "openGap", o.openGap || 178) + fieldHTML("Open Time", "open", o.open || 3, "number", "step='0.05'") + fieldHTML("Hold Time", "hold", o.hold || 3, "number", "step='0.05'") + fieldHTML("Close Time", "close", o.close || .45, "number", "step='0.05'") + fieldHTML("Sensitivity", "sensitivity", o.sensitivity || 2, "number", "step='0.5'") + fieldHTML("Phase", "phase", o.phase || 0, "number", "step='0.1'");
     else if(o.type === "coverBlock") html = fieldHTML("Y", "y", o.y) + fieldHTML("X", "x", o.x ?? 145) + fieldHTML("Width", "w", o.w || 88) + fieldHTML("Height", "h", o.h || 120);
     else if(o.type === "powerButton") html = fieldHTML("Name", "name", powerButtonName(o), "text") + fieldHTML("Y", "y", o.y) + fieldHTML("X", "x", o.x ?? WORLD_W/2) + fieldHTML("Width", "w", o.w || 54) + fieldHTML("Height", "h", o.h || 54) + selectHTML("Mode", "mode", o.mode || "oneShot", ["oneShot","hold"]) + `<p class="inspEmpty">Red until touched. Green when active. Use trap Power Links: off / hide / enable.</p>`;
+    else if(isPlaneTrapType(o.type)) html = PLANE_TRAPS[o.type].inspector(o);
     else if(o.type === "modTrap") html = renderModTrapInspector(o);
     else if(o.type === "nuclearApexCore") html = renderModTrapInspector(o);
     else if(o.type === "voidTrap") html = renderModTrapInspector(o);
@@ -26329,6 +27057,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       o.x = Math.max(0, Math.min(WORLD_W, Number(o.x)||WORLD_W/2));
     }
+    if(isPlaneTrapType(o.type)) PLANE_TRAPS[o.type].sanitize(o);
     if(o.type === "beam"){o.w = Math.max(20, Math.min(WORLD_W, Number(o.w)||WORLD_W)); o.x = Math.max(0, Math.min(WORLD_W-o.w, Number(o.x)||0));}
     if(o.type === "slider" && o.x2 < o.x1){const t=o.x1;o.x1=o.x2;o.x2=t;}
     if(o.type === "pendulumCore"){o.anchorX = Math.max(30, Math.min(WORLD_W-30, Number(o.anchorX ?? o.x ?? WORLD_W/2)||WORLD_W/2)); o.len = Math.max(40, Math.min(260, Number(o.len)||120)); o.r = Math.max(10, Math.min(54, Number(o.r)||25)); o.swing = Math.max(.08, Math.min(1.22, Number(o.swing)||.72)); o.speed = Math.max(.08, Math.min(4.5, Number(o.speed)||1.18)); o.chaos = Math.max(0, Math.min(.55, Number(o.chaos)||0));}
