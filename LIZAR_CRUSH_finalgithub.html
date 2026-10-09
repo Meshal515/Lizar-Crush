@@ -16617,6 +16617,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   // forgiven. Timings get tighter as you go and are re-rolled every attempt.
   // States: intro → move ⇄ warn → freeze → move … ; caught (execution) ; won.
   // =====================================================================================
+  // timer numerals: Cinzel Bold (SIL Open Font License 1.1, (c) The Cinzel Project Authors), subset to digits + "SECONDS"
+  try{
+    const f = new FontFace("EyeCinzel", "url(data:font/woff2;base64,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)", {weight:"700"});
+    f.load().then(ff => {try{document.fonts.add(ff);}catch(_e){}}).catch(() => {});
+  }catch(_e){}
   const EYE_IMG = {};
   function eyeBossImg(name){
     let im = EYE_IMG[name];
@@ -16987,18 +16992,39 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       try{ctx.letterSpacing = `${Math.round(fs*.22)}px`;}catch(_e){}
       const label = icon ? icon + "  " + word : word;
       ctx.globalAlpha = B*ent*blink;
-      ctx.lineJoin = "round"; ctx.strokeStyle = rgbA(col, .25); ctx.lineWidth = fs*.45; ctx.strokeText(label, 0, 0);
-      ctx.strokeStyle = rgbA(col, .45); ctx.lineWidth = fs*.16; ctx.strokeText(label, 0, 0);
+      ctx.lineJoin = "round"; ctx.strokeStyle = rgbA(col, .9); ctx.lineWidth = Math.max(1, fs*.08); ctx.strokeText(label, 0, 0);
       ctx.fillStyle = ph === "intro" ? "rgba(235,232,226,.9)" : "#fbfaf7"; ctx.fillText(label, 0, 0);
       try{ctx.letterSpacing = "0px";}catch(_e){}
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
-    // time left
+    // time left: engraved numerals on the horizon, right under the eye
     if(eyeBoss.wonT < 0 && ph !== "intro"){
-      const left = Math.max(0, c.timeLimit - (time - eyeBoss.t0 - 1.7));
-      ctx.globalAlpha = B*.85; ctx.fillStyle = left < 10 ? "#ff4a4a" : "rgba(235,232,226,.85)";
-      ctx.font = `800 ${Math.round(12*s)}px Inter, Arial`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(left.toFixed(1) + "s", W/2, H*.14 + 26*s);
+      const left = Math.max(0, c.timeLimit - (time - eyeBoss.t0 - 1.7)), n = Math.ceil(left - 1e-6);
+      const R = W*.44, fs = Math.round(Math.min(W*.13, 40*s)), y = H*.3 + R + fs*.62;
+      const show = planeSm((time - eyeBoss.t0 - 1.7)/.6)*B;
+      const low = n <= 10, tick = low ? 1 - planeSm((Math.ceil(left) - left)/.3) : 0;   // a small beat on each of the last ten
+      const ink = low ? "#ff3b3f" : "#f1ece3";
+      ctx.globalAlpha = show;
+      ctx.translate(W/2, y); ctx.scale(1 + .06*tick*(1 - (n === 0 ? 1 : 0)), 1 + .06*tick*(1 - (n === 0 ? 1 : 0)));
+      ctx.font = `700 ${fs}px EyeCinzel, Georgia, "Times New Roman", serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      try{ctx.letterSpacing = `${Math.round(fs*.06)}px`;}catch(_e){}
+      const label = String(n), tw = ctx.measureText(label).width;
+      ctx.fillStyle = ink; ctx.fillText(label, 0, 0);
+      try{ctx.letterSpacing = "0px";}catch(_e){}
+      // hairline horizon either side, thinning out like an engraved rule, with a small diamond at each end
+      const gap = tw/2 + fs*.42, len = W*.26;
+      for(const sg of [-1, 1]){
+        const lg = ctx.createLinearGradient(sg*gap, 0, sg*(gap + len), 0);
+        lg.addColorStop(0, low ? "rgba(255,59,63,.9)" : "rgba(241,236,227,.85)"); lg.addColorStop(1, "rgba(241,236,227,0)");
+        ctx.fillStyle = lg; ctx.fillRect(Math.min(sg*gap, sg*(gap + len)), -Math.max(.6, .7*s), len, Math.max(1.2, 1.4*s));
+        const dx = sg*(gap - fs*.16), dd = fs*.09;
+        ctx.fillStyle = ink; ctx.beginPath(); ctx.moveTo(dx, -dd); ctx.lineTo(dx + dd, 0); ctx.lineTo(dx, dd); ctx.lineTo(dx - dd, 0); ctx.closePath(); ctx.fill();
+      }
+      ctx.font = `700 ${Math.round(fs*.24)}px EyeCinzel, Georgia, serif`;
+      try{ctx.letterSpacing = `${Math.round(fs*.14)}px`;}catch(_e){}
+      ctx.globalAlpha = show*.75; ctx.fillStyle = ink; ctx.fillText(n === 1 ? "SECOND" : "SECONDS", 0, fs*.78);
+      try{ctx.letterSpacing = "0px";}catch(_e){}
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     ctx.restore();
   }
