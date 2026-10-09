@@ -16521,26 +16521,33 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const stepped = twinStutterStepPos(raw, steps, burstPower);
     return {pos:1 - stepped, rawPos:1 - raw, moving:true, dir:-1, state:"moveLeft", charge:1, surge:1 - Math.abs((raw*steps)%1 - .18), cycle};
   }
+  // TWIN_SAWS_CLASH_V1 (owner-requested behaviour change): the two saws no longer pass through each
+  // other. Each starts at its own end, winds back a touch, rushes at the other (accelerating),
+  // they CLASH blade to blade in the middle, hold for an instant, then bounce back and roll to a
+  // smooth stop at their ends. All motion is continuous (no stutter steps). The hit circles follow
+  // exactly these positions. (stutterSteps / burstPower are kept in saved levels but unused.)
   function twinStutterSawsState(o, now=time){
     const c = twinStutterSawsConfig(o);
-    const dist = Math.max(48, c.x2 - c.x1);
-    const moveTime = dist / c.speed;
-    const p1 = twinStutterProgress(now + c.phase, moveTime, c.pauseTime, c.stutterSteps, c.burstPower);
-    const p2 = twinStutterProgress(now + c.phase + p1.cycle * .5, moveTime, c.pauseTime, c.stutterSteps, c.burstPower);
-    const saws = [p1, p2].map((p, i)=>({
-      index:i+1,
-      x:c.x1 + (c.x2 - c.x1) * p.pos,
-      y:c.y,
-      prevX:c.x1 + (c.x2 - c.x1) * clamp01(p.pos - p.dir * .055),
-      farX:c.x1 + (c.x2 - c.x1) * clamp01(p.pos - p.dir * .105),
-      moving:p.moving,
-      dir:p.dir,
-      charge:p.charge || 0,
-      surge:Math.max(0, Math.min(1, p.surge || 0)),
-      state:p.state,
-      rot:(now*10.4*(i===0?1:-1)) + p.pos*Math.PI*3.4
-    }));
-    return {c, moveTime, cycle:p1.cycle, saws};
+    const mid = (c.x1 + c.x2)/2;
+    const contactA = Math.max(c.x1 + 8, mid - c.sawR), contactB = Math.min(c.x2 - 8, mid + c.sawR);
+    const dist = Math.max(8, contactA - c.x1);
+    const moveTime = Math.max(.12, dist/c.speed);
+    const hold = .07, back = moveTime*1.15;
+    const cycle = c.pauseTime + moveTime + hold + back;
+    let k = (((now + c.phase) % cycle) + cycle) % cycle;
+    let f, phase, u;
+    if(k < c.pauseTime){u = k/c.pauseTime; phase = "pause"; f = -.06*(u*u*(3 - 2*u));}
+    else if((k -= c.pauseTime) < moveTime){u = k/moveTime; phase = "rush"; f = -.06 + 1.06*Math.pow(u, 2.2);}
+    else if((k -= moveTime) < hold){u = k/hold; phase = "clash"; f = 1;}
+    else {k -= hold; u = clamp01(k/back); phase = "recoil"; f = 1 - easeOutCubic(u);}
+    const xA = c.x1 + (contactA - c.x1)*f, xB = c.x2 - (c.x2 - contactB)*f;
+    const moving = phase === "rush" || phase === "recoil";
+    const saws = [
+      {index:1, x:xA, y:c.y, dir:phase === "recoil" ? -1 : 1},
+      {index:2, x:xB, y:c.y, dir:phase === "recoil" ? 1 : -1}
+    ].map(sw => ({...sw, prevX:sw.x, farX:sw.x, moving, charge:phase === "pause" ? u : 1, surge:phase === "rush" ? u : 0,
+      state:phase, phaseU:u, rot:(sw.x - (sw.index === 1 ? c.x1 : c.x2))/c.sawR}));   // rolling: angle = distance / radius
+    return {c, moveTime, cycle, saws, phase, phaseU:u, mid, f};
   }
   function twinStutterSawsBounds(o){
     const c = twinStutterSawsConfig(o);
@@ -21434,119 +21441,217 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.restore();
   }
 
+  // TWIN_SAWS_FACES_V1: Sharrar (angry, left) and Ra'oush (scared, right): the saws themselves are the
+  // creatures. The toothed blade (= the hit circle) rolls for real (angle = distance / radius); the
+  // face sits on a plate in its middle that stays upright. Original creature family style (theme
+  // colour, soft gloss); metal sparks are hot.
+  //   pause   — Sharrar revs his blade in place, glaring, sparks spraying behind; Ra'oush shivers
+  //   rush    — they roll at each other: Sharrar grits his teeth, Ra'oush screams
+  //   clash   — blade on blade: a white hit frame, a fan of sparks, both squash
+  //   recoil  — they roll back: Sharrar fumes, Ra'oush sees stars
+  //   kill    — Sharrar laughs, Ra'oush squeezes his eyes shut;  passed — Sharrar fumes, Ra'oush calms
   function drawTwinStutterSaws(o){
-    const st = twinStutterSawsState(o, state === "editor" ? time*.8 : time);
+    const editorMode = state === "editor";
+    const st = twinStutterSawsState(o, editorMode ? time*.8 : time);
     const c = st.c;
-    const left = worldToScreen(c.x1, c.y);
-    const right = worldToScreen(c.x2, c.y);
+    const left = worldToScreen(c.x1, c.y), right = worldToScreen(c.x2, c.y);
     const s = left.s;
-    const main = trapMain();
-    const accent = trapAccent();
+    const main = trapMain(), dark = paperIsDark(main);
+    const H = TRAP_SPARK_PALETTES.hot;
+    const sm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
+    const fx = editorMode ? null : prismSmokeFor(o);
+    if(fx) prismFxBeginFrame(o);
+    const dt = fx ? (fx.dt || 0) : 0;
     const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
-    const drawSawDisc = (x, y, r, rot, alpha=1, moving=false, label=null, charge=0) => {
-      const p = worldToScreen(x,y);
-      const rr = r * p.s;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.translate(p.x, p.y);
-      ctx.rotate(rot);
-      ctx.fillStyle = "rgba(0,0,0,.16)";
-      ctx.beginPath();ctx.arc(0,0,rr*1.20,0,Math.PI*2);ctx.fill();
-      if(moving || charge > .72){
-        ctx.strokeStyle = rgbaHex(accent, moving ? .30 : .16 + charge*.22);
-        ctx.lineWidth = Math.max(1, rr*(moving ? .20 : .13));
-        ctx.setLineDash(moving ? [] : [rr*.25, rr*.18]);
-        ctx.beginPath();ctx.arc(0,0,rr*(moving ? 1.74 : 1.48 + charge*.24),0,Math.PI*2);ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      ctx.fillStyle = main;
-      ctx.beginPath();ctx.arc(0,0,rr,0,Math.PI*2);ctx.fill();
-      for(let i=0;i<12;i++){
-        ctx.save();
-        ctx.rotate(i*Math.PI/6);
-        ctx.beginPath();
-        ctx.moveTo(rr*.22,-rr*.17);
-        ctx.lineTo(rr*1.23,0);
-        ctx.lineTo(rr*.22,rr*.17);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-      }
-      ctx.strokeStyle = rgbaHex(accent,.30);
-      ctx.lineWidth = Math.max(1.2, rr*.10);
-      ctx.beginPath();ctx.arc(0,0,rr*.58,0,Math.PI*2);ctx.stroke();
-      ctx.fillStyle = accent;
-      ctx.beginPath();ctx.arc(0,0,Math.max(2,rr*.18),0,Math.PI*2);ctx.fill();
-      if(charge > .82 && !moving){
-        ctx.rotate(-rot);
-        ctx.strokeStyle = rgbaHex(accent,.32);
-        ctx.lineWidth = Math.max(1, rr*.065);
-        for(let i=0;i<4;i++){
-          const a = time*10 + i*Math.PI/2;
-          ctx.beginPath();
-          ctx.moveTo(Math.cos(a)*rr*1.35, Math.sin(a)*rr*1.35);
-          ctx.lineTo(Math.cos(a+.18)*rr*1.72, Math.sin(a+.18)*rr*1.72);
-          ctx.stroke();
-        }
-        ctx.rotate(rot);
-      }
-      if(label){ctx.rotate(-rot);ctx.fillStyle="#fff";ctx.font=`${Math.max(8,10*p.s)}px Inter, sans-serif`;ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(label, 0, -rr*1.78);}
-      ctx.restore();
-    };
-    const drawTrail = (saw) => {
-      if(!saw.moving) return;
-      const p0 = worldToScreen(saw.x, saw.y);
-      const p1 = worldToScreen(saw.prevX, saw.y);
-      const p2 = worldToScreen(saw.farX, saw.y);
-      ctx.save();
-      ctx.lineCap = "round";
-      ctx.strokeStyle = rgbaHex(accent, heavy ? .24 : .15);
-      ctx.lineWidth = Math.max(2, c.sawR*p0.s*.72);
-      ctx.beginPath();ctx.moveTo(p2.x,p2.y);ctx.lineTo(p1.x,p1.y);ctx.lineTo(p0.x,p0.y);ctx.stroke();
-      ctx.strokeStyle = "rgba(255,255,255,.22)";
-      ctx.lineWidth = Math.max(1, c.sawR*p0.s*.24);
-      ctx.beginPath();ctx.moveTo(p1.x,p1.y);ctx.lineTo(p0.x,p0.y);ctx.stroke();
-      ctx.restore();
-    };
-
-    ctx.save();
-    // Rail preview / editor guide
-    ctx.strokeStyle = "rgba(0,0,0,.16)";
-    ctx.lineWidth = Math.max(2, 3*s);
-    ctx.lineCap = "round";
-    ctx.beginPath();ctx.moveTo(left.x, left.y);ctx.lineTo(right.x, right.y);ctx.stroke();
-    ctx.setLineDash([8*s,8*s]);
-    ctx.strokeStyle = rgbaHex(accent,.26);
-    ctx.lineWidth = Math.max(1,1.5*s);
-    ctx.beginPath();ctx.moveTo(left.x, left.y);ctx.lineTo(right.x, right.y);ctx.stroke();
-    ctx.setLineDash([]);
-    for(const end of [left,right]){
-      ctx.fillStyle = main;ctx.beginPath();ctx.arc(end.x,end.y,5*s,0,Math.PI*2);ctx.fill();
-      ctx.strokeStyle = rgbaHex(accent,.28);ctx.lineWidth = Math.max(1,1.2*s);ctx.beginPath();ctx.arc(end.x,end.y,8*s,0,Math.PI*2);ctx.stroke();
+    const dying = state === "dying" && deathCulprit && (deathCulprit === o || (deathCulprit._id && deathCulprit._id === o._id));
+    const passed = !editorMode && !dying && (Number(player.baseY) || 0) < c.y - c.sawR - 60;
+    let passK = 0;
+    if(fx){fx.passK = (fx.passK || 0) + ((passed ? 1 : 0) - (fx.passK || 0))*(1 - Math.exp(-dt*3)); passK = fx.passK;}
+    // clash events (for the sparks burst, once per clash)
+    let clashAge = 9;
+    if(fx){
+      if(st.phase === "clash" && fx.lastPhase !== "clash"){fx.clashAt = time; if(heavy){const mid = st.mid; trapSparkBurst(o, mid, c.y - c.sawR*.2, 22, "hot", 1.1, 0, -.4);}}
+      fx.lastPhase = st.phase;
+      clashAge = fx.clashAt == null ? 9 : Math.max(0, time - fx.clashAt);
     }
-    // aggressive charge glow at stops
-    const maxCharge = Math.max(...st.saws.map(saw => saw.moving ? 0 : saw.charge));
-    ctx.fillStyle = rgbaHex(accent,.04 + maxCharge*.10);
-    ctx.beginPath();ctx.arc(left.x,left.y,(c.sawR+12+maxCharge*8)*s,0,Math.PI*2);ctx.fill();
-    ctx.beginPath();ctx.arc(right.x,right.y,(c.sawR+12+maxCharge*8)*s,0,Math.PI*2);ctx.fill();
+    const gloss = (path, fill, R) => {
+      path(); ctx.fillStyle = fill; ctx.fill();
+      ctx.save(); path(); ctx.clip();
+      const g = ctx.createRadialGradient(-R*.35, -R*.45, R*.1, 0, 0, R*1.2);
+      g.addColorStop(0, `rgba(255,255,255,${dark ? .22 : .35})`); g.addColorStop(.6, "rgba(255,255,255,0)"); g.addColorStop(1, `rgba(0,0,0,${dark ? .35 : .16})`);
+      ctx.fillStyle = g; ctx.fillRect(-R*3, -R*3, R*6, R*6);
+      ctx.restore();
+    };
+    // ---- the track they ride on ----
+    ctx.save();
+    ctx.lineCap = "round";
+    const railY = left.y + c.sawR*s;
+    ctx.strokeStyle = rgbaHex(paperShadeHex(main, -.3), .5); ctx.lineWidth = Math.max(2, 3*s);
+    ctx.beginPath(); ctx.moveTo(left.x - c.sawR*s, railY); ctx.lineTo(right.x + c.sawR*s, railY); ctx.stroke();
+    for(const e of [left.x - c.sawR*s, right.x + c.sawR*s]){
+      ctx.fillStyle = main; ctx.beginPath(); roundRect(ctx, e - 3*s, railY - 9*s, 6*s, 12*s, 3*s); ctx.fill();
+    }
     ctx.restore();
 
-    for(const saw of st.saws) drawTrail(saw);
     for(const saw of st.saws){
-      const alpha = state === "editor" ? .94 : 1;
-      drawSawDisc(saw.x, saw.y, c.sawR, saw.rot, alpha, saw.moving, state === "editor" ? String(saw.index) : null, saw.charge);
-    }
-
-    if(state === "editor") {
-      const mid = worldToScreen((c.x1+c.x2)/2, c.y);
+      const angry = saw.index === 1;
+      const facing = angry ? 1 : -1;                             // toward the other saw
+      const p = worldToScreen(saw.x, saw.y);
+      const R = c.sawR*s;
+      const u = st.phaseU;
+      // ---- pose ----
+      let lean = 0, squash = 0, eyeOpen = 1, squint = 0, slant = 0, pupil = .45, mouth = .2, grin = 0, fist = 0, stars = 0, cover = 0, rev = 0, tremble = 0, laugh = 0;
+      if(st.phase === "pause"){
+        if(angry){lean = .18 + .12*u; slant = .55; squint = .25; grin = .6; rev = 1;}
+        else {lean = -.15; eyeOpen = 1; pupil = .25; tremble = 1; mouth = .35;}
+      } else if(st.phase === "rush"){
+        if(angry){lean = .3; slant = .6; squint = .35; grin = 1; mouth = .5;}
+        else {lean = -.25; pupil = .2; mouth = .7 + .3*u; tremble = .6;}
+      } else if(st.phase === "clash"){
+        squash = .2; if(angry){slant = .7; squint = .6; grin = 1; mouth = .6;} else {eyeOpen = .05; squint = .9; mouth = .5;}
+      } else {
+        const back = 1 - u;
+        if(angry){lean = .1; slant = .6; fist = sm(u/.3)*(1 - sm((u - .8)/.2)); mouth = .3;}
+        else {lean = -.1; stars = back; eyeOpen = .6; squint = .3; mouth = .25;}
+      }
+      if(dying){
+        if(angry){laugh = Math.abs(Math.sin(deathTimer*16)); slant = .3; grin = 1; mouth = .5 + .4*laugh; lean = .05;}
+        else {cover = 1; mouth = .3; lean = -.2;}
+      }
+      if(passK > .01){
+        if(angry){slant += (.8 - slant)*passK; fist = Math.max(fist, passK*.8);}
+        else {tremble *= 1 - passK; pupil += (.5 - pupil)*passK; mouth += (.15 - mouth)*passK;}
+      }
+      if(fx){
+        const g = fx["r" + saw.index] || (fx["r" + saw.index] = {});
+        const fresh = !g.ready || dt > .2;
+        const f = (k, v, rate) => {if(fresh || !(k in g)){g[k] = v; return v;} g[k] += (v - g[k])*(1 - Math.exp(-dt*rate)); return g[k];};
+        lean = f("lean", lean, 10); squash = f("sq", squash, 22); eyeOpen = f("eo", eyeOpen, 18); squint = f("si", squint, 14); slant = f("sl", slant, 10);
+        pupil = f("pu", pupil, 10); mouth = f("mo", mouth, 16); grin = f("gr", grin, 10); fist = f("fi", fist, 10); stars = f("st", stars, 6); cover = f("co", cover, 10);
+        tremble = f("tr", tremble, 8);
+        g.ready = true;
+      }
+      const shake = tremble*(Math.sin(time*57 + saw.index) + .5*Math.sin(time*83))*.55*s;   // smooth high-frequency shiver
+      // blade spin: rolling, plus a rev spin while Sharrar guns it in place
+      if(fx){fx["spin" + saw.index] = (fx["spin" + saw.index] || 0) + (rev ? 22*dt : 0);}
+      const spin = saw.rot*facing + (fx ? fx["spin" + saw.index] || 0 : 0);
+      // ---- the blade (= the wheel, = the hit circle) ----
       ctx.save();
-      ctx.fillStyle = "rgba(255,255,255,.92)";
-      roundRect(ctx, mid.x-91*s, mid.y-42*s, 182*s, 21*s, 8*s); ctx.fill();
-      ctx.fillStyle = "#111";
-      ctx.font = `${Math.max(8,10*s)}px Inter, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillText("charge → burst → freeze", mid.x, mid.y-28*s);
+      ctx.translate(p.x + shake, p.y);
+      ctx.save(); ctx.rotate(spin);
+      const teeth = 14;
+      gloss(() => {
+        ctx.beginPath();
+        for(let k=0;k<teeth;k++){
+          const a0 = k/teeth*Math.PI*2, a1 = (k + .55)/teeth*Math.PI*2, a2 = (k + 1)/teeth*Math.PI*2;
+          ctx.lineTo(Math.cos(a0)*R*.86, Math.sin(a0)*R*.86);
+          ctx.lineTo(Math.cos(a1)*R*1.06, Math.sin(a1)*R*1.06);
+          ctx.lineTo(Math.cos(a2)*R*.86, Math.sin(a2)*R*.86);
+        }
+        ctx.closePath();
+      }, paperShade(main, -.18), R);
+      ctx.strokeStyle = rgbaHex(paperShadeHex(main, .55), .55); ctx.lineWidth = Math.max(1, 1.4*s);
+      ctx.beginPath(); ctx.arc(0, 0, R*.62, 0, Math.PI*2); ctx.stroke();
+      // spokes, so you can see it roll
+      ctx.strokeStyle = rgbaHex(paperShadeHex(main, -.55), .7); ctx.lineWidth = Math.max(1.2, 2*s);
+      for(let k=0;k<3;k++){const a = k*Math.PI*2/3; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a)*R*.6, Math.sin(a)*R*.6); ctx.stroke();}
       ctx.restore();
+      // motion blur arcs on the blade while it moves fast
+      const speedK = st.phase === "rush" ? u : (st.phase === "recoil" ? 1 - u : (rev ? 1 : 0));
+      if(speedK > .2){
+        ctx.strokeStyle = rgbaHex(paperShadeHex(main, .6), .35*speedK); ctx.lineWidth = Math.max(1, 1.6*s);
+        for(let k=0;k<3;k++){const a0 = spin*1.3 + k*2.1; ctx.beginPath(); ctx.arc(0, 0, R*.92, a0, a0 + .9); ctx.stroke();}
+      }
+
+      // ---- the face, on a plate in the middle of the blade (it does not spin with the teeth) ----
+      const bodyR = R*.66, seatY = 0;
+      ctx.save();
+      ctx.rotate(lean*facing*.5);
+      ctx.scale(1 + squash, 1 - squash);
+      gloss(() => {ctx.beginPath(); ctx.arc(0, 0, bodyR, 0, Math.PI*2);}, main, bodyR);
+      const ex = bodyR*.06*facing, ey = -bodyR*.12;
+      const look = {x:facing*.7, y:0};
+      if(laugh > 0){
+        ctx.strokeStyle = eyeSkin().color; ctx.lineWidth = Math.max(1.4, 2*s);
+        for(const sd of [-1, 1]){ctx.beginPath(); ctx.arc(ex + sd*bodyR*.32, ey + bodyR*.05, bodyR*.18, Math.PI*1.1, Math.PI*1.9); ctx.stroke();}
+      } else if(cover > .5){
+        // Ra'oush squeezes his eyes shut when you get cut
+        ctx.strokeStyle = paperShade(main, -.6); ctx.lineWidth = Math.max(1.4, 2*s);
+        for(const sd of [-1, 1]){ctx.beginPath(); ctx.moveTo(ex + sd*bodyR*.18, ey); ctx.lineTo(ex + sd*bodyR*.42, ey - bodyR*.08); ctx.moveTo(ex + sd*bodyR*.18, ey); ctx.lineTo(ex + sd*bodyR*.42, ey + bodyR*.08); ctx.stroke();}
+      } else {
+        for(const sd of [-1, 1]){
+          drawGuardianEye(ex + sd*bodyR*.32, ey, bodyR*(angry ? .22 : .27), bodyR*(angry ? .26 : .34), s, main, Math.max(.05, eyeOpen), squint, (sd < 0 ? 1 : -1)*slant*facing, pupil, look);
+        }
+      }
+      ctx.strokeStyle = paperShade(main, -.6); ctx.lineCap = "round";
+      if(angry){
+        // one hard brow, down in the middle
+        ctx.lineWidth = Math.max(1.6, 2.6*s);
+        ctx.beginPath(); ctx.moveTo(ex - bodyR*.62, ey - bodyR*.44); ctx.lineTo(ex, ey - bodyR*(.24 - .1*slant)); ctx.lineTo(ex + bodyR*.62, ey - bodyR*.44); ctx.stroke();
+      } else {
+        // worried brows: inner ends raised
+        ctx.lineWidth = Math.max(1.2, 1.8*s);
+        for(const sd of [-1, 1]){ctx.beginPath(); ctx.moveTo(ex + sd*bodyR*.14, ey - bodyR*.7); ctx.lineTo(ex + sd*bodyR*.5, ey - bodyR*.52); ctx.stroke();}
+      }
+      // mouth
+      const mx = ex, my = bodyR*.42;
+      if(angry && grin > .3){
+        ctx.fillStyle = "#1a0510"; ctx.beginPath(); roundRect(ctx, mx - bodyR*.44, my - bodyR*.12, bodyR*.88, bodyR*(.2 + .22*mouth), bodyR*.06); ctx.fill();
+        ctx.fillStyle = "#f6f3ea";
+        for(let k=0;k<5;k++){ctx.fillRect(mx - bodyR*.4 + k*bodyR*.17, my - bodyR*.12, bodyR*.1, bodyR*(.1 + .11*mouth));}
+      } else {
+        const wob = !angry ? Math.sin(time*30)*bodyR*.03*tremble : 0;
+        ctx.fillStyle = "#1a0510"; ctx.beginPath(); ctx.ellipse(mx + wob, my, bodyR*(.12 + .1*mouth), bodyR*(.06 + .2*mouth), 0, 0, Math.PI*2); ctx.fill();
+      }
+      ctx.restore();
+      // Sharrar fumes (steam puffs off the top) when he is thrown back or you get past
+      if(angry && fist > .05){
+        for(let k=0;k<2;k++){
+          const q = (time*1.8 + k*.5) % 1;
+          ctx.fillStyle = rgbaHex(paperShadeHex(main, .6), .6*fist*(1 - q));
+          ctx.beginPath(); ctx.arc((k ? 1 : -1)*R*.45, -R*1.05 - q*R*.7, (1.5 + 2.5*q)*s, 0, Math.PI*2); ctx.fill();
+        }
+      }
+      // dizzy stars over Ra'oush after the clash
+      if(stars > .05){
+        for(let k=0;k<3;k++){
+          const a = time*5 + k*Math.PI*2/3, sx = Math.cos(a)*bodyR*.9, sy = -R*1.35 + Math.sin(a)*bodyR*.25;
+          ctx.fillStyle = rgbaHex(H[1], stars); ctx.beginPath();
+          for(let j=0;j<10;j++){const rr = j % 2 ? bodyR*.08 : bodyR*.2, aa = j*Math.PI/5; j ? ctx.lineTo(sx + Math.cos(aa)*rr, sy + Math.sin(aa)*rr) : ctx.moveTo(sx + Math.cos(aa)*rr, sy + Math.sin(aa)*rr);}
+          ctx.closePath(); ctx.fill();
+        }
+      }
+      // sweat flying off Ra'oush
+      if(!angry && tremble > .05){
+        for(let k=0;k<2;k++){
+          const q = (time*1.6 + k*.5) % 1, sx = -facing*R*(.9 + .5*q) + (k ? bodyR*.3 : 0), sy = -R*.7 + q*bodyR*.5;
+          ctx.globalAlpha = (1 - q)*tremble; ctx.fillStyle = "#cfefff";
+          ctx.beginPath(); ctx.ellipse(sx, sy, 1.6*s, 2.4*s, 0, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
+        }
+      }
+      ctx.restore();
+      // Sharrar's rev sparks spraying behind his wheel
+      if(fx && angry && rev && heavy && Math.random() < dt*30) trapSparkCone(o, saw.x - facing*c.sawR*.6, saw.y + c.sawR*.9, 2, "hot", facing > 0 ? Math.PI*1.15 : -Math.PI*.15, .4, 120, 260, .2, .45);
+    }
+    // ---- the clash: a white hit frame and a hot flash between the blades ----
+    if(clashAge < .22){
+      const mp = worldToScreen(st.mid, c.y);
+      const k = clashAge/.22;
+      if(clashAge < .04){ctx.fillStyle = rgbaHex(H[0], 1 - clashAge/.04); ctx.beginPath(); ctx.arc(mp.x, mp.y, c.sawR*s*1.5, 0, Math.PI*2); ctx.fill();}
+      ctx.strokeStyle = rgbaHex(H[2], .9*(1 - k)); ctx.lineWidth = Math.max(1, 2.4*s*(1 - k));
+      ctx.beginPath(); ctx.arc(mp.x, mp.y, c.sawR*s*(.4 + 1.6*easeOutCubic(k)), 0, Math.PI*2); ctx.stroke();
+      for(let j=0;j<8;j++){
+        const a = -Math.PI/2 + (j - 3.5)*.32, L = c.sawR*s*(.8 + 1.4*easeOutCubic(k));
+        ctx.strokeStyle = rgbaHex(H[1], 1 - k); ctx.lineWidth = Math.max(1, 1.6*s);
+        ctx.beginPath(); ctx.moveTo(mp.x + Math.cos(a)*L*.4, mp.y + Math.sin(a)*L*.4); ctx.lineTo(mp.x + Math.cos(a)*L, mp.y + Math.sin(a)*L); ctx.stroke();
+      }
+    }
+    if(fx) prismSparksUpdateDraw(o);
+    if(editorMode){
+      const mid = worldToScreen(st.mid, c.y);
+      ctx.save(); ctx.fillStyle = "rgba(255,255,255,.92)"; roundRect(ctx, mid.x - 70*s, mid.y - 64*s, 140*s, 18*s, 8*s); ctx.fill();
+      ctx.fillStyle = "#111"; ctx.font = `${Math.max(8, 10*s)}px Inter, sans-serif`; ctx.textAlign = "center";
+      ctx.fillText("Sharrar  vs  Ra'oush", mid.x, mid.y - 51*s); ctx.restore();
     }
   }
 
@@ -23258,7 +23363,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     {id:"coverBlock", label:"Cover Block", icon:"cover", help:"Blocks sniper sight"},
     {id:"shockMine", label:"Shock Mine", icon:"shockMine", help:"Bait, panic beams, then blast"},
     {id:"prismPulse", label:"Prism Pulse", icon:"prismPulse", help:"3 ricochet lasers in sequence"},
-    {id:"twinStutterSaws", label:"Twin Stutter Saws", icon:"twinStutterSaws", help:"Twin saws move, pause, and return"},
+    {id:"twinStutterSaws", label:"Twin Stutter Saws", icon:"twinStutterSaws", help:"Two saw riders clash in the middle and bounce back"},
     {id:"nuclearApexCore", label:"Nuclear Apex", icon:"nuclearApex", help:"Built-in cinematic nuclear core"},
     {id:"voidTrap", label:"Void Trap", icon:"voidTrap", help:"Pull, collapse, erase"},
     {id:"voidReaper", label:"Void Reaper", icon:"voidReaper", help:"Wakes, drags, and devours"},
@@ -25685,7 +25790,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     else if(o.type === "voidseamRift") html = renderModTrapInspector(o) + `<div class="voidseamEscapeCard"><strong>Void Escape Map</strong><small>هذا الزر يفتح محرر ماب الهروب الخاص بهذا الفخ فقط. يبدأ فاضي إذا ما ضبطته قبل؛ حط الفخاخ وعدلها واضغط OK.</small><div class="voidseamEscapeActions"><button class="editorBtn" data-action="editVoidseamEscapeMap">EDIT ESCAPE</button><button class="editorBtn secondary" data-action="resetVoidseamEscapeMap">CLEAR MAP</button></div><small>${o.voidseamEscapeLevel ? "Custom map saved: " + (o.voidseamEscapeLevel.obstacles?.length || 0) + " traps" : "No custom escape map yet — it will open empty."}</small></div>`;
     else if(o.type === "shockMine") html = fieldHTML("Y", "y", o.y) + fieldHTML("X", "x", o.x ?? WORLD_W/2) + fieldHTML("Trigger Radius", "triggerRadius", o.triggerRadius || 168) + fieldHTML("Charge Time", "chargeTime", o.chargeTime || .58, "number", "step='0.05'") + fieldHTML("Fake Beam Time", "fakeBeamDuration", o.fakeBeamDuration || .68, "number", "step='0.05'") + fieldHTML("Fake Beam Count", "fakeBeamCount", o.fakeBeamCount || 5, "number", "step='1'") + fieldHTML("Beam Length", "fakeBeamLength", o.fakeBeamLength || 460) + fieldHTML("Beam Thickness", "fakeBeamThickness", o.fakeBeamThickness || 14) + fieldHTML("Explosion Radius", "explosionRadius", o.explosionRadius || 128) + fieldHTML("Explosion Time", "explosionDuration", o.explosionDuration || .26, "number", "step='0.01'") + fieldHTML("Screen Shake", "screenShake", o.screenShake ?? .48, "number", "step='0.05'") + fieldHTML("Particles", "particleAmount", o.particleAmount || 84, "number", "step='1'") + fieldHTML("Phase", "phase", o.phase || 0, "number", "step='0.1'") + `<p class="inspEmpty">Editor preview now shows three things clearly: dashed outer trigger range, straight fake-beam scare directions, and the solid inner blast radius that actually kills. Fake beams still do not kill; only the electric explosion does.</p>`;
     else if(o.type === "prismPulse") html = fieldHTML("Y", "y", o.y) + fieldHTML("X", "x", o.x ?? WORLD_W/2) + fieldHTML("Beam Count", "beamCount", o.beamCount || 3, "number", "step='1'") + fieldHTML("Base Angle", "baseAngle", o.baseAngle ?? -18, "number", "step='1'") + fieldHTML("Angle Spread", "angleSpread", o.angleSpread || 42, "number", "step='1'") + fieldHTML("Beam Thickness", "beamThickness", o.beamThickness || 12) + fieldHTML("Beam Range", "beamRange", o.beamRange || 960) + fieldHTML("Max Bounces", "maxBounces", o.maxBounces || 2, "number", "step='1'") + fieldHTML("Start Delay", "startDelay", o.startDelay ?? .22, "number", "step='0.05'") + fieldHTML("Laser Gap", "laserGap", o.laserGap || .34, "number", "step='0.05'") + fieldHTML("Travel Speed", "travelSpeed", o.travelSpeed || 780) + fieldHTML("Hold Time", "holdTime", o.holdTime || .78, "number", "step='0.05'") + fieldHTML("Shutdown Time", "shutdownTime", o.shutdownTime || .24, "number", "step='0.05'") + fieldHTML("Off Time", "offTime", o.offTime || .85, "number", "step='0.05'") + fieldHTML("Phase", "phase", o.phase || 0, "number", "step='0.1'") + `<p class="inspEmpty">Prism Pulse fires 1 → 2 → 3. Each beam travels toward the wall, ricochets, holds, then powers down in reverse order before the safe window.</p>`;
-    else if(o.type === "twinStutterSaws") html = fieldHTML("Y", "y", o.y) + fieldHTML("X1", "x1", o.x1 ?? 76) + fieldHTML("X2", "x2", o.x2 ?? 284) + fieldHTML("Saw Radius", "sawR", o.sawR || 21) + fieldHTML("Travel Speed", "speed", o.speed || 220) + fieldHTML("Pause Time", "pauseTime", o.pauseTime || .42, "number", "step='0.05'") + fieldHTML("Stutter Steps", "stutterSteps", o.stutterSteps || 4, "number", "step='1'") + fieldHTML("Burst Power", "burstPower", o.burstPower || .52, "number", "step='0.05'") + fieldHTML("Phase", "phase", o.phase || 0, "number", "step='0.1'") + `<p class="inspEmpty">More aggressive now: each saw charges, bursts in chunky steps, freezes, then attacks back. Increase Stutter Steps for more stop-start hits.</p>`;
+    else if(o.type === "twinStutterSaws") html = fieldHTML("Y", "y", o.y) + fieldHTML("X1", "x1", o.x1 ?? 76) + fieldHTML("X2", "x2", o.x2 ?? 284) + fieldHTML("Saw Radius", "sawR", o.sawR || 21) + fieldHTML("Travel Speed", "speed", o.speed || 220) + fieldHTML("Pause Time", "pauseTime", o.pauseTime || .42, "number", "step='0.05'") + fieldHTML("Stutter Steps", "stutterSteps", o.stutterSteps || 4, "number", "step='1'") + fieldHTML("Burst Power", "burstPower", o.burstPower || .52, "number", "step='0.05'") + fieldHTML("Phase", "phase", o.phase || 0, "number", "step='0.1'") + `<p class="inspEmpty">Sharrar (angry) and Ra'oush (scared) rush at each other, clash in the middle, bounce back to their ends and wait. Stutter Steps / Burst Power are no longer used.</p>`;
     if(o) html = renderBlockIdentityInspector(o) + html;
     if(o && html.includes('data-prop="phase"')){html += `<div class="phaseHelp"><b>Phase</b> — ${studioT("phase")}</div>`;}
     if(o && supportsPowerLinks(o)){html += powerLinksHTML(o);}
