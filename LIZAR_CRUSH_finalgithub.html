@@ -4845,6 +4845,10 @@
   }catch(_err){}
 
   let W = 0, H = 0, DPR = 1;
+  // dynamic resolution state (see DYN_RES_V1 by the main loop); declared early because resize() reads it
+  let dynRes = 1, dynResLastChange = 0, dynResUpWait = 5000, dynResLastUp = -1e9;
+  const dynResWin = [];
+
   let trapPreviewWorldToScreenOverride = null;
   const WORLD_W = 390;
   // MAP_70K_SET_SPAWN_PATCH
@@ -5946,7 +5950,7 @@
   }
 
   function resize(){
-    DPR = Math.max(1, Math.min(perfProfile().dprCap || 1.5, window.devicePixelRatio || 1));
+    DPR = Math.max(1, dynResBaseDPR()*dynRes);
     const vp = stableViewportSize();
     W = vp.w;
     H = vp.h;
@@ -15456,7 +15460,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(flingerGrainPat) return flingerGrainPat;
     const g = document.createElement("canvas"); g.width = g.height = 64;
     const x = g.getContext("2d"), d = x.createImageData(64, 64);
-    for(let i=0;i<d.data.length;i+=4){const v = 110 + Math.floor(trapHash(i*.37)*145); d.data[i] = d.data[i+1] = d.data[i+2] = v; d.data[i+3] = 255;}
+    // PERF_GRAIN_V1: the grain used to be grey drawn in "multiply" mode, which on most phone GPUs
+    // copies the screen for every shape drawn. Multiplying by grey v at alpha a gives
+    // dst*(1 - a*(1 - v/255)), exactly what black with alpha (1 - v/255) gives in normal mode, so the
+    // grain is stored that way and drawn normally: the same pixels, without the costly blend.
+    for(let i=0;i<d.data.length;i+=4){const v = 110 + Math.floor(trapHash(i*.37)*145); d.data[i] = d.data[i+1] = d.data[i+2] = 0; d.data[i+3] = 255 - v;}
     x.putImageData(d, 0, 0);
     flingerGrainPat = ctx.createPattern(g, "repeat");
     return flingerGrainPat;
@@ -15501,7 +15509,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.save(); ctx.translate(d*.3, d*.5); path(); ctx.restore();
       ctx.strokeStyle = pal.hi; ctx.globalAlpha = .75; ctx.lineWidth = Math.max(1, 1.5*s); ctx.stroke(); ctx.globalAlpha = 1;
     }
-    ctx.fillStyle = flingerGrain(); ctx.globalAlpha = .08; ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = flingerGrain(); ctx.globalAlpha = .08;
     ctx.fillRect(-1e4, -1e4, 2e4, 2e4);
     ctx.restore();
     path(); ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1.1, (opt.lw || 1.7)*s); ctx.lineJoin = "round"; ctx.stroke();
@@ -20032,6 +20040,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   //   firing    — the cannon kicks, he's thrown back; muzzle flash and an impact burst at the hit
   //   cooldown  — the barrel smokes, he sits back
   //   kill      — arms up, laughing;  passed — watches you go, then folds his arms and sulks
+  const sniperStaticCache = new Map();
   function drawPredictiveSniper(o){
     ensureSniperRuntime(o);
     const editorPreview = state === "editor";
@@ -20205,32 +20214,54 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
     };
     drawLegs(-1);                                                 // far leg: the other side of the machine, the arm covers it
-    // wall plate + bracket arm
-    flingerShape(() => {ctx.beginPath(); roundRect(ctx, -76*U, -20*U, 10*U, 40*U, 3*U);}, pal.shade, pal, s, {shadeDepth:1.6});
-    for(const by of [-13, 13]){ctx.fillStyle = pal.deep; ctx.beginPath(); ctx.arc(-71*U, by*U, 2*U, 0, Math.PI*2); ctx.fill();}
-    flingerShape(() => {ctx.beginPath(); ctx.moveTo(-68*U, -6*U); ctx.lineTo(-6*U, -5*U); ctx.lineTo(-6*U, 6*U); ctx.quadraticCurveTo(-40*U, 9*U, -68*U, 8*U); ctx.closePath();}, pal.base, pal, s, {shadeDepth:2});
-    // a contact shadow on the arm under the chair
-    ctx.fillStyle = rgbaHex(paperShadeHex(trapMain(), -.6), .28);
-    ctx.beginPath(); ctx.ellipse(-50*U, -5.6*U, 14*U, 2*U, 0, 0, Math.PI*2); ctx.fill();
-    ctx.save(); ctx.translate(footX, footY); ctx.scale(G, G); ctx.translate(-footX, -footY);
-    // the chair is ONE piece: a bucket seat whose back curves up, on a sturdy post
-    flingerShape(() => {ctx.beginPath(); roundRect(ctx, seatX - 2*U, seatY + 1*U, 4*U, 4*U, 1*U);}, pal.deep, pal, s, {noHi:true, shadeDepth:.8, lw:1.2});
-    flingerShape(() => {
-      ctx.beginPath();
-      ctx.moveTo(seatX + 11*U, seatY - 3*U);                       // front lip of the seat
-      ctx.quadraticCurveTo(seatX + 12*U, seatY + 1.5*U, seatX + 8*U, seatY + 1.5*U);
-      ctx.lineTo(seatX - 9*U, seatY + 1.5*U);
-      ctx.quadraticCurveTo(seatX - 14*U, seatY + 1.5*U, seatX - 14*U, seatY - 4*U);
-      ctx.lineTo(seatX - 15*U, seatY - 22*U);                      // the back, leaning a little
-      ctx.quadraticCurveTo(seatX - 15*U, seatY - 26*U, seatX - 11.5*U, seatY - 26*U);
-      ctx.quadraticCurveTo(seatX - 8.5*U, seatY - 26*U, seatX - 9*U, seatY - 22*U);
-      ctx.lineTo(seatX - 9*U, seatY - 6*U);
-      ctx.quadraticCurveTo(seatX - 9*U, seatY - 3.5*U, seatX - 6*U, seatY - 3.5*U);
-      ctx.lineTo(seatX + 9*U, seatY - 4*U);
-      ctx.quadraticCurveTo(seatX + 11*U, seatY - 4*U, seatX + 11*U, seatY - 3*U);
-      ctx.closePath();
-    }, pal.shade, pal, s, {shadeDepth:1.6});
-    ctx.restore();
+    // PERF_SNIPER_STATIC_V1: the wall plate, bracket arm, contact shadow and chair never move in the
+    // machine's own frame, so they are drawn once per size, skin and resolution into a sprite (with the
+    // very same code) and reused; the frame's shake and mirroring still apply to it.
+    const drawSniperStatic = () => {
+      // wall plate + bracket arm
+      flingerShape(() => {ctx.beginPath(); roundRect(ctx, -76*U, -20*U, 10*U, 40*U, 3*U);}, pal.shade, pal, s, {shadeDepth:1.6});
+      for(const by of [-13, 13]){ctx.fillStyle = pal.deep; ctx.beginPath(); ctx.arc(-71*U, by*U, 2*U, 0, Math.PI*2); ctx.fill();}
+      flingerShape(() => {ctx.beginPath(); ctx.moveTo(-68*U, -6*U); ctx.lineTo(-6*U, -5*U); ctx.lineTo(-6*U, 6*U); ctx.quadraticCurveTo(-40*U, 9*U, -68*U, 8*U); ctx.closePath();}, pal.base, pal, s, {shadeDepth:2});
+      // a contact shadow on the arm under the chair
+      ctx.fillStyle = rgbaHex(paperShadeHex(trapMain(), -.6), .28);
+      ctx.beginPath(); ctx.ellipse(-50*U, -5.6*U, 14*U, 2*U, 0, 0, Math.PI*2); ctx.fill();
+      ctx.save(); ctx.translate(footX, footY); ctx.scale(G, G); ctx.translate(-footX, -footY);
+      // the chair is ONE piece: a bucket seat whose back curves up, on a sturdy post
+      flingerShape(() => {ctx.beginPath(); roundRect(ctx, seatX - 2*U, seatY + 1*U, 4*U, 4*U, 1*U);}, pal.deep, pal, s, {noHi:true, shadeDepth:.8, lw:1.2});
+      flingerShape(() => {
+        ctx.beginPath();
+        ctx.moveTo(seatX + 11*U, seatY - 3*U);                       // front lip of the seat
+        ctx.quadraticCurveTo(seatX + 12*U, seatY + 1.5*U, seatX + 8*U, seatY + 1.5*U);
+        ctx.lineTo(seatX - 9*U, seatY + 1.5*U);
+        ctx.quadraticCurveTo(seatX - 14*U, seatY + 1.5*U, seatX - 14*U, seatY - 4*U);
+        ctx.lineTo(seatX - 15*U, seatY - 22*U);                      // the back, leaning a little
+        ctx.quadraticCurveTo(seatX - 15*U, seatY - 26*U, seatX - 11.5*U, seatY - 26*U);
+        ctx.quadraticCurveTo(seatX - 8.5*U, seatY - 26*U, seatX - 9*U, seatY - 22*U);
+        ctx.lineTo(seatX - 9*U, seatY - 6*U);
+        ctx.quadraticCurveTo(seatX - 9*U, seatY - 3.5*U, seatX - 6*U, seatY - 3.5*U);
+        ctx.lineTo(seatX + 9*U, seatY - 4*U);
+        ctx.quadraticCurveTo(seatX + 11*U, seatY - 4*U, seatX + 11*U, seatY - 3*U);
+        ctx.closePath();
+      }, pal.shade, pal, s, {shadeDepth:1.6});
+      ctx.restore();
+    };
+    {
+      const key = [U.toFixed(4), DPR, trapMain(), trapAccent()].join("|");
+      let sp = sniperStaticCache.get(key);
+      if(!sp){
+        const x0 = -84*U, y0 = -62*U, w = 88*U, h = 80*U;
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.ceil(w*DPR)); c.height = Math.max(1, Math.ceil(h*DPR));
+        const saved = ctx;
+        ctx = c.getContext("2d");
+        ctx.setTransform(DPR, 0, 0, DPR, -x0*DPR, -y0*DPR);
+        try{drawSniperStatic();}finally{ctx = saved;}
+        sp = {c, x0, y0, w:c.width/DPR, h:c.height/DPR};
+        if(sniperStaticCache.size > 12) sniperStaticCache.clear();
+        sniperStaticCache.set(key, sp);
+      }
+      ctx.drawImage(sp.c, sp.x0, sp.y0, sp.w, sp.h);
+    }
 
     drawLegs(1);                                                  // near leg, on this side
     // turret (rotates with the drawn aim; recoils along its axis)
@@ -26766,8 +26797,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(d > 3 && d < 60){
         pacingDeltas[pacingIdx++ % pacingDeltas.length] = d;
         if(pacingIdx % 15 === 0 && pacingIdx >= pacingDeltas.length){
+          // the display's own interval: the quick end of the deltas (a busy phone makes most frames
+          // late, so the median would read a slow phone as a slow screen), snapped to a real rate
           const sorted = Array.from(pacingDeltas).sort((a,b)=>a-b);
-          pacingRefreshMs = sorted[sorted.length >> 1];
+          const fast = sorted[Math.floor(sorted.length*.1)];
+          let best = 1000/60;
+          for(const hz of [60, 90, 120, 144, 165, 240]) if(fast <= 1000/hz*1.12) best = 1000/hz;
+          pacingRefreshMs = best;
         }
       }
     }
@@ -26781,8 +26817,36 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     return pacingSkip !== 0;
   }
 
+  // DYN_RES_V1: when the phone keeps missing frames while playing, the canvas renders at a slightly
+  // lower resolution (steps of 15%, never under 60% of the setting nor under 1 pixel per point), and
+  // climbs back once frames are steady again. Every trap and effect is still drawn in full; only the
+  // pixel count changes, which is what the GPU pays for. A step back up that brings misses back
+  // waits longer before the next try, so it settles instead of flickering between two sizes.
+  function dynResBaseDPR(){return Math.max(1, Math.min(perfProfile().dprCap || 1.5, window.devicePixelRatio || 1));}
+  function dynResFrame(now, gap){
+    if(document.hidden || (state !== "playing" && state !== "dying")){dynResWin.length = 0; return;}
+    const cap = perfGameFpsCap();
+    const expected = Number.isFinite(cap) && cap > 0 ? Math.max(pacingRefreshMs, 1000/cap) : pacingRefreshMs;
+    dynResWin.push(gap > expected*1.5 ? 1 : 0);
+    if(dynResWin.length > 90) dynResWin.shift();
+    if(dynResWin.length < 60 || now - dynResLastChange < 1500) return;
+    let miss = 0; for(const v of dynResWin) miss += v;
+    const ratio = miss/dynResWin.length;
+    const base = dynResBaseDPR();
+    const minRes = Math.min(1, Math.max(1, base*.6)/base);
+    let next = dynRes;
+    if(ratio > .15 && dynRes > minRes + .001){
+      next = Math.max(minRes, dynRes - .15);
+      if(now - dynResLastUp < 4000) dynResUpWait = Math.min(40000, dynResUpWait*2);   // that climb was too early
+    } else if(ratio < .02 && dynRes < 1 && now - dynResLastChange > dynResUpWait){
+      next = Math.min(1, dynRes + .1); dynResLastUp = now;
+    }
+    if(next !== dynRes){dynRes = next; dynResLastChange = now; dynResWin.length = 0; resize();}
+  }
+
   function loop(now){
     if(shouldThrottleGameFrame(now)){requestAnimationFrame(loop); return;}
+    const frameGap = now - last;
     const dt = Math.min(.033, (now - last) / 1000);last = now;
     try{
       if(state === "editor"){time += dt; clampEditorCamera(); updateEditorChips(); drawBackground(); requestAnimationFrame(loop); return;}
@@ -26793,6 +26857,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const tB = performance.now();
       if(!shouldSkipWorldDraw()) drawBackground();
       if(perfSettings.fpsMeter) fpsMeterFrame(now, tB - tA, performance.now() - tB);
+      dynResFrame(now, frameGap);
     }catch(err){reportRuntimeError("main loop", err);}
     requestAnimationFrame(loop);
   }
