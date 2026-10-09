@@ -14551,156 +14551,191 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const dy = Math.max(-1, Math.min(1, (py - c.y) / 120));
     return {dx, dy};
   }
-  // PORTAL_MOUTH_GULPER_V1: "the Gulper", a creature that is only a mouth: thick lips around a
-  // swirling throat. Logic untouched; the open hole is drawn exactly over portalMonsterMouthRect and
-  // only while it can really take you (openPulse >= .22), so what you see is what swallows.
-  //   closed   — lips pressed shut, chewing; near the end of the wait the tongue licks the lip
-  //   opening  — the lips part, air streaks get sucked in, the throat swirls
-  //   swallow  — lips stretch round you, close, cheeks puff, a gulp runs down; at the exit a small
-  //              pair of the same lips spits you out
+  // PORTAL_MOUTH_GULPER_V2: "the Gulper", a creature that is only a mouth, drawn in the same
+  // cut-cardstock style as the Flinger: a paper upper lip with a cupid's bow, a fuller lower lip,
+  // a row of small teeth, a tongue, and a throat of nested paper rings sinking away and turning.
+  // Logic untouched; while it can take you (openPulse >= .22) the hole is exactly
+  // portalMonsterMouthRect. Everything else moves on continuous curves (no one-frame jumps):
+  //   shut     — lips pressed together, a chew right after closing, a lick before opening
+  //   opening  — the lips part smoothly into the catch zone, air streaks are sucked in
+  //   swallow  — the lips stretch round you and close, the cheeks puff, a gulp runs down; at the
+  //              exit the same lips spit you out
   //   passed   — it purses its lips, sulking
-  function gulperLipPath(cx, cy, hw, hh){
+  function gulperSE(cx, cy, hw, hh, a){
+    const ca = Math.cos(a), sa = Math.sin(a);
+    return [cx + hw*Math.sign(ca)*Math.pow(Math.abs(ca), .6), cy + hh*Math.sign(sa)*Math.pow(Math.abs(sa), .6)];
+  }
+  function gulperHolePath(cx, cy, hw, hh){
     ctx.beginPath();
-    for(let k=0;k<=40;k++){
-      const a = k/40*Math.PI*2, ca = Math.cos(a), sa = Math.sin(a);
-      const x = cx + hw*Math.sign(ca)*Math.pow(Math.abs(ca), .6), y = cy + hh*Math.sign(sa)*Math.pow(Math.abs(sa), .6);
-      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    }
+    for(let k=0;k<=48;k++){const q = gulperSE(cx, cy, hw, hh, k/48*Math.PI*2); k ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]);}
     ctx.closePath();
   }
-  // Lips: hw/hh is the hole (0 hh = shut), lip is the lip thickness.
+  // hw/hh: the hole (hh 0 = shut); lip: lip thickness; s: screen scale.
   function drawGulperLips(cx, cy, hw, hh, lip, s, opts={}){
-    const main = trapMain(), dark = paperIsDark(main);
-    const lo = paperShade(main, dark ? .14 : -.3), hi = paperShade(main, dark ? .34 : .28);
-    const pout = opts.pout || 0, puff = opts.puff || 0;
-    // cheeks puffed out
-    if(puff > .01){
-      ctx.fillStyle = main;
-      for(const sd of [-1, 1]){ctx.beginPath(); ctx.ellipse(cx + sd*(hw + lip*.6), cy, lip*(1.2 + 1.1*puff), lip*(1.1 + .9*puff), 0, 0, Math.PI*2); ctx.fill();}
-    }
-    const ow = hw + lip*(1 - .35*pout), oh = Math.max(hh, 1) + lip*(1 + .25*pout);
-    ctx.fillStyle = main;
-    gulperLipPath(cx, cy, ow, oh); ctx.fill();
-    // the seam / hole
-    if(hh > .6){
-      ctx.save();
-      gulperLipPath(cx, cy, hw, hh); ctx.clip();
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(hw, hh));
-      g.addColorStop(0, "#000000"); g.addColorStop(.6, "#1a0a10"); g.addColorStop(1, "#3a1520");
-      ctx.fillStyle = g; ctx.fillRect(cx - hw, cy - hh, hw*2, hh*2);
-      // the throat swirls like a drain
-      const spin = (opts.spin || 0);
-      ctx.strokeStyle = rgbaHex(trapAccent(), .22 + .25*(opts.suck || 0)); ctx.lineWidth = Math.max(1, 1.4*s);
-      for(let k=0;k<4;k++){
+    const pal = flingerPalette(trapMain());
+    const pout = opts.pout || 0, puff = opts.puff || 0, smack = opts.smack || 0, spin = opts.spin || 0;
+    const ow = hw + lip*(1.15 - .45*pout), upT = lip*(1 + .3*pout + .55*puff)*(1 + .1*smack), dnT = lip*(1.25 + .3*pout + .7*puff)*(1 - .1*smack);
+    const gap = Math.max(0, hh);
+    // a full mouth: the lips themselves swell (wider and thicker) while it holds you inside
+    // throat: dark, with nested paper rings sinking away
+    if(gap > .4){
+      ctx.save(); gulperHolePath(cx, cy, hw, gap); ctx.clip();
+      ctx.fillStyle = "#0e0b10"; ctx.fillRect(cx - hw - 2, cy - gap - 2, hw*2 + 4, gap*2 + 4);
+      for(let i=1;i<=4;i++){
+        const k = 1 - i*.19, ox = Math.cos(spin + i*1.3)*hw*.05*i, oy = Math.sin(spin + i*1.3)*gap*.05*i;
+        const shade = Math.round(70 - i*13);
+        ctx.fillStyle = `rgb(${shade + 6},${shade},${shade + 8})`;
+        gulperHolePath(cx + ox, cy + oy, hw*k, gap*k); ctx.fill();
+        ctx.strokeStyle = `rgba(255,255,255,${.22 - i*.04})`; ctx.lineWidth = Math.max(.8, 1*s);
         ctx.beginPath();
-        for(let j=0;j<=24;j++){
-          const u = j/24, ang = spin + k*Math.PI/2 + u*4.2, rr = (1 - u)*.95;
-          const x = cx + Math.cos(ang)*hw*rr, y = cy + Math.sin(ang)*hh*rr;
-          j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-        }
+        for(let j=0;j<=24;j++){const q = gulperSE(cx + ox, cy + oy, hw*k, gap*k, Math.PI*1.05 + j/24*Math.PI*.9); j ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]);}
         ctx.stroke();
       }
-      // tongue resting on the floor of the mouth
-      ctx.fillStyle = "#8c3442";
-      ctx.beginPath(); ctx.ellipse(cx, cy + hh*.82, hw*.55, hh*.42, 0, Math.PI, 0); ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.lineWidth = Math.max(.8, 1*s);
-      ctx.beginPath(); ctx.moveTo(cx, cy + hh*.48); ctx.lineTo(cx, cy + hh*.8); ctx.stroke();
+      // tongue on the floor of the mouth
+      const tw = hw*.62, th = Math.min(gap*.55, lip*1.4);
+      const tongue = () => {ctx.beginPath(); ctx.moveTo(cx - tw, cy + gap + 2); ctx.bezierCurveTo(cx - tw*.9, cy + gap - th, cx + tw*.9, cy + gap - th, cx + tw, cy + gap + 2); ctx.closePath();};
+      flingerShape(tongue, "#b3606c", pal, s, {shade:"#86414c", shadeDepth:2, noHi:false, lw:1.2});
+      ctx.strokeStyle = "rgba(60,20,30,.5)"; ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.beginPath(); ctx.moveTo(cx, cy + gap - th*.75); ctx.lineTo(cx, cy + gap); ctx.stroke();
+      // small blunt teeth hanging from the upper edge
+      const n = 7, tH = Math.min(gap*.42, lip*.8);
+      for(let i=0;i<n;i++){
+        const u = (i + .5)/n, x = cx - hw*.82 + u*hw*1.64;
+        const a = Math.PI + Math.acos(Math.max(-1, Math.min(1, (x - cx)/hw)));
+        const top = gulperSE(cx, cy, hw, gap, Math.PI*2 - (a - Math.PI))[1];
+        const wT = hw*1.64/n*.42;
+        const tooth = () => {ctx.beginPath(); ctx.moveTo(x - wT, top - 2); ctx.lineTo(x - wT*.8, top + tH*.7); ctx.quadraticCurveTo(x, top + tH*1.1, x + wT*.8, top + tH*.7); ctx.lineTo(x + wT, top - 2); ctx.closePath();};
+        flingerShape(tooth, pal.tooth, pal, s, {noHi:true, shade:"#cfc9bb", shadeDepth:1, lw:1});
+      }
       ctx.restore();
-    } else {
-      ctx.strokeStyle = lo; ctx.lineWidth = Math.max(1.4, 2.2*s); ctx.lineCap = "round";
-      ctx.beginPath(); ctx.moveTo(cx - hw*.98, cy); ctx.quadraticCurveTo(cx, cy + (opts.smack || 0)*lip*.4 + lip*.12, cx + hw*.98, cy); ctx.stroke();
     }
-    // lip rims and a soft shine on the upper lip
-    ctx.strokeStyle = lo; ctx.lineWidth = Math.max(1, 1.3*s);
-    gulperLipPath(cx, cy, ow, oh); ctx.stroke();
-    ctx.strokeStyle = hi; ctx.globalAlpha = .7; ctx.lineWidth = Math.max(1, 1.6*s); ctx.lineCap = "round";
-    ctx.beginPath(); ctx.ellipse(cx - ow*.3, cy - Math.max(hh, 1) - lip*.5, ow*.22, lip*.22, -.08, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
-    ctx.globalAlpha = 1;
-    // the cupid's bow dip in the middle of the upper lip
-    ctx.strokeStyle = lo; ctx.lineWidth = Math.max(1, 1.2*s);
-    ctx.beginPath(); ctx.moveTo(cx - lip*.5, cy - oh + lip*.05); ctx.quadraticCurveTo(cx, cy - oh + lip*.5, cx + lip*.5, cy - oh + lip*.05); ctx.stroke();
+    // the two lips: full in the middle, thin at the corners; the upper one has a cupid's bow with
+    // two peaks, the lower one is fuller and pushes out a little
+    // Each lip wraps the hole: built around the hole edge by angle, full at the top/bottom middle
+    // and thinning toward the corners, but never to nothing, so the hole's sides stay covered.
+    const ls = lip*(.5 - .2*pout + .5*puff);                        // lip thickness at the corners
+    const cw = hw + ls;
+    const ring = (a, e, rx, ry) => {const ca = Math.cos(a), sa = Math.sin(a); return [cx + rx*Math.sign(ca)*Math.pow(Math.abs(ca), e), cy + ry*Math.sign(sa)*Math.pow(Math.abs(sa), e)];};
+    const N = 40;
+    const upper = () => {
+      ctx.beginPath();
+      for(let k=0;k<=N;k++){
+        const a = Math.PI + k/N*Math.PI, mid = Math.pow(Math.abs(Math.sin(a)), 1.4);
+        const q = ring(a, .75, cw, gap*.95 + upT*(.35 + .85*mid));
+        const u = (q[0] - cx)/cw;
+        const bow = upT*(.34*Math.exp(-Math.pow(u/.12, 2)) - .14*Math.exp(-Math.pow((Math.abs(u) - .3)/.14, 2)));
+        k ? ctx.lineTo(q[0], q[1] + bow) : ctx.moveTo(q[0], q[1] + bow);
+      }
+      for(let k=N;k>=0;k--){const q = gulperSE(cx, cy, hw, gap, Math.PI + k/N*Math.PI); ctx.lineTo(q[0], q[1]);}
+      ctx.closePath();
+    };
+    const lower = () => {
+      ctx.beginPath();
+      for(let k=0;k<=N;k++){
+        const a = k/N*Math.PI, mid = Math.pow(Math.abs(Math.sin(a)), 1.4);
+        const q = ring(a, .75, cw, gap*.95 + dnT*(.35 + 1.0*mid));
+        k ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]);
+      }
+      for(let k=N;k>=0;k--){const q = gulperSE(cx, cy, hw, gap, k/N*Math.PI); ctx.lineTo(q[0], q[1]);}
+      ctx.closePath();
+    };
+    flingerShape(lower, pal.base, pal, s, {shadeDepth:3});
+    flingerShape(upper, pal.base, pal, s, {shadeDepth:2.4});
+    // a soft dimple at each corner, inside the lips' reach
+    ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.2*s); ctx.lineCap = "round";
+    for(const sd of [-1, 1]){
+      ctx.beginPath(); ctx.arc(cx + sd*(cw - lip*.42), cy, lip*.26, sd > 0 ? -.8 : Math.PI - .8, sd > 0 ? .8 : Math.PI + .8); ctx.stroke();
+    }
+    // shut seam
+    if(gap <= .4){
+      ctx.beginPath(); ctx.moveTo(cx - cw*.92, cy); ctx.quadraticCurveTo(cx, cy + lip*.18*(1 + smack), cx + cw*.92, cy); ctx.stroke();
+    }
+    // the lick: the tongue tip pokes out over the lower lip and slides along it
+    if((opts.lick || 0) > .01){
+      const k = opts.lickU || 0, tx = cx - cw*.55 + k*cw*1.1, L = opts.lick;
+      const tongueTip = () => {ctx.beginPath(); ctx.moveTo(tx - lip*.95*L, cy - 1); ctx.bezierCurveTo(tx - lip*.95*L, cy + lip*1.15*L, tx + lip*.95*L, cy + lip*1.15*L, tx + lip*.95*L, cy - 1); ctx.closePath();};
+      flingerShape(tongueTip, "#b3606c", pal, s, {shade:"#86414c", shadeDepth:1.6, lw:1.2});
+      ctx.strokeStyle = "rgba(60,20,30,.5)"; ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.beginPath(); ctx.moveTo(tx, cy); ctx.lineTo(tx, cy + lip*.6*L); ctx.stroke();
+    }
   }
   function drawPortalMonster(o){
     const st = portalMonsterState(o);
     const c = st.c;
-    const p = worldToScreen(c.x, c.y);
-    const s = p.s;
     const editorMode = state === "editor";
     const main = trapMain();
     const accent = trapAccent();
     const fx = editorMode ? null : prismSmokeFor(o);
     if(fx) prismFxBeginFrame(o);
     const dt = fx ? (fx.dt || 0) : 0;
+    const sm01 = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
+    const p = worldToScreen(c.x, c.y);
+    const s = p.s;
     ctx.save();
     if(editorMode){
       const exit = portalFindExit(o, editorLevel || activeLevel());
       if(exit){const ex=portalExitConfig(exit);const ep=worldToScreen(ex.x,ex.y);ctx.setLineDash([8*s,6*s]);ctx.strokeStyle=rgbaHex(main,.55);ctx.lineWidth=Math.max(1,1.4*s);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(ep.x,ep.y);ctx.stroke();ctx.setLineDash([]);}
     }
     const pulse = editorMode ? .8 : st.openPulse;
-    const live = !editorMode && st.open && pulse >= .22 && !obstacleDisabledByPower(o);
-    const mr = (() => {
-      const mw = c.w*(.46 + pulse*.34), mh = c.h*(.16 + pulse*.48), my = c.y + c.h*.16 + pulse*c.h*.07;
-      return {cx:c.x, cy:my, hw:mw/2, hh:mh/2};
-    })();
-    const mp = worldToScreen(mr.cx, mr.cy);
-    const lip = Math.max(5*s, c.h*.13*s);
+    const disabled = !editorMode && obstacleDisabledByPower(o);
+    const live = !editorMode && st.open && pulse >= .22 && !disabled;
+    // the hole is the catch rect itself (same formula as portalMonsterMouthRect)
+    const mw = c.w*(.46 + pulse*.34), mh = c.h*(.16 + pulse*.48), myW = c.y + c.h*.16 + pulse*c.h*.07;
+    const mp = worldToScreen(c.x, myW);
+    const lip = Math.max(5*s, c.h*.15*s);
     const swallowing = !editorMode && portalEffect.active && portalEffect.trap === o;
     const phase = swallowing ? portalEffect.phase : "";
-    const passed = !editorMode && !swallowing && (Number(player.baseY) || 0) < c.y - c.h - 30;
-    let hw = mr.hw*s, hh = (live || editorMode) ? mr.hh*s : 0;
-    // just before the threshold the lips part a crack (harmless)
-    if(!live && !editorMode && st.open) hh = Math.min(1.6*s, pulse/.22*1.6*s);
-    let puff = 0, pout = 0, smack = 0, suck = live ? clamp01((pulse - .22)/.4) : 0;
+    // below the threshold the lips part smoothly toward the catch size (harmless, but no jump)
+    const part = editorMode ? 1 : (disabled || !st.open ? 0 : (live ? 1 : sm01(pulse/.22)));
+    let hw = mw/2*s, hh = mh/2*s*part;
+    let puff = 0, suck = live ? clamp01((pulse - .22)/.4) : 0, smack = 0, lick = 0, lickU = 0;
     if(!st.open && !swallowing){
-      const k = st.p;                                            // 0..1 through the closed wait
-      smack = k < .25 ? Math.sin(k/.25*Math.PI*3)*(1 - k/.25) : 0; // chewing right after it shuts
+      const k = st.p;
+      smack = k < .25 ? Math.sin(k/.25*Math.PI*3)*(1 - k/.25) : 0;            // a chew right after it shuts
+      if(k > .6){const u = (k - .6)/.4; lick = Math.sin(u*Math.PI); lickU = u;}   // a lick before it opens
     }
-    if(passed){pout = .8; hw *= .7;}
     if(swallowing){
       const cf = portalEffect.cfg || c;
-      if(phase === "suck"){const k = clamp01(portalEffect.timer/Math.max(.001, cf.suckTime)); hw = Math.max(hw, (mr.hw + 6)*s*(1 + .15*k)); hh = Math.max(hh, mr.hh*s*(1 - .7*k)); suck = 1;}
-      else {const k = phase === "tunnel" ? clamp01(portalEffect.timer/Math.max(.001, cf.tunnelTime)) : 1; hh = 0; puff = phase === "tunnel" ? Math.sin(Math.min(1, k*1.4)*Math.PI*.5)*(1 - k*.6) : Math.max(0, .4 - portalEffect.timer*2);}
+      if(phase === "suck"){const k = sm01(portalEffect.timer/Math.max(.001, cf.suckTime)); hw += 6*s*k; hh *= 1 - k; suck = 1 - k;}
+      else {
+        hh = 0; suck = 0;
+        if(phase === "tunnel"){const k = clamp01(portalEffect.timer/Math.max(.001, cf.tunnelTime)); puff = Math.sin(Math.min(1, k*1.4)*Math.PI*.5)*(1 - k*.6)*(1 - .6*Math.exp(-Math.pow((k - .55)/.09, 2)));}   // full, then one gulp squeeze
+        else puff = Math.max(0, .4 - portalEffect.timer*2);
+      }
     }
+    // after a swallow the mouth stays shut and eases back open within .2s (it can't catch you
+    // during that time anyway: the portal lock outlasts it)
+    let passK = 0;
     if(fx){
-      const sm = fx.gm || (fx.gm = {});
-      const fresh = !sm.ready || dt > .2;
-      const f = (k, v, rate) => {if(fresh || !(k in sm)){sm[k] = v; return v;} sm[k] += (v - sm[k])*(1 - Math.exp(-dt*rate)); return sm[k];};
-      // the hole itself is never smoothed (it must match the catch zone); only expression is
-      pout = f("pout", pout, 6); puff = f("puff", puff, 10);
-      if(passed) hw = f("hw", hw, 6); else sm.hw = hw;
-      sm.ready = true;
+      if(swallowing && phase !== "suck") fx.shutK = 1;
+      else fx.shutK = Math.max(0, (fx.shutK || 0) - dt*5);
+      if(!swallowing) hh *= 1 - sm01(fx.shutK);
+      const passed = !swallowing && (Number(player.baseY) || 0) < c.y - c.h - 30;
+      fx.passK = (fx.passK || 0) + ((passed ? 1 : 0) - (fx.passK || 0))*(1 - Math.exp(-dt*4));
+      passK = fx.passK;
+      fx.puffS = (fx.puffS ?? puff) + (puff - (fx.puffS ?? puff))*(1 - Math.exp(-dt*14)); puff = fx.puffS;
     }
+    if(passK > .001 && !live) hw *= 1 - .3*passK;                // sulking purse, only while it can't catch
+    const pout = live ? 0 : passK*.9;
     // air sucked in while it can take you
     if(suck > .02){
+      const pal = flingerPalette(main);
       for(let k=0;k<9;k++){
         const u = (time*1.6 + k/9) % 1;
         const ang = k/9*Math.PI*2 + .3;
-        const r0 = Math.max(hw, 20*s)*(2.4 - 1.3*u), r1 = r0 - 10*s*(1 + suck);
-        ctx.strokeStyle = rgbaHex(main, .35*suck*Math.sin(u*Math.PI));
+        const r0 = Math.max(hw, 20*s)*(2.3 - 1.2*u), r1 = r0 - 9*s*(1 + suck);
+        ctx.strokeStyle = pal.line; ctx.globalAlpha = .35*suck*Math.sin(u*Math.PI);
         ctx.lineWidth = Math.max(1, 1.4*s); ctx.lineCap = "round";
         ctx.beginPath(); ctx.moveTo(mp.x + Math.cos(ang)*r0, mp.y + Math.sin(ang)*r0*.6); ctx.lineTo(mp.x + Math.cos(ang)*r1, mp.y + Math.sin(ang)*r1*.6); ctx.stroke();
       }
-    }
-    drawGulperLips(mp.x, mp.y, hw, hh, lip, s, {pout, puff, smack, suck, spin:-time*(2 + 4*suck)});
-    // the tongue licks the lower lip just before it opens again
-    if(!st.open && !swallowing && !passed && st.p > .62){
-      const k = (st.p - .62)/.38;
-      const tx = mp.x + (-1 + 2*k)*hw*.7, ty = mp.y + lip*.55;
-      ctx.fillStyle = "#b44a5a";
-      ctx.beginPath(); ctx.ellipse(tx, ty, lip*.55, lip*.42*Math.sin(Math.min(1, k*1.3)*Math.PI), 0, 0, Math.PI*2); ctx.fill();
-    }
-    // a gulp: a ring slides down under the mouth while you are in the tunnel
-    if(swallowing && phase === "tunnel"){
-      const k = clamp01(portalEffect.timer/Math.max(.001, (portalEffect.cfg || c).tunnelTime));
-      ctx.strokeStyle = main; ctx.globalAlpha = 1 - k; ctx.lineWidth = Math.max(2, lip*.6);
-      ctx.beginPath(); ctx.ellipse(mp.x, mp.y + lip*(1.4 + 2.2*k), hw*.45*(1 - .4*k), lip*.4, 0, 0, Math.PI*2); ctx.stroke();
       ctx.globalAlpha = 1;
     }
-    // sulking: a little puff of air
-    if(passed && fx){
+    drawGulperLips(mp.x, mp.y, hw, hh, lip, s, {pout, puff, smack, lick, lickU, spin:-time*(1.2 + 2.5*suck)});
+    // sulking: little puffs of air from the corner
+    if(passK > .3){
       const u = (time*.6) % 1;
-      ctx.fillStyle = rgbaHex(main, .25*(1 - u));
-      ctx.beginPath(); ctx.arc(mp.x + hw + lip + u*10*s, mp.y - u*6*s, (2 + 3*u)*s, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = rgbaHex(main, .22*(passK - .3)/.7*(1 - u));
+      ctx.beginPath(); ctx.arc(mp.x + hw + lip*1.4 + u*10*s, mp.y - u*6*s, (2 + 3*u)*s, 0, Math.PI*2); ctx.fill();
     }
     if(editorMode){
       const mr2 = portalMonsterMouthRect(o);const mp2=worldToScreen(mr2.x,mr2.y);ctx.setLineDash([5*s,5*s]);ctx.strokeStyle=rgbaHex(accent,.70);ctx.lineWidth=Math.max(1,1.2*s);roundRect(ctx,mp2.x,mp2.y,mr2.w*s,mr2.h*s,12*s);ctx.stroke();ctx.setLineDash([]);
@@ -14727,10 +14762,22 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const fx = portalEffect;
     ctx.save();
     if(fx.phase === "tunnel"){
+      // sliding down the Gulper's throat: dark paper rings rush outward past you
       const p = clamp01(fx.timer / Math.max(.001, (fx.cfg?.tunnelTime||.42)));
-      ctx.fillStyle = `rgba(0,0,0,${.28 + Math.sin(p*Math.PI)*.32})`;ctx.fillRect(0,0,W,H);
-      ctx.strokeStyle = rgbaHex(trapAccent(), .28 + Math.sin(p*Math.PI)*.24);ctx.lineWidth = 2;
-      for(let i=0;i<14;i++){const x=(i/13)*W;const off=(p*H*1.2+i*37)%H;ctx.beginPath();ctx.moveTo(x,off-H*.5);ctx.lineTo(W/2,off+H*.1);ctx.stroke();}
+      const env = Math.sin(p*Math.PI);
+      ctx.fillStyle = `rgba(14,11,16,${.35 + env*.45})`; ctx.fillRect(0,0,W,H);
+      const cx = W/2, cy = H*.45, R = Math.hypot(W, H)*.6;
+      for(let i=0;i<7;i++){
+        const u = ((p*1.6 + i/7) % 1), k = u*u;
+        const shade = Math.round(30 + 40*(1 - u));
+        ctx.globalAlpha = env*(.25 + .55*u);
+        ctx.strokeStyle = `rgb(${shade + 8},${shade},${shade + 10})`;
+        ctx.lineWidth = 4 + 26*k;
+        gulperHolePath(cx, cy, R*k*.9 + 6, R*k*.62 + 4); ctx.stroke();
+        ctx.strokeStyle = `rgba(255,255,255,${.08*u})`; ctx.lineWidth = 1.5;
+        gulperHolePath(cx, cy, R*k*.9 + 6 - (2 + 13*k), R*k*.62 + 4 - (2 + 13*k)); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
     if(fx.phase === "eject" && fx.exit){
       // the same lips appear at the exit and spit you out, then pucker shut and vanish
@@ -14742,7 +14789,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const shut = clamp01((t - .55)/.3);
       const vanish = clamp01((t - .8)/.2);
       ctx.globalAlpha = 1 - vanish;
-      drawGulperLips(p.x, p.y, 26*s*(1 - .45*shut), 12*s*openIn*(1 - shut), 7*s, s, {pout:shut, spin:time*6});
+      drawGulperLips(p.x, p.y, 24*s*(1 - .4*shut), 11*s*openIn*(1 - shut), 7*s, s, {pout:shut, spin:time*4});
       ctx.globalAlpha = 1;
     }
     ctx.restore();
