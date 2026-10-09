@@ -16664,6 +16664,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     eyeBoss.r0 = ph === "freeze" ? planeSm(pe/.3) : ph === "warn" ? .35*planeSm(pe/eyeBoss.pLen) : 0;
     eyeBoss.p0 = ph === "freeze" ? .26 - .04*d : ph === "warn" ? .34 : .4 + .03*Math.sin(time*.8);
     eyeBoss.fireAt = timeUp ? 1.5 : .42;            // caught moving: almost at once. time up: a calm stare first
+    eyeBoss.card = eyeBossSnapCard();               // before death changes anything (the held squint, the pose)
     eyeBoss.caughtT = time; eyeBoss.phase = "caught";
     const pr = playerRect();
     try{noiseBurst(0, .05, .02);}catch(_e){}
@@ -16677,7 +16678,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const F = eyeBoss.fireAt || .42;
       cue("stare", 0, () => {tone(52, 0, F + .2, "sine", .06, 47);});
       cue("fire", F, () => {noiseBurst(0, .4, .09); tone(1200, 0, .25, "sawtooth", .05, 180);});
-      cue("hit", F + .05, () => {shake = Math.max(shake, perfShakeAmount(9));});
       cue("come", F + .3, () => {tone(60, 0, 1.6, "sawtooth", .05, 520); noiseBurst(.2, 1.4, .05);});
       cue("fail", F + 3.05, () => {tone(110, 0, .7, "sine", .06, 55);});
       return;
@@ -16944,9 +16944,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const pupil = ph === "freeze" ? .26 - .04*d : ph === "warn" ? .34 : .4 + .03*Math.sin(time*.8);
     const open = 1;
     const depthDim = .55;                               // seen through deep water/fog
-    const halo = ctx.createRadialGradient(ex, ey, R*.6, ex, ey, R*1.6);
-    halo.addColorStop(0, rgbA(col, .08*B)); halo.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
     eyeBossDrawEye(ex, ey, R, gz.x, gz.y, red, pupil, open, B*depthDim*riseIn*(1 - sinkOut));
     // 3) fog: three layers drifting at different speeds; they stir when the card moves
     const fog = eyeBossFog();
@@ -16961,11 +16958,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // 4) the living glass floor
     const wave = (ph === "move" || ph === "freeze" || ph === "warn") ? 1 - planeSm((time - pStart)/1.1) : 0;
     eyeBossFloor(B, col, wave, d*(ph === "freeze" ? 1 : .55), 0, 0, 0);
-    // 5) the command light under the card (a limited reflection)
-    const pr = playerRect(), pc = worldToScreen(pr.x + pr.w/2, pr.y + pr.h);
-    const rg = ctx.createRadialGradient(pc.x, pc.y, 2, pc.x, pc.y, pr.w*1.6*pc.s);
-    rg.addColorStop(0, rgbA(col, .35*B)); rg.addColorStop(1, rgbA(col, 0));
-    ctx.fillStyle = rg; ctx.beginPath(); ctx.ellipse(pc.x, pc.y, pr.w*1.6*pc.s, pr.w*.6*pc.s, 0, 0, Math.PI*2); ctx.fill();
     ctx.restore();
   }
   // words, timer, the card's rim light, and the whole execution; drawn above the player
@@ -17115,14 +17107,28 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     ctx.restore();
   }
+  // the card exactly as the game drew it on the frame it was caught (same shape, same place, no re-drawing)
+  function eyeBossSnapCard(){
+    const pr = playerRect(), a = worldToScreen(pr.x, pr.y), m = 4;
+    const out = {pw:pr.w*a.s, ph:pr.h*a.s, pcx:a.x + pr.w*a.s/2, pcy:a.y + pr.h*a.s/2, x:a.x - m, y:a.y - m, w:pr.w*a.s + 2*m, h:pr.h*a.s + 2*m, cv:null};
+    try{
+      const cv = document.createElement("canvas"), d = Math.max(1, DPR);
+      cv.width = Math.ceil(out.w*d); cv.height = Math.ceil(out.h*d);
+      const oldCtx = ctx, oldState = state;
+      ctx = cv.getContext("2d"); ctx.setTransform(d, 0, 0, d, -out.x*d, -out.y*d);
+      state = "playing";
+      try{drawPlayer();} finally{ctx = oldCtx; state = oldState;}
+      out.cv = cv;
+    }catch(_e){}
+    return out;
+  }
   // THE EXECUTION. Caught moving: everything else vanishes and it fires almost at once. Time up: it stares,
   // calm, then fires without warning. The eye never moves, grows or blinks; only the pupil turns. The beam
   // burns the card, then turns toward the viewer and comes, and comes, until it is all you can see.
   function eyeBossExecution(c){
     const t = deathTimer, s = worldToScreen(0, 0).s, F = eyeBoss.fireAt || .4, k = t - F;
-    const snap = deathPlayerSnapshot || playerRect();
-    const pr = {x:snap.x, y:snap.y, w:snap.w, h:snap.h};
-    const p0 = worldToScreen(pr.x, pr.y), pw = pr.w*s, ph = pr.h*s, pcx = p0.x + pw/2, pcy = p0.y + ph/2;
+    const card = eyeBoss.card || (eyeBoss.card = eyeBossSnapCard());
+    const pw = card.pw, ph = card.ph, pcx = card.pcx, pcy = card.pcy;
     const red = [255, 38, 44];
     ctx.save();
     ctx.fillStyle = "rgb(4,4,6)"; ctx.fillRect(0, 0, W, H);
@@ -17130,10 +17136,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const R = W*.44, ex = W/2, riseIn = planeSm((time - eyeBoss.t0 - .2)/1.6), ey = H*.3 + (1 - riseIn)*R*1.15;
     const clear = planeSm(t/.35);                                   // the floor and the fog are gone
     const redK = 1 - (1 - (eyeBoss.r0 || 0))*(1 - planeSm(t/.45));
-    const halo = ctx.createRadialGradient(ex, ey, R*.6, ex, ey, R*1.6);
-    const stare = k < 0 ? planeSm(t/F) : 1;                          // the calm stare slowly fills with red light
-    halo.addColorStop(0, `rgba(200,10,20,${.08 + .14*redK + .16*stare*(.8 + .2*Math.sin(t*2.6))})`); halo.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
     const gz = eyeBossGaze(ex, ey, 1), turn = planeSm((k - .5)/1.2);
     const gx = gz.x*(1 - turn), gy = gz.y*(1 - turn);
     const p0p = eyeBoss.p0 || .3;
@@ -17150,18 +17152,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.globalAlpha = 1;
       eyeBossFloor(1 - clear, red, 0, .8, 0, pcx, pcy);
     }
-    // the card, alone in the dark, lit red from below
+    // the card, alone in the dark, frozen exactly where and how it was the moment it was caught
     const vapor = clamp01((k - .04)/.32);
-    if(vapor < 1){
+    if(vapor < 1 && card.cv){
       ctx.globalAlpha = 1 - vapor;
-      const cube = cubeSkin();
-      try{drawPaperBody(ctx, p0.x, p0.y, pw, ph, s, cube, player.normalH, {flap:1, wob:0, bend:0});}catch(_e){ctx.fillStyle = cube.body || "#111"; ctx.fillRect(p0.x, p0.y, pw, ph);}
-      const eyeTone = eyeSkin(); ctx.fillStyle = eyeTone.color; ctx.beginPath(); ctx.ellipse(pcx, p0.y + Math.min(ph*.48, 23*s), 7.5*s, 8*s*(1 + .25*(1 - planeSm(t/.3))), 0, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = "#111"; ctx.beginPath(); ctx.arc(pcx, p0.y + Math.min(ph*.48, 23*s), 1.4*s, 0, Math.PI*2); ctx.fill();
-      ctx.globalAlpha = (1 - vapor)*(.2 + .5*redK);
-      const lg = ctx.createLinearGradient(0, p0.y + ph, 0, p0.y);
-      lg.addColorStop(0, "rgba(255,40,40,.9)"); lg.addColorStop(1, "rgba(255,40,40,0)");
-      ctx.fillStyle = lg; ctx.fillRect(p0.x, p0.y, pw, ph);
+      ctx.drawImage(card.cv, card.x, card.y, card.w, card.h);
       ctx.globalAlpha = 1;
     }
     // the laser: full from its first frame, a cone from the pupil to the card, then it turns to you and comes
@@ -18561,7 +18556,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     deathPlayerSnapshot = playerDeathSnapshot();
     prepareDeathReplay(type, impact, culprit);
     if(type === "shockMine") shockMineDeathFx = {active:true, x:impact?.x ?? player.x, y:impact?.y ?? (player.baseY-player.h/2), timer:0};
-    if(type === "eyeBoss"){shake = Math.max(shake, 1.2); return;}   // the Eye Below times its own shake, flash and sound
+    if(type === "eyeBoss"){shake = 0; return;}                      // the Eye Below: nothing shakes, the eye and the card stay put
     shake = type === "crusher" ? 13 : (type === "ink" ? 6 : (type === "laser" ? 7 : (type === "shockMine" ? 16 : 10)));
     spawnDeathParticles(type);
     playTrapSound(type);
