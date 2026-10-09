@@ -14656,7 +14656,14 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.closePath();
   }
   // hw/hh: the hole (hh 0 = shut); lip: lip thickness; s: screen scale.
+  // the lips clip to the curved mouth hole: drawn on a layer so the game canvas never gets that clip
+  // (see PERF_CARD_SCRATCH_V1)
   function drawGulperLips(cx, cy, hw, hh, lip, s, opts={}){
+    const m = lip*5 + 12*s;
+    const L = cardLayerBegin(cx - hw - m, cy - Math.max(0, hh) - m, cx + hw + m, cy + Math.max(0, hh) + m);
+    try{drawGulperLipsDirect(cx, cy, hw, hh, lip, s, opts);}finally{cardLayerEnd(L);}
+  }
+  function drawGulperLipsDirect(cx, cy, hw, hh, lip, s, opts={}){
     const pal = flingerPalette(trapMain());
     const pout = opts.pout || 0, puff = opts.puff || 0, smack = opts.smack || 0, spin = opts.spin || 0;
     const ow = hw + lip*(1.15 - .45*pout), upT = lip*(1 + .3*pout + .55*puff)*(1 + .1*smack), dnT = lip*(1.25 + .3*pout + .7*puff)*(1 - .1*smack);
@@ -15536,7 +15543,100 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ? {line:main, base:paperShade(main, .58), shade:paperShade(main, .4), hi:paperShade(main, .82), deep:paperShade(main, .22)}
       : {line:paperShade(main, -.82), base:paperShade(main, -.18), shade:paperShade(main, -.36), hi:paperShade(main, .25), deep:paperShade(main, -.6)};
   }
+  // PERF_CARD_SCRATCH_V1: on the S23 Ultra the game held 120 fps through every level until a Rail
+  // Sniper appeared, then fell to 30 and stayed there until the app restarted: the browser moved the
+  // whole game canvas off the GPU. The sniper (and the other cardstock creatures) clip every piece
+  // to its curved outline (about 20 complex clips a frame) and fill a paper-grain pattern inside.
+  // Each piece is now drawn, with exactly the same steps, on a small scratch canvas sized to the
+  // piece's on-screen box, then placed on the game canvas pixel-aligned: the game canvas never sees a
+  // complex clip, and the piece looks the same. Small canvases (sprites) keep drawing directly.
+  const cardRec = {xs:[], ys:[], beginPath(){}, closePath(){},
+    moveTo(x, y){this.xs.push(x); this.ys.push(y);}, lineTo(x, y){this.xs.push(x); this.ys.push(y);},
+    quadraticCurveTo(a, b, x, y){this.xs.push(a, x); this.ys.push(b, y);},
+    bezierCurveTo(a, b, c, d, x, y){this.xs.push(a, c, x); this.ys.push(b, d, y);},
+    arcTo(a, b, x, y){this.xs.push(a, x); this.ys.push(b, y);},
+    arc(x, y, r){this.xs.push(x - r, x + r); this.ys.push(y - r, y + r);},
+    ellipse(x, y, rx, ry){const m = Math.max(rx, ry); this.xs.push(x - m, x + m); this.ys.push(y - m, y + m);},
+    rect(x, y, w, h){this.xs.push(x, x + w); this.ys.push(y, y + h);},
+    roundRect(x, y, w, h){this.xs.push(x, x + w); this.ys.push(y, y + h);}};
+  let cardScratch = null;
+  // only the game canvas itself needs protecting (layers, sprites and previews draw directly)
+  function cardIsGameCanvas(g){return !!g && !!g.canvas && (g.canvas === canvas || (perfBench.ll && g.canvas === perfBench.ll.c));}
+  // A whole cardstock creature can be drawn on one layer canvas (one placement per frame instead of
+  // one per piece). cardLayerBegin takes a generous box in the current local frame; everything drawn
+  // until cardLayerEnd lands on the layer, which is then placed on the game canvas pixel-aligned.
+  const cardLayers = [];
+  let cardLayerIdx = 0;
+  function cardLayerBegin(lx0, ly0, lx1, ly1){
+    const host = ctx;
+    if(!cardIsGameCanvas(host)) return null;
+    const M = host.getTransform();
+    let dx0 = Infinity, dy0 = Infinity, dx1 = -Infinity, dy1 = -Infinity;
+    for(const [px, py] of [[lx0, ly0], [lx1, ly0], [lx1, ly1], [lx0, ly1]]){
+      const X = M.a*px + M.c*py + M.e, Y = M.b*px + M.d*py + M.f;
+      dx0 = Math.min(dx0, X); dy0 = Math.min(dy0, Y); dx1 = Math.max(dx1, X); dy1 = Math.max(dy1, Y);
+    }
+    dx0 = Math.floor(Math.max(dx0, -2)); dy0 = Math.floor(Math.max(dy0, -2));
+    dx1 = Math.ceil(Math.min(dx1, host.canvas.width + 2)); dy1 = Math.ceil(Math.min(dy1, host.canvas.height + 2));
+    const w = dx1 - dx0, h = dy1 - dy0;
+    if(w <= 0 || h <= 0) return null;
+    const c = cardLayers[cardLayerIdx % 4] || (cardLayers[cardLayerIdx % 4] = document.createElement("canvas"));
+    cardLayerIdx++;
+    if(c.width < w || c.height < h){c.width = Math.max(c.width, w); c.height = Math.max(c.height, h);}
+    const g = c.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+    g.clearRect(0, 0, w + 1, h + 1);
+    g.setTransform(M.a, M.b, M.c, M.d, M.e - dx0, M.f - dy0);
+    g.lineCap = host.lineCap; g.lineJoin = host.lineJoin; g.globalAlpha = host.globalAlpha;
+    ctx = g;
+    return {host, c, dx0, dy0, w, h};
+  }
+  function cardLayerEnd(L){
+    if(!L) return;
+    ctx = L.host;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.drawImage(L.c, 0, 0, L.w, L.h, L.dx0, L.dy0, L.w, L.h);
+    ctx.restore();
+  }
   function flingerShape(path, fill, pal, s, opt={}){
+    const host = ctx;
+    if(!cardIsGameCanvas(host)){flingerShapeDirect(path, fill, pal, s, opt); return;}
+    // the piece's box in its own coordinates, grown by the shade offset, rim light and outline
+    cardRec.xs.length = 0; cardRec.ys.length = 0;
+    ctx = cardRec;
+    try{path();}finally{ctx = host;}
+    if(!cardRec.xs.length){flingerShapeDirect(path, fill, pal, s, opt); return;}
+    const pad = ((opt.shadeDepth ?? 3.2) + 3 + (opt.lw || 1.7))*s + 2;
+    const x0 = Math.min(...cardRec.xs) - pad, x1 = Math.max(...cardRec.xs) + pad, y0 = Math.min(...cardRec.ys) - pad, y1 = Math.max(...cardRec.ys) + pad;
+    const M = host.getTransform();
+    let dx0 = Infinity, dy0 = Infinity, dx1 = -Infinity, dy1 = -Infinity;
+    for(const [px, py] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]){
+      const X = M.a*px + M.c*py + M.e, Y = M.b*px + M.d*py + M.f;
+      dx0 = Math.min(dx0, X); dy0 = Math.min(dy0, Y); dx1 = Math.max(dx1, X); dy1 = Math.max(dy1, Y);
+    }
+    dx0 = Math.floor(Math.max(dx0, -2)); dy0 = Math.floor(Math.max(dy0, -2));
+    dx1 = Math.ceil(Math.min(dx1, host.canvas.width + 2)); dy1 = Math.ceil(Math.min(dy1, host.canvas.height + 2));
+    const w = dx1 - dx0, h = dy1 - dy0;
+    if(w <= 0 || h <= 0) return;                                   // entirely off screen
+    if(w*h > 900*900){flingerShapeDirect(path, fill, pal, s, opt); return;}
+    if(!cardScratch) cardScratch = document.createElement("canvas");
+    const sc = cardScratch;
+    if(sc.width < w || sc.height < h){sc.width = Math.max(sc.width, w, 64); sc.height = Math.max(sc.height, h, 64);}
+    const g = sc.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+    g.clearRect(0, 0, w + 1, h + 1);
+    g.setTransform(M.a, M.b, M.c, M.d, M.e - dx0, M.f - dy0);
+    ctx = g;
+    try{flingerShapeDirect(path, fill, pal, s, opt);}finally{ctx = host;}
+    host.save();
+    host.setTransform(1, 0, 0, 1, 0, 0);
+    host.drawImage(sc, 0, 0, w, h, dx0, dy0, w, h);
+    host.restore();
+  }
+  function flingerShapeDirect(path, fill, pal, s, opt={}){
     const d = (opt.shadeDepth ?? 3.2)*s, lx = opt.lx ?? .45;
     path(); ctx.fillStyle = fill; ctx.fill();
     ctx.save(); path(); ctx.clip();
@@ -15726,6 +15826,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       : 0;
     const emitterTips = [];
     ctx.save();
+    // the whole creature pair on one layer (see PERF_CARD_SCRATCH_V1)
+    const gripsLayer = state === "editor" ? null : cardLayerBegin(-20, p.y - 170*s, W + 20, p.y + rect.h*s + 170*s);
     if(state === "editor"){
       ctx.fillStyle = rgbaHex(colors.finger, .08);
       roundRect(ctx, p.x, p.y, rect.w*s, rect.h*s, 12*s);ctx.fill();
@@ -15852,6 +15954,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         trapDrawBolt(pts, Math.max(1.4, (playerFxActive ? 1.6 + captureBlend*.8 : 1.5)*s), pal.E, state === "editor" ? .5 : .65 + rt.spark*.35);
       }
     }
+    cardLayerEnd(gripsLayer);
     ctx.restore();
   }
   function drawVoltGripFx(){
@@ -20199,6 +20302,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.translate(head.x + shake, head.y);
     ctx.scale(dir, 1);
     const U = s;                                                    // 1 world unit
+    // the whole machine and gunner are drawn on one layer (see PERF_CARD_SCRATCH_V1)
+    const sniperLayer = cardLayerBegin(-104*U, -120*U, 66*U, 64*U);
     // The seat and the gunner are drawn G times larger around the seat's foot so he reads on a
     // phone; the cannon keeps its real size (muzzle at 31).
     const G = 1.6, footX = -50*U, footY = -5*U;
@@ -20408,6 +20513,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.beginPath(); ctx.moveTo(ex - 6.4*U, ey); ctx.lineTo(-9*U, ey + 1*U); ctx.stroke();
     ctx.restore();
     drawArm(true);
+    cardLayerEnd(sniperLayer);
     ctx.restore();
   }
 
