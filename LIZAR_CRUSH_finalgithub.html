@@ -15532,7 +15532,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const twitch = (.3 + .7*ext)*gait*1.4*s;
         const rootX = bodyX + inward*segW*.36, rootY = yy;
         const liveTipX = isDual ? (emitter.side === "left" ? centerX - dualGap : centerX + dualGap) : wallX + inward*c.reach*s;
-        const restTipX = rootX - inward*segW*.3, restTipY = yy + fingerGap*.2;  // folded away behind the shells
+        const restTipX = rootX + inward*5*s, restTipY = yy + 5*s;  // tucked just in front of the hip (never behind it, so the leg can't flip as it unfolds)
         let tipX = restTipX + (liveTipX - restTipX)*ext, tipY = restTipY + (yy + twitch*.3 - restTipY)*ext;
         if(playerTarget){
           const tx = emitter.side === "left" ? playerTarget.x - 2*s : playerTarget.x + playerTarget.w + 2*s;
