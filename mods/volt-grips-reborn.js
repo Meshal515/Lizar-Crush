@@ -14,7 +14,8 @@
 
   Hit area = the drawn arms (wall to fingertips) and the drawn current, radius Hit Thickness/2.
   Nothing outside the drawing can catch you.
-  Fling = exactly Fling Height world units up, eased over Fling Time. It never kills.
+  Catch = a slingshot: it tugs the card down, drags it further down (Pull Down), then flings it
+  to exactly Fling Height above the point where it caught you, eased over Fling Time. It never kills.
 
   Install: Editor -> Import Mod -> paste this whole file.
 */
@@ -45,6 +46,7 @@ const vgCfg = (o) => {
     retractTime: .28,
     grabTime: vgNum(o.grabTime, .18, .06, 1),
     squeezeTime: vgNum(o.squeezeTime, .3, .05, 2),
+    pullDown: vgNum(o.pullDown, 46, 0, 300),
     flingHeight: vgNum(o.flingHeight, 140, 0, 4000),
     flingTime: vgNum(o.flingTime, .45, .12, 3),
     hitThickness: vgNum(o.hitThickness, 12, 4, 40),
@@ -98,7 +100,7 @@ const vgHits = (c, rect, W, cap) => {
 const vgStale = (api) => { return !vgFx || api.time < vgFx.lastStep - .01 || api.time - vgFx.lastStep > .25; }
 
 const vgStartCatch = (trap, c, api, rect) => {
-  vgFx = {trap, side:c.side, phase:"catch", t0:api.time, lastStep:api.time, startY:api.player.baseY, cx:rect.x + rect.w/2, cy:rect.y + rect.h/2};
+  vgFx = {trap, side:c.side, phase:"catch", t0:api.time, lastStep:api.time, startY:api.player.baseY, catchY:api.player.baseY, cx:rect.x + rect.w/2, cy:rect.y + rect.h/2};
   api.state.set("lock", api.time + c.grabTime + c.squeezeTime + c.flingTime + c.cooldown + c.retractTime);
   api.effects.shake(1.6);
   api.effects.particles(rect.x + rect.w/2, rect.y + rect.h*.5, Math.round(8*c.sparkPower) + 2, VG_E[1], {speed:120, spread:rect.w*.8, life:.3, size:2.4});
@@ -111,14 +113,21 @@ const vgRunCatch = (c, api, dt) => {
   const h = P.h + (P.normalH - P.h)*Math.min(1, dt*18);  // a stretched card snaps back to normal
   let baseY = P.baseY;
   const e = api.time - fx.t0;
-  if(fx.phase === "catch" && e >= c.grabTime){ fx.phase = "squeeze"; fx.t0 += c.grabTime; }
-  else if(fx.phase === "squeeze" && e >= c.squeezeTime){
-    fx.phase = "fling"; fx.t0 += c.squeezeTime; fx.startY = P.baseY;
+  // slingshot: the catch tugs the card down a little, the squeeze drags it further down, then it flies
+  if(fx.phase === "catch"){
+    baseY = fx.catchY + c.pullDown*.35*vgSm(e/c.grabTime);
+    if(e >= c.grabTime){ fx.phase = "squeeze"; fx.t0 += c.grabTime; }
+  }
+  else if(fx.phase === "squeeze" && e < c.squeezeTime) baseY = fx.catchY + c.pullDown*(.35 + .65*vgSm(e/c.squeezeTime));
+  else if(fx.phase === "squeeze"){
+    baseY = fx.catchY + c.pullDown;
+    fx.phase = "fling"; fx.t0 += c.squeezeTime; fx.startY = baseY;
     api.effects.shake(4.5 + c.sparkPower);
     api.effects.particles(P.centerX, P.y + P.h, Math.round(14*c.sparkPower) + 4, VG_E[1], {speed:160, spread:P.w, life:.35, size:2.8});
   } else if(fx.phase === "fling"){
     const p = Math.min(1, e/c.flingTime);
-    baseY = fx.startY - c.flingHeight*vgOut3(p);
+    const target = fx.catchY - c.flingHeight;
+    baseY = fx.startY + (target - fx.startY)*vgOut3(p);
     if(p >= 1){ api.state.set("relT", api.time); vgFx = null; }
   }
   P.teleport(P.x, baseY, {h, camera:false});             // also cancels any release animation
@@ -344,7 +353,7 @@ const mod = {
   defaults: {
     side:"both", height:170, fingers:4, gap:34, reach:90,
     restTime:1.45, warnTime:.4, activeTime:1.1,
-    grabTime:.18, squeezeTime:.3, flingHeight:140, flingTime:.45,
+    grabTime:.18, squeezeTime:.3, pullDown:46, flingHeight:140, flingTime:.45,
     hitThickness:12, cooldown:.5, sparkPower:1, showZone:true
   },
   settings: [
@@ -358,6 +367,7 @@ const mod = {
     {key:"activeTime", label:"Grip Time (s)", type:"number", default:1.1, step:.05, min:.1, max:8},
     {key:"grabTime", label:"Catch Time (s)", type:"number", default:.18, step:.01, min:.06, max:1},
     {key:"squeezeTime", label:"Squeeze Time (s)", type:"number", default:.3, step:.01, min:.05, max:2},
+    {key:"pullDown", label:"Pull Down (before fling)", type:"number", default:46, step:2, min:0, max:300},
     {key:"flingHeight", label:"Fling Height", type:"number", default:140, step:10, min:0, max:4000},
     {key:"flingTime", label:"Fling Time (s)", type:"number", default:.45, step:.05, min:.12, max:3},
     {key:"hitThickness", label:"Arm Thickness (hit)", type:"number", default:12, step:1, min:4, max:40},
