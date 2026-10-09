@@ -13036,6 +13036,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     resetVoidseamEscapeRuntime();
     exitPlaneMode();
     planeFoldFx = {active:false};
+    planeSmoke = {active:false, t0:0, tSwap:-1};
     const lvl = activeLevel();
     restorePlayerRenderState();
     clearLevelRuntimeState(lvl);
@@ -15998,6 +15999,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   // ---------------- 6) The Folders (ENTER / EXIT) ----------------
   // Two paper creatures asleep on wall pegs: Giggles (left, laughs) and Snooze (right, lazy).
   let planeFoldFx = {active:false};
+  // THICK_FOLD_SMOKE_V1: the fold cloud is drawn ABOVE the player and is fully opaque from a
+  // moment before the card/plane swap until a moment after it, so the swap is never seen.
+  let planeSmoke = {active:false, t0:0, tSwap:-1};
   function planeFoldersCfg(o){
     const c = {mode:o.mode === "exit" ? "exit" : "enter", y:Number(o.y) || 700, trigger:planeNum(o.trigger, 150, 60, 400),
       planeSpeed:planeNum(o.planeSpeed, 135, 60, 400), steerSpeed:planeNum(o.steerSpeed, 170, 60, 400), pull:planeNum(o.pull, 70, 0, 200), launch:planeNum(o.launch, 2.4, 1, 5)};
@@ -16037,8 +16041,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         next("fold", T.grab);
       } else if(fx.phase === "fold"){
         player.x += (WORLD_W/2 - player.x)*Math.min(1, dt*9);
+        if(!planeSmoke.active || planeSmoke.owner !== fx){planeSmoke = {active:true, t0:time, tSwap:-1, owner:fx};}
         if(!fx.folded && e >= T.fold*.62){
-          fx.folded = true;
+          fx.folded = true; planeSmoke.tSwap = time;
           const keepX = player.x;
           enterPlaneMode({speed:c.planeSpeed, side:c.steerSpeed});
           player.x = keepX;
@@ -16067,8 +16072,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(fx.phase === "startle") next("grab", T.startle);
       else if(fx.phase === "grab"){player.x += (WORLD_W/2 - player.x)*Math.min(1, dt*8); next("fold", T.grab);}
       else if(fx.phase === "fold"){
+        if(!planeSmoke.active || planeSmoke.owner !== fx){planeSmoke = {active:true, t0:time, tSwap:-1, owner:fx};}
         if(!fx.folded && e >= T.fold*.6){
-          fx.folded = true; exitPlaneMode();
+          fx.folded = true; planeSmoke.tSwap = time; exitPlaneMode();
           try{noiseBurst(0, .2, .05); tone(640, 0, .12, "sine", .04, 320);}catch(_e){}
         }
         next("settle", T.fold);
@@ -16087,23 +16093,61 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(planeFoldersTryStart(o, rect)) return;
     }
   }
-  // per-frame smoke: deterministic puffs from the trap's own clock (smooth at any fps)
-  function planeDrawSmoke(cx, cy, amount, t0, s, col){
-    if(amount <= .01) return;
-    for(let i=0;i<16;i++){
-      const a = trapHash(i*3.7)*Math.PI*2, life = .55 + trapHash(i*1.3)*.35;
-      const age = ((time - t0)*1.4 + trapHash(i*5.1)) % life / life;
-      const dist = (6 + 30*planeOut3(age))*s, rr = (12 + 14*age + trapHash(i)*7)*s;
-      ctx.globalAlpha = amount*(1 - age*.8)*.95;
-      const sx = cx + Math.cos(a)*dist, sy = cy + Math.sin(a)*dist*.8 - age*10*s;
-      ctx.fillStyle = "rgba(60,40,40,.16)";
-      ctx.beginPath(); ctx.arc(sx + 2*s, sy + 3*s, rr, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = i % 4 ? "#ece6df" : "#ddd5cc";
-      ctx.beginPath(); ctx.arc(sx, sy, rr, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = "#fffdf9";
-      ctx.beginPath(); ctx.arc(sx - rr*.25, sy - rr*.28, rr*.55, 0, Math.PI*2); ctx.fill();
+  // The fold cloud: a dense core that fully hides the card, churning puffs around it and a few
+  // paper flecks flying out. Deterministic from the cloud's own clock (smooth at any fps).
+  function planeSmokeAmount(){
+    const sm = planeSmoke;
+    if(!sm.active) return 0;
+    let a = planeSm((time - sm.t0)/.18);
+    if(sm.tSwap >= 0) a *= 1 - planeSm((time - sm.tSwap - .14)/.45);
+    if(sm.tSwap >= 0 && time - sm.tSwap > .65){planeSmoke = {active:false, t0:0, tSwap:-1}; return 0;}
+    return a;
+  }
+  function planeFoldSmokeOverlay(){
+    const amount = planeSmokeAmount();
+    if(amount <= .01 || state === "editor") return;
+    const pr = playerRect(), c = worldToScreen(pr.x + pr.w/2, pr.y + pr.h/2), s = c.s, col = planeColors();
+    const t = time - planeSmoke.t0, cw = Math.max(pr.w, pr.h)*s;
+    ctx.save();
+    // outer churning puffs (behind the core)
+    for(let i=0;i<22;i++){
+      const a = trapHash(i*3.7)*Math.PI*2 + t*(i % 2 ? .9 : -.7), life = .5 + trapHash(i*1.3)*.4;
+      const age = (t*1.3 + trapHash(i*5.1)) % life / life;
+      const dist = cw*(.35 + .55*planeOut3(age)), rr = cw*(.28 + .22*age + trapHash(i)*.12);
+      const x = c.x + Math.cos(a)*dist, y = c.y + Math.sin(a)*dist*.85 - age*8*s;
+      ctx.globalAlpha = amount*(1 - age*.7);
+      ctx.fillStyle = "rgba(70,50,50,.18)"; ctx.beginPath(); ctx.arc(x + 2*s, y + 3*s, rr, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = i % 3 ? "#ece6df" : "#ddd4ca"; ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#fffdf9"; ctx.beginPath(); ctx.arc(x - rr*.25, y - rr*.3, rr*.5, 0, Math.PI*2); ctx.fill();
     }
-    ctx.globalAlpha = 1;
+    // the core: big overlapping billows, fully opaque at the peak, bigger than the card
+    ctx.globalAlpha = amount;
+    for(let i=0;i<7;i++){
+      const a = i*Math.PI*2/7 + Math.sin(t*3 + i)*.3, d = cw*.36, rr = cw*(.66 + .08*Math.sin(t*5 + i*1.7));
+      const x = c.x + Math.cos(a)*d, y = c.y + Math.sin(a)*d*.8;
+      ctx.fillStyle = "#d9d0c6"; ctx.beginPath(); ctx.arc(x + 2*s, y + 3*s, rr, 0, Math.PI*2); ctx.fill();
+    }
+    for(let i=0;i<7;i++){
+      const a = i*Math.PI*2/7 + Math.sin(t*3 + i)*.3, d = cw*.36, rr = cw*(.64 + .08*Math.sin(t*5 + i*1.7));
+      const x = c.x + Math.cos(a)*d, y = c.y + Math.sin(a)*d*.8;
+      ctx.fillStyle = "#efe9e2"; ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI*2); ctx.fill();
+    }
+    for(let i=0;i<5;i++){
+      const a = i*1.3 + t*1.5, x = c.x + Math.cos(a)*cw*.35, y = c.y + Math.sin(a)*cw*.28 - cw*.12;
+      ctx.fillStyle = "#fffdf9"; ctx.beginPath(); ctx.arc(x, y, cw*(.22 + .05*Math.sin(t*6 + i)), 0, Math.PI*2); ctx.fill();
+    }
+    // paper flecks in the trap colour, spinning out
+    for(let i=0;i<9;i++){
+      const life = .55, age = (t*1.6 + trapHash(i*2.9)) % life / life;
+      const a = trapHash(i*7.7)*Math.PI*2, d = cw*(.5 + 1.1*planeOut3(age));
+      const x = c.x + Math.cos(a)*d, y = c.y + Math.sin(a)*d*.8 + age*age*14*s, r = (2.2 + trapHash(i)*1.6)*s;
+      ctx.globalAlpha = amount*(1 - age);
+      ctx.fillStyle = i % 2 ? col.main : col.lit;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(age*9 + i);
+      ctx.beginPath(); ctx.moveTo(-r, -r*.6); ctx.lineTo(r, -r*.2); ctx.lineTo(-r*.3, r*.8); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
   }
   // one Folder creature: a round origami body folded into eight facets (lit top-left, shaded
   // bottom-right), a big eye, a paper beak that opens toward the lane, a peg holding it to the
@@ -16226,7 +16270,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     planeDrawFolder(lx, y, 1, s, col, gigMood, false);
     planeDrawFolder(rx, y, -1, s, col, snzMood, true);
-    if(fx && smoke > 0) planeDrawSmoke(pc.x, pc.y, Math.min(1, smoke), fx.t0, s, col);
     if(editor){
       ctx.fillStyle = col.deep; ctx.font = `900 ${Math.round(9*s)}px Inter, Arial`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(c.mode === "exit" ? "PLANE EXIT" : "PLANE ENTER", worldToScreen(WORLD_W/2, c.y).x, y);
@@ -27776,7 +27819,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     drawObstaclesSafe(lvl);
     drawWireGrasperFx();drawVoltGripFx();drawPortalFx();drawSlowTimeWorldOverlay();
     if(frameTrace.on) frameTraceMark("fx");
-    drawPlayer();drawPortalLipOverlay();
+    drawPlayer();planeFoldSmokeOverlay();drawPortalLipOverlay();
     if(frameTrace.on) frameTraceMark("player");
     drawWireStatusBadge();drawCrusherDeathOverlay();drawVoidseamEscapeOverlay();drawVoidseamReturnFx();drawAshParticles();
     ctx.restore();
