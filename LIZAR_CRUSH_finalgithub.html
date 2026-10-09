@@ -12308,54 +12308,67 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(impact?.worldY !== undefined) return {x:player.x, y:impact.worldY};
     return {x:player.x, y:player.baseY - player.h/2};
   }
+  // PERF_DEATH_V1: the moment of death used to copy every trap four times and rebuild the whole
+  // replay timeline inside one frame (a visible hitch right on the impact). Now that frame keeps only
+  // what must be taken at that instant (one world copy, made by startDeath, reused here, plus the
+  // small impact / culprit / player copies); the replay timeline is built when the replay starts.
   function prepareDeathReplay(type, impact=null, culprit=null){
-    captureRunFrame(true);
     const endT = sessionTime;
-    let frames = runFrames.filter(f => f.t >= endT - REPLAY_SECONDS);
-    if(frames.length < 2) frames = runFrames.slice(-30);
     const deathSnap = deathPlayerSnapshot || playerDeathSnapshot();
+    const lastF = runFrames[runFrames.length-1];
     const finalFrame = normalizeReplayFrame({
       t:endT,
       time,
       cameraY,
-      p:{x:deathSnap.centerX ?? player.x, baseY:deathSnap.baseY, topY:deathSnap.topY ?? deathSnap.rectY, w:deathSnap.w, h:deathSnap.h, hold:deathSnap.hold || 0, shrink:deathSnap.shrink || 0},
-      r:snapshotReplayWorld()
+      p:{x:deathSnap.centerX ?? player.x, baseY:deathSnap.baseY, topY:deathSnap.topY ?? deathSnap.rectY, w:deathSnap.w, h:deathSnap.h, hold:deathSnap.hold || 0, shrink:deathSnap.shrink || 0}
     });
     if(finalFrame){
-      const last = frames[frames.length-1];
-      if(!last || Math.abs((Number(last.t)||0) - finalFrame.t) > .0005) frames.push(finalFrame);
-      else frames[frames.length-1] = finalFrame;
+      const world = lastF && Math.abs((Number(lastF.t)||0) - endT) < .0005 && lastF.r ? lastF.r : snapshotReplayWorld();
+      if(world) finalFrame.r = world;
     }
     const focus = trapFocusPoint(type, impact, culprit);
     const scale = worldScale();
     const cam = Math.max(0, Math.min(Math.max(0, activeLevel().height - H/scale), focus.y - (H/scale)*.54));
-    const replayFrames = preciseReplayFrames(frames);
-    const fromT = replayFrames[0]?.t || frames[0]?.t || Math.max(0, endT - REPLAY_SECONDS);
-    const toT = replayFrames[replayFrames.length-1]?.t || frames[frames.length-1]?.t || endT;
-    const slowStartT = Math.max(fromT, toT - .42);
-    const normalSpan = Math.max(0, slowStartT - fromT);
-    const slowSpan = Math.max(.001, toT - slowStartT);
-    const slowFactor = 3.25;
-    const deathHold = Math.max(.72, Math.min(1.05, deathDuration(type) * .55));
     deathReplay = {
       type,
       reason:deathReason,
       impact:safeReplayClone(impact),
       culprit:safeReplayClone(culprit),
       playerSnapshot:safeReplayClone(deathSnap),
-      frames:replayFrames,
-      fromT,
-      toT,
-      slowStartT,
-      slowFactor,
-      deathHold,
+      frames:null,
+      _pending:{src:runFrames, endT, finalFrame},
+      fromT:endT, toT:endT, slowStartT:endT,
+      slowFactor:3.25,
+      deathHold:Math.max(.72, Math.min(1.05, deathDuration(type) * .55)),
       elapsed:0,
-      duration:Math.max(2.15, normalSpan + slowSpan * slowFactor + deathHold),
+      duration:2.15,
       cameraY:cam,
       focus
     };
   }
+  function deathReplayFinalize(){
+    const R = deathReplay;
+    if(!R || !R._pending) return;
+    const {src, endT, finalFrame} = R._pending;
+    R._pending = null;
+    let frames = src.filter(f => f.t >= endT - REPLAY_SECONDS && f.t <= endT + .0005);
+    if(frames.length < 2) frames = src.slice(-30);
+    if(finalFrame){
+      const last = frames[frames.length-1];
+      if(!last || Math.abs((Number(last.t)||0) - finalFrame.t) > .0005) frames.push(finalFrame);
+      else frames[frames.length-1] = finalFrame;
+    }
+    const replayFrames = preciseReplayFrames(frames);
+    const fromT = replayFrames[0]?.t || frames[0]?.t || Math.max(0, endT - REPLAY_SECONDS);
+    const toT = replayFrames[replayFrames.length-1]?.t || frames[frames.length-1]?.t || endT;
+    const slowStartT = Math.max(fromT, toT - .42);
+    const normalSpan = Math.max(0, slowStartT - fromT);
+    const slowSpan = Math.max(.001, toT - slowStartT);
+    R.frames = replayFrames; R.fromT = fromT; R.toT = toT; R.slowStartT = slowStartT;
+    R.duration = Math.max(2.15, normalSpan + slowSpan * R.slowFactor + R.deathHold);
+  }
   function startDeathReplay(reset=false){
+    deathReplayFinalize();
     if(!deathReplay || !deathReplay.frames?.length){showFinalLose();return;}
     deathReplay.elapsed = 0;
     deathReplayShown = true;
@@ -12377,6 +12390,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   }
   function deathReplayPlaybackState(){
     if(!deathReplay) return {t:0, deathPhase:0, slow:false};
+    deathReplayFinalize();
     const fromT = Number(deathReplay.fromT)||0;
     const toT = Number(deathReplay.toT)||fromT;
     const slowStartT = Math.max(fromT, Math.min(toT, Number(deathReplay.slowStartT)||toT));
@@ -12395,10 +12409,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   }
   function replayCurrentFrame(){
     if(!deathReplay) return null;
+    deathReplayFinalize();
     const play = deathReplayPlaybackState();
     return frameAt(deathReplay.frames, play.t);
   }
   function replayWorldAt(t){
+    deathReplayFinalize();
     const frames = deathReplay?.frames || [];
     if(!frames.length) return null;
     let best = null, bestDist = Infinity;
@@ -12635,6 +12651,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const ac = ensureAudio();
     if(!ac) return;
     if(ac.state === "suspended") ac.resume();
+    if(!audioUnlocked){
+      // build the death-sound noise buffers on the first tap, not on the first death
+      audioUnlocked = true;
+      try{for(const d of [.055,.06,.10,.13,.16,.18,.20,.22,.28,.30,.34]) noiseBurst(0, d, 0.0001);}catch(_err){}
+    }
     audioUnlocked = true;
   }
 
@@ -12654,12 +12675,20 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     osc.stop(ac.currentTime + start + dur + .02);
   }
 
+  const noiseBufferCache = new Map();
   function noiseBurst(start, dur, gain=.04){
     const ac = ensureAudio();
     if(!ac || !audioUnlocked) return;
-    const buffer = ac.createBuffer(1, Math.max(1, ac.sampleRate * dur), ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for(let i=0;i<data.length;i++) data[i] = (Math.random()*2-1) * (1 - i/data.length);
+    // the fading white-noise buffer for a duration is made once and reused (white noise sounds the
+    // same every time; building it sample by sample on a death frame cost several ms on phones)
+    const key = ac.sampleRate + "|" + dur;
+    let buffer = noiseBufferCache.get(key);
+    if(!buffer){
+      buffer = ac.createBuffer(1, Math.max(1, ac.sampleRate * dur), ac.sampleRate);
+      const data = buffer.getChannelData(0);
+      for(let i=0;i<data.length;i++) data[i] = (Math.random()*2-1) * (1 - i/data.length);
+      noiseBufferCache.set(key, buffer);
+    }
     const src = ac.createBufferSource();
     const filter = ac.createBiquadFilter();
     const vol = ac.createGain();
