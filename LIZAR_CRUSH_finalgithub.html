@@ -13034,6 +13034,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
 
   function resetLevel(keepMenu = true){
     resetVoidseamEscapeRuntime();
+    exitPlaneMode();
     const lvl = activeLevel();
     restorePlayerRenderState();
     clearLevelRuntimeState(lvl);
@@ -14141,6 +14142,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     wireReleaseBypass = false;
   }
   function touchHoldPointerDown(ev){
+    if(planeMode.active) return;   // the plane steers by screen halves (handled by pointerDown)
     if(!canInput("game") || !isPlayState() || (touchControlSettings.mode||"full") !== "button") return;
     ev.preventDefault(); ev.stopPropagation();
     unlockAudio();
@@ -14151,6 +14153,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     scheduleTouchControlRefresh();
   }
   function touchHoldPointerUp(ev){
+    if(planeInput.ptr.size) return;
     if((touchControlSettings.mode||"full") !== "button") return;
     ev.preventDefault(); ev.stopPropagation();
     if(canInput("game") && isPlayState() && holding){releaseStretch(); lastInputTime = time;}
@@ -14163,14 +14166,23 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   touchHoldButton?.addEventListener("click", ev => {ev.preventDefault(); ev.stopPropagation();}, {passive:false});
 
   function pointerDown(ev){
-    if(ev.isPrimary === false) return;
     if(ev.button !== undefined && ev.button !== 0) return;
+    if(planeMode.active && isPlayState() && canInput("game")){
+      // PAPER_PLANE_V1: each finger steers by the half of the screen it lands on
+      if(!shouldStartStretchFromPointer(ev)) return;
+      unlockAudio();
+      planeInput.ptr.set(ev.pointerId ?? 0, ev.clientX < (window.innerWidth || W)/2 ? -1 : 1);
+      ev.preventDefault(); ev.stopPropagation();
+      return;
+    }
+    if(ev.isPrimary === false) return;
     unlockAudio();
     if(!canInput("game")) return;
     if(!shouldStartStretchFromPointer(ev)) return;
     if(isPlayState() && !holding){beginFreshStretchInput();gameplayStretchPointerId = ev.pointerId ?? null;holding = true;lastInputTime = time;ev.preventDefault();ev.stopPropagation();}
   }
   function pointerUp(ev){
+    if(planeInput.ptr.delete(ev.pointerId ?? 0)) return;
     if(gameplayStretchPointerId !== null && ev.pointerId !== gameplayStretchPointerId) return;
     if(!canInput("game")){if(gameplayStretchPointerId !== null) holding = false; gameplayStretchPointerId = null; return;}
     if(isPlayState() && holding && gameplayStretchPointerId !== null){releaseStretch();lastInputTime = time;ev.preventDefault();ev.stopPropagation();}
@@ -14182,7 +14194,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   window.addEventListener("pointerdown", pointerDown, {passive:false});
   window.addEventListener("pointerup", pointerUp, {passive:false});
   window.addEventListener("pointercancel", pointerUp, {passive:false});
-  window.addEventListener("blur", () => {if(isPlayState() && holding) releaseStretch();holding = false;gameplayStretchPointerId=null;gamepadStretchDown=false;keyboardStretchKeysDown.clear();});
+  window.addEventListener("blur", () => {planeInput.ptr.clear(); planeInput.keyL = planeInput.keyR = false; if(isPlayState() && holding) releaseStretch();holding = false;gameplayStretchPointerId=null;gamepadStretchDown=false;keyboardStretchKeysDown.clear();});
 
   // COUNTDOWN_SKIP_V2_37: while 3/2/1 is visible, any fresh input jumps to GO.
   // Capture prevents the same press from also stretching, clicking UI, or triggering a second action.
@@ -14215,6 +14227,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       return;
     }
+    if(ev.code === "ArrowLeft" || ev.code === "KeyA" || ev.code === "ArrowRight" || ev.code === "KeyD"){
+      if(ev.code === "ArrowLeft" || ev.code === "KeyA") planeInput.keyL = true; else planeInput.keyR = true;
+      if(planeMode.active && isPlayState()) ev.preventDefault();
+      return;
+    }
     if(!isKeyboardStretchCode(ev.code)) return;
     ev.preventDefault();
     unlockAudio();
@@ -14226,7 +14243,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       if(canInput("menu")) { startGame(); return; }
     }
 
-    if(!canInput("game") || !isPlayState()) return;
+    if(!canInput("game") || !isPlayState() || planeMode.active) return;
     keyboardStretchKeysDown.add(ev.code);
     if(!holding && !ev.repeat){
       beginFreshStretchInput();
@@ -14237,6 +14254,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   }, {passive:false});
 
   window.addEventListener("keyup", (ev) => {
+    if(ev.code === "ArrowLeft" || ev.code === "KeyA") planeInput.keyL = false;
+    if(ev.code === "ArrowRight" || ev.code === "KeyD") planeInput.keyR = false;
     if(!isKeyboardStretchCode(ev.code)) return;
     if(isTypingTarget(ev)) return;
     ev.preventDefault();
@@ -15502,6 +15521,97 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     voltGripParticles = voltGripParticles.filter(p => p.life > 0);
   }
+  // PAPER_PLANE_V1: the card folded into a paper plane (entered/left through the plane traps).
+  // While it is a plane the stretch controls are off: hold the right half of the screen (or →/D) to
+  // bank right, the left half (or ←/A) to bank left; let go and it levels out and flies straight up.
+  // It climbs at a steady speed and bounces softly off the side walls. It keeps the card's hitbox,
+  // so every trap, the goal and the deaths treat it exactly like the player.
+  let planeMode = {active:false, bank:0, speed:135, side:170, t:0};
+  const planeInput = {ptr:new Map(), keyL:false, keyR:false};
+  function planeSteer(){
+    let l = planeInput.keyL, r = planeInput.keyR;
+    for(const v of planeInput.ptr.values()){if(v < 0) l = true; else r = true;}
+    return (r ? 1 : 0) - (l ? 1 : 0);
+  }
+  function enterPlaneMode(opts={}){
+    planeMode = {active:true, bank:0, t:0,
+      speed:Math.max(40, Math.min(600, Number(opts.speed) || 135)),
+      side:Math.max(40, Math.min(600, Number(opts.side) || 170))};
+    holding = false; gameplayStretchPointerId = null;
+    player.shrinkTimer = 0; player.shrinkTotalDuration = 0;
+    planeInput.ptr.clear();
+  }
+  function exitPlaneMode(){
+    planeMode.active = false; planeMode.bank = 0;
+    planeInput.ptr.clear();
+    holding = false;
+  }
+  function updatePlane(dt){
+    const p = planeMode;
+    p.t += dt;
+    const steer = planeSteer();
+    p.bank += (steer - p.bank)*Math.min(1, dt*(steer !== 0 ? 6.5 : 4.2));
+    player.h += (player.normalH - player.h)*Math.min(1, dt*14);
+    player.x += p.bank*p.side*dt;
+    player.baseY -= p.speed*dt;
+    const minX = player.w/2, maxX = WORLD_W - player.w/2;
+    if(player.x < minX){player.x = minX; if(p.bank < 0) p.bank = -p.bank*.45;}
+    else if(player.x > maxX){player.x = maxX; if(p.bank > 0) p.bank = -p.bank*.45;}
+    clampPlayerToWorld();
+  }
+  // Top-down paper dart, nose up, in the card's box. Banking lowers one wing (it foreshortens and
+  // falls into shade) and tilts the nose toward the turn. The card's eye rides on the fold.
+  function drawPaperPlane(x, y, w, h, s){
+    const cube = cubeSkin(), eyeTone = eyeSkin();
+    const body = cube?.body || "#111111";
+    const dark = paperIsDark(body);
+    const bank = vgClampBank(planeMode.bank);
+    const cx = x + w/2, cy = y + h/2;
+    ctx.save();
+    ctx.translate(cx, cy); ctx.rotate(bank*.32); ctx.translate(-cx, -cy);
+    const span = w*.62, noseY = y - h*.16, tailY = y + h*.92, keelY = y + h*1.02;
+    const spanL = span*(1 + .14*Math.max(0, bank) - .42*Math.max(0, -bank));
+    const spanR = span*(1 + .14*Math.max(0, -bank) - .42*Math.max(0, bank));
+    const tipY = y + h*.84;
+    // shadow on the paper below (the plane flies above the grid)
+    ctx.fillStyle = "rgba(0,0,0,.12)";
+    ctx.beginPath(); ctx.moveTo(cx + 7*s, noseY + 10*s); ctx.lineTo(cx - spanL + 7*s, tipY + 10*s); ctx.lineTo(cx + 7*s, tailY + 10*s); ctx.lineTo(cx + spanR + 7*s, tipY + 10*s); ctx.closePath(); ctx.fill();
+    // trailing air streaks off the wing tips
+    ctx.strokeStyle = dark ? "rgba(0,0,0,.18)" : "rgba(0,0,0,.12)"; ctx.lineWidth = Math.max(1, 1.2*s); ctx.lineCap = "round";
+    const fl = (Math.sin(time*9)*.5 + .5)*4*s;
+    ctx.beginPath();
+    ctx.moveTo(cx - spanL, tipY + 4*s); ctx.lineTo(cx - spanL + 2*s, tipY + 16*s + fl);
+    ctx.moveTo(cx + spanR, tipY + 4*s); ctx.lineTo(cx + spanR - 2*s, tipY + 16*s + (4*s - fl));
+    ctx.stroke();
+    const lit = paperShade(body, dark ? .2 : .12), mid = cubeBodyPaint(ctx, x, y, w, h, cube), shade = paperShade(body, dark ? -.25 : -.2);
+    const wing = (side, sp, fill) => {
+      ctx.beginPath(); ctx.moveTo(cx, noseY); ctx.lineTo(cx + side*sp, tipY); ctx.lineTo(cx + side*4*s, tailY); ctx.closePath();
+      ctx.fillStyle = fill; ctx.fill();
+    };
+    // the lowered wing is in shade, the raised one catches the light
+    wing(-1, spanL, bank < -.05 ? shade : (bank > .05 ? lit : mid));
+    wing(1, spanR, bank > .05 ? shade : (bank < -.05 ? lit : mid));
+    // keel: the folded middle seen from above, a narrow darker spine
+    ctx.fillStyle = paperShade(body, dark ? -.35 : -.3);
+    ctx.beginPath(); ctx.moveTo(cx, noseY + 2*s); ctx.lineTo(cx - 3.5*s, tailY); ctx.lineTo(cx, keelY); ctx.lineTo(cx + 3.5*s, tailY); ctx.closePath(); ctx.fill();
+    // crease lines
+    ctx.strokeStyle = dark ? "rgba(255,255,255,.22)" : "rgba(0,0,0,.16)"; ctx.lineWidth = Math.max(.8, 1*s);
+    ctx.beginPath();
+    ctx.moveTo(cx, noseY); ctx.lineTo(cx, keelY);
+    ctx.moveTo(cx - 1*s, noseY + 6*s); ctx.lineTo(cx - spanL*.55, tipY - 3*s);
+    ctx.moveTo(cx + 1*s, noseY + 6*s); ctx.lineTo(cx + spanR*.55, tipY - 3*s);
+    ctx.stroke();
+    // eye on the fold, looking where it turns
+    const ex = cx + bank*3*s, ey = y + h*.4, erx = 6.2*s, ery = 7.6*s;
+    ctx.fillStyle = eyeTone.color;
+    ctx.beginPath(); ctx.ellipse(ex, ey, erx, ery, 0, 0, Math.PI*2); ctx.fill();
+    strokeCustomEyeOutline(ctx, ex, ey, erx, ery, s, eyeTone);
+    ctx.fillStyle = "#111";
+    ctx.beginPath(); ctx.arc(ex + bank*2.6*s, ey - 2.2*s, 1.9*s, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+  function vgClampBank(v){v = Number(v) || 0; return Math.max(-1, Math.min(1, v));}
+
   // ---- FLINGER_ART_V1: cut-cardstock drawing kit (fill, crescent shade, top rim light, paper
   // grain, dark outline). Every piece goes through flingerShape so they all read as one style.
   let flingerGrainPat = null;
@@ -17338,13 +17448,14 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       updatePortalMonsterEffect(worldDt);
       const beforeRect = playerRect();
       const inputFrozenByMod = modPlayerFreezeTimer > 0;
-      if(holding && !wireEffect.postReleaseLock && !inputFrozenByMod && player.shrinkTimer <= 0 && !voltGripEffect.active && !portalIsBusy()){
+      if(planeMode.active) updatePlane(worldDt);
+      else if(holding && !wireEffect.postReleaseLock && !inputFrozenByMod && player.shrinkTimer <= 0 && !voltGripEffect.active && !portalIsBusy()){
         const requestedGrowth = player.stretchSpeed * (wireEffect.stretchMult || 1) * dt;
         const upwardWirePull = Math.max(0, -(wireEffect.framePullDelta || 0));
         const safeGrowth = Math.max(0, requestedGrowth - upwardWirePull);
         player.h = Math.min(player.maxH, player.h + safeGrowth);
       }
-      if(player.shrinkTimer > 0 && !inputFrozenByMod){
+      if(player.shrinkTimer > 0 && !inputFrozenByMod && !planeMode.active){
         const totalShrinkDuration = Math.max(.001, Number(player.shrinkTotalDuration) || player.shrinkDuration);
         player.shrinkTimer = Math.max(0, player.shrinkTimer - dt);
         const t = clamp01(1 - player.shrinkTimer / totalShrinkDuration);
@@ -23373,6 +23484,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
 
     if(state === "dying" && deathTimer > .22) return;
+    if(planeMode.active && state !== "dying"){drawPaperPlane(x, y, w, h, s); return;}
     ctx.save();
     const cube = cubeSkin(); const eyeTone = eyeSkin();
     const gripDizzy = voltGripEffect.active ? clamp01((voltGripEffect.squeeze || 0) + (voltGripEffect.phase === "launch" ? .35 : 0)) : 0;
@@ -27005,8 +27117,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   // than 33 ms still slows the game down instead of skipping, as before.
   const SIM_STEP = 1/120;
   let simAcc = 0, simPrevOk = false;
-  const simPrev = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0}, simCur = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0};
-  function simCapture(o){o.time = time; o.cameraY = cameraY; o.px = player.x; o.pb = player.baseY; o.ph = player.h; o.pw = player.w;}
+  const simPrev = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0, bk:0}, simCur = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0, bk:0};
+  function simCapture(o){o.time = time; o.cameraY = cameraY; o.px = player.x; o.pb = player.baseY; o.ph = player.h; o.pw = player.w; o.bk = planeMode.bank;}
   function drawFrameInterpolated(){
     const a = simAcc/SIM_STEP;
     if(!simPrevOk || !(a > .001) || a >= 1){drawBackground(); return;}
@@ -27015,9 +27127,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // a restart, teleport or camera snap between the two steps: show the new state as is
     if(C.time < P.time || C.time - P.time > SIM_STEP*4 || Math.abs(C.cameraY - P.cameraY) > 160 || Math.abs(C.pb - P.pb) > 160 || Math.abs(C.px - P.px) > 160 || Math.abs(C.ph - P.ph) > 160){drawBackground(); return;}
     time = P.time + (C.time - P.time)*a; cameraY = P.cameraY + (C.cameraY - P.cameraY)*a;
-    player.x = P.px + (C.px - P.px)*a; player.baseY = P.pb + (C.pb - P.pb)*a; player.h = P.ph + (C.ph - P.ph)*a; player.w = P.pw + (C.pw - P.pw)*a;
+    player.x = P.px + (C.px - P.px)*a; player.baseY = P.pb + (C.pb - P.pb)*a; player.h = P.ph + (C.ph - P.ph)*a; player.w = P.pw + (C.pw - P.pw)*a; planeMode.bank = P.bk + (C.bk - P.bk)*a;
     try{drawBackground();}
-    finally{time = C.time; cameraY = C.cameraY; player.x = C.px; player.baseY = C.pb; player.h = C.ph; player.w = C.pw;}
+    finally{time = C.time; cameraY = C.cameraY; player.x = C.px; player.baseY = C.pb; player.h = C.ph; player.w = C.pw; planeMode.bank = C.bk;}
   }
 
   // SHOW_FPS_V1 (Settings > Show FPS): frames actually drawn in the last second (counted from the
