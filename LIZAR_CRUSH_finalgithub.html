@@ -14580,11 +14580,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // throat: dark, with nested paper rings sinking away
     if(gap > .4 && opts.only !== "upper"){
       ctx.save(); gulperHolePath(cx, cy, hw, gap); ctx.clip();
-      ctx.fillStyle = "#0e0b10"; ctx.fillRect(cx - hw - 2, cy - gap - 2, hw*2 + 4, gap*2 + 4);
+      ctx.fillStyle = pal.throat; ctx.fillRect(cx - hw - 2, cy - gap - 2, hw*2 + 4, gap*2 + 4);
       for(let i=1;i<=4;i++){
         const k = 1 - i*.19, ox = Math.cos(spin + i*1.3)*hw*.05*i, oy = Math.sin(spin + i*1.3)*gap*.05*i;
-        const shade = Math.round(70 - i*13);
-        ctx.fillStyle = `rgb(${shade + 6},${shade},${shade + 8})`;
+        ctx.fillStyle = pal.throatRing(i);
         gulperHolePath(cx + ox, cy + oy, hw*k, gap*k); ctx.fill();
         ctx.strokeStyle = `rgba(255,255,255,${.22 - i*.04})`; ctx.lineWidth = Math.max(.8, 1*s);
         ctx.beginPath();
@@ -14594,8 +14593,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       // tongue on the floor of the mouth
       const tw = hw*.62, th = Math.min(gap*.55, lip*1.4);
       const tongue = () => {ctx.beginPath(); ctx.moveTo(cx - tw, cy + gap + 2); ctx.bezierCurveTo(cx - tw*.9, cy + gap - th, cx + tw*.9, cy + gap - th, cx + tw, cy + gap + 2); ctx.closePath();};
-      flingerShape(tongue, "#b3606c", pal, s, {shade:"#86414c", shadeDepth:2, noHi:false, lw:1.2});
-      ctx.strokeStyle = "rgba(60,20,30,.5)"; ctx.lineWidth = Math.max(.8, 1*s);
+      flingerShape(tongue, pal.tongue, pal, s, {shade:pal.tongueShade, shadeDepth:2, noHi:false, lw:1.2});
+      ctx.strokeStyle = pal.tongueLine; ctx.lineWidth = Math.max(.8, 1*s);
       ctx.beginPath(); ctx.moveTo(cx, cy + gap - th*.75); ctx.lineTo(cx, cy + gap); ctx.stroke();
       // small blunt teeth hanging from the upper edge
       const n = 7, tH = Math.min(gap*.42, lip*.8);
@@ -14605,7 +14604,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const top = gulperSE(cx, cy, hw, gap, Math.PI*2 - (a - Math.PI))[1];
         const wT = hw*1.64/n*.42;
         const tooth = () => {ctx.beginPath(); ctx.moveTo(x - wT, top - 2); ctx.lineTo(x - wT*.8, top + tH*.7); ctx.quadraticCurveTo(x, top + tH*1.1, x + wT*.8, top + tH*.7); ctx.lineTo(x + wT, top - 2); ctx.closePath();};
-        flingerShape(tooth, pal.tooth, pal, s, {noHi:true, shade:"#cfc9bb", shadeDepth:1, lw:1});
+        flingerShape(tooth, pal.tooth, pal, s, {noHi:true, shade:pal.toothShade, shadeDepth:1, lw:1});
       }
       ctx.restore();
     }
@@ -14655,8 +14654,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if((opts.lick || 0) > .01){
       const k = opts.lickU || 0, tx = cx - cw*.55 + k*cw*1.1, L = opts.lick;
       const tongueTip = () => {ctx.beginPath(); ctx.moveTo(tx - lip*.95*L, cy - 1); ctx.bezierCurveTo(tx - lip*.95*L, cy + lip*1.15*L, tx + lip*.95*L, cy + lip*1.15*L, tx + lip*.95*L, cy - 1); ctx.closePath();};
-      flingerShape(tongueTip, "#b3606c", pal, s, {shade:"#86414c", shadeDepth:1.6, lw:1.2});
-      ctx.strokeStyle = "rgba(60,20,30,.5)"; ctx.lineWidth = Math.max(.8, 1*s);
+      flingerShape(tongueTip, pal.tongue, pal, s, {shade:pal.tongueShade, shadeDepth:1.6, lw:1.2});
+      ctx.strokeStyle = pal.tongueLine; ctx.lineWidth = Math.max(.8, 1*s);
       ctx.beginPath(); ctx.moveTo(tx, cy); ctx.lineTo(tx, cy + lip*.6*L); ctx.stroke();
     }
   }
@@ -14775,13 +14774,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       // sliding down the Gulper's throat: dark paper rings rush outward past you
       const p = clamp01(fx.timer / Math.max(.001, (fx.cfg?.tunnelTime||.42)));
       const env = Math.sin(p*Math.PI);
-      ctx.fillStyle = `rgba(14,11,16,${.35 + env*.45})`; ctx.fillRect(0,0,W,H);
+      const tp = flingerPalette(trapMain());
+      ctx.fillStyle = rgbaHex(tp.throat, .35 + env*.45); ctx.fillRect(0,0,W,H);
       const cx = W/2, cy = H*.45, R = Math.hypot(W, H)*.6;
       for(let i=0;i<7;i++){
         const u = ((p*1.6 + i/7) % 1), k = u*u;
-        const shade = Math.round(30 + 40*(1 - u));
         ctx.globalAlpha = env*(.25 + .55*u);
-        ctx.strokeStyle = `rgb(${shade + 8},${shade},${shade + 10})`;
+        ctx.strokeStyle = paperShade(trapMain(), -.78 + .3*(1 - u));
         ctx.lineWidth = 4 + 26*k;
         gulperHolePath(cx, cy, R*k*.9 + 6, R*k*.62 + 4); ctx.stroke();
         ctx.strokeStyle = `rgba(255,255,255,${.08*u})`; ctx.lineWidth = 1.5;
@@ -15337,13 +15336,30 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     flingerGrainPat = ctx.createPattern(g, "repeat");
     return flingerGrainPat;
   }
-  function flingerPalette(main){
+  // hex version of paperShade (rgbaHex needs hex)
+  function paperShadeHex(hex, amt){
+    const c = hexToRgbObj(safeHex(hex, "#111111"));
+    const mix = (v) => Math.round(amt >= 0 ? v + (255 - v)*amt : v*(1 + amt));
+    return "#" + [mix(c.r), mix(c.g), mix(c.b)].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("");
+  }
+  // Creature palette, all derived from the trap skin (main + accent), so a skin bought in the shop
+  // recolours the whole creature: body, teeth, tongue, throat and its electricity.
+  function flingerPalette(main, accent = trapAccent()){
     const dark = paperIsDark(main);
+    const skin = {
+      E:[paperShadeHex(accent, .5), paperShadeHex(main, .38), safeHex(main, "#111111")],   // energy: light core, body, saturated glow (reads on light grounds)
+      tongue:paperShadeHex(main, .42), tongueShade:paperShadeHex(main, .2), tongueLine:rgbaHex(paperShadeHex(main, -.55), .55),
+      throat:paperShadeHex(main, -.82), throatRing:(i) => paperShade(main, -.72 + i*.06),
+      tooth:paperShadeHex(accent, .35), toothShade:paperShadeHex(accent, -.18)
+    };
+    return {...skin, ...flingerPaletteBase(main, dark)};
+  }
+  function flingerPaletteBase(main, dark){
     // the reference is a light-to-mid grey card with a near-black outline; keep that ramp for dark
     // trap skins and flip it for light ones so the creature never vanishes into its own outline
     return dark
-      ? {line:main, base:paperShade(main, .58), shade:paperShade(main, .4), hi:paperShade(main, .82), deep:paperShade(main, .22), tooth:"#f6f3ea"}
-      : {line:paperShade(main, -.82), base:paperShade(main, -.18), shade:paperShade(main, -.36), hi:paperShade(main, .25), deep:paperShade(main, -.6), tooth:"#f6f3ea"};
+      ? {line:main, base:paperShade(main, .58), shade:paperShade(main, .4), hi:paperShade(main, .82), deep:paperShade(main, .22)}
+      : {line:paperShade(main, -.82), base:paperShade(main, -.18), shade:paperShade(main, -.36), hi:paperShade(main, .25), deep:paperShade(main, -.6)};
   }
   function flingerShape(path, fill, pal, s, opt={}){
     const d = (opt.shadeDepth ?? 3.2)*s, lx = opt.lx ?? .45;
@@ -15424,7 +15440,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.beginPath(); ctx.arc(x0, y0, w0*.55, 0, Math.PI*2); ctx.fillStyle = pal.deep; ctx.fill(); ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(.9, 1.1*s); ctx.stroke();
     if(live > 0){
       ctx.save(); ctx.lineCap = "round";
-      ctx.strokeStyle = rgbaHex(TRAP_SPARK_PALETTES.electric[1], live);
+      ctx.strokeStyle = rgbaHex(pal.E[1], live);
       ctx.lineWidth = Math.max(.8, 1*s);
       ctx.setLineDash([2*s, 9*s]); ctx.lineDashOffset = -inward*time*46*s - seed*5*s;
       ctx.beginPath(); C.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
@@ -15460,7 +15476,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(let k=0;k<4;k++){
         const tx = R*(.2 + k*.17), th = R*(.16 + (k === 3 ? .04 : 0))*teeth;
         const tp = () => {ctx.beginPath(); ctx.moveTo(tx - R*.07, -R*.06); ctx.lineTo(tx, -R*.06 - th); ctx.lineTo(tx + R*.07, -R*.06); ctx.closePath();};
-        flingerShape(tp, pal.tooth, pal, s, {noHi:true, shadeDepth:1, shade:"#cfc9bb", lw:1});
+        flingerShape(tp, pal.tooth, pal, s, {noHi:true, shadeDepth:1, shade:pal.toothShade, lw:1});
       }
     }
     ctx.restore();
@@ -15483,7 +15499,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(let k=0;k<4;k++){
         const tx = R*(.12 + k*.18), th = R*(.2 + (k === 3 ? .06 : 0))*teeth*(1 - .3*strain);
         const tp = () => {ctx.beginPath(); ctx.moveTo(tx - R*.08, R*.15); ctx.lineTo(tx, R*.15 + th); ctx.lineTo(tx + R*.08, R*.15); ctx.closePath();};
-        flingerShape(tp, pal.tooth, pal, s, {noHi:true, shadeDepth:1, shade:"#cfc9bb", lw:1});
+        flingerShape(tp, pal.tooth, pal, s, {noHi:true, shadeDepth:1, shade:pal.toothShade, lw:1});
       }
     } else {
       // zigzag seam of the shut mouth
@@ -15644,7 +15660,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         for(let i=0;i<sideTips.length-1;i++){
           const a2 = sideTips[i], b2 = sideTips[i+1];
           const pts = trapBolt(a2.x, a2.y, b2.x, b2.y, (3 + c.arcIntensity*1.5 + captureBlend*3)*s, 5, i*7.3 + Math.floor(time*24)*2.1 + inward);
-          trapDrawBolt(pts, Math.max(1, 1.1*s), TRAP_SPARK_PALETTES.electric, .45 + rt.spark*.4);
+          trapDrawBolt(pts, Math.max(1, 1.1*s), pal.E, .45 + rt.spark*.4);
         }
       }
     }
@@ -15658,7 +15674,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         // lightning (glow + body + white core) so it reads on any background
         const amp = playerFxActive ? (2 + captureBlend*(8 + c.arcIntensity*5)) : (3 + rt.spark*4);
         const pts = trapBolt(a.x, a.y, b.x, b.y, amp*s, playerFxActive ? 9 : 7, i*3.1 + Math.floor(time*24)*1.7);
-        trapDrawBolt(pts, Math.max(1.4, (playerFxActive ? 1.6 + captureBlend*.8 : 1.5)*s), TRAP_SPARK_PALETTES.electric, state === "editor" ? .5 : .65 + rt.spark*.35);
+        trapDrawBolt(pts, Math.max(1.4, (playerFxActive ? 1.6 + captureBlend*.8 : 1.5)*s), pal.E, state === "editor" ? .5 : .65 + rt.spark*.35);
       }
     }
     ctx.restore();
