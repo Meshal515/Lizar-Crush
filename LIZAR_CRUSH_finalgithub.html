@@ -16598,7 +16598,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function spawnDeathParticles(type){
     // Prism Pulse draws its own sparks, exit spray and smoke in its melt death.
     if(type === "prismPulse" || type === "gate") return;
-    if(deathCulprit && ((type === "electric" && deathCulprit.type === "slider") || (type === "laser" && deathCulprit.type === "beam") || (type === "fan" && deathCulprit.type === "sideSweeper") || (type === "saw" && deathCulprit.type === "orbitSaw"))) return;
+    if(deathCulprit && ((type === "electric" && deathCulprit.type === "slider") || (type === "laser" && deathCulprit.type === "beam") || (type === "fan" && deathCulprit.type === "sideSweeper") || (type === "saw" && (deathCulprit.type === "orbitSaw" || deathCulprit.type === "twinStutterSaws")) || (type === "electric" && deathCulprit.type === "pendulumCore") || (type === "laser" && deathCulprit.type === "predictiveSniper") || type === "shockMine")) return;
     const rect = playerRect();
     if(type === "ink"){spawnInkDeathParticles();spawnInkDeathParticles();return;}
     if(type === "shockMine"){
@@ -22745,55 +22745,64 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.restore();
       return;
     } else if(deathType === "saw" && (deathCulprit?.type === "orbitSaw" || deathCulprit?.type === "twinStutterSaws") && Number.isFinite(deathImpact?.x) && Number.isFinite(deathImpact?.y)){
-      // ORBIT_SAW_DEATH_V3 (paper tear): the blade rips the sheet along its path — a jagged tear with
-      // white fibres, and a side tear that starts but never finishes, like real paper. The halves
-      // part, then float down (drag, sway, turning over); paper scraps whirl off the blade.
+      // SAW_SHRED_DEATH_V4 (paper): the blade shreds the sheet into many small, irregular scraps. The
+      // break pattern is random for every death (a jittered grid, some cells split again). The scraps
+      // burst away from where the blade bit (the nearest fastest), tumble with a spin that dies off in
+      // the air, then fall and settle at random heights. No cut lines are drawn.
       ctx.globalAlpha = 1;
       const key = deathPlayerSnapshot || deathCulprit;
       const art = trapCubeArt(key, w, h, s, cube, eyeTone, normalH, 0);
-      const imp = worldToScreen(deathImpact.x, deathImpact.y);
-      let dxs = (x + w/2) - imp.x, dys = (y + h/2) - imp.y;
-      const dl = Math.hypot(dxs, dys) || 1; dxs /= dl; dys /= dl;
-      const pxs = -dys, pys = dxs;
-      const L = (w + h)*1.2, lcx = w/2, lcy = h/2;
-      const tear = [];
-      for(let i=0;i<=16;i++){
-        const u = i/16*2 - 1;
-        const amp = (trapHash(i*7.3 + 1.1) - .5)*Math.min(w, h)*.16 + (i % 2 ? 1 : -1)*Math.min(w, h)*.03;
-        tear.push([lcx + dxs*u*L*.5 + pxs*amp, lcy + dys*u*L*.5 + pys*amp]);
-      }
-      const far = (sg) => [[tear[16][0] + pxs*L*sg, tear[16][1] + pys*L*sg], [tear[0][0] + pxs*L*sg, tear[0][1] + pys*L*sg]];
-      const toRect = (poly) => {let q = poly; q = trapClipPoly(q, -1, 0, 0); q = trapClipPoly(q, 1, 0, w); q = trapClipPoly(q, 0, -1, 0); q = trapClipPoly(q, 0, 1, h); return q;};
-      const polyA = toRect(tear.concat(far(1))), polyB = toRect(tear.concat(far(-1)));
-      const segs = (pts, upto=1) => {const out = [], n = Math.floor((pts.length - 1)*upto); for(let i=0;i<n;i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]]); return out;};
-      const tearEdges = segs(tear);
-      // the side tear into piece B, starting near the middle, stopping part-way
-      const br0 = tear[8 + Math.floor(trapHash(3.3)*3)];
-      const bdx = dxs*.4 - pxs*.92, bdy = dys*.4 - pys*.92;
-      const branch = [br0];
-      for(let i=1;i<=6;i++){
-        const u = i/6*Math.min(w, h)*.45, amp = (trapHash(i*5.9 + 4) - .5)*Math.min(w, h)*.1;
-        branch.push([br0[0] + bdx*u - bdy*amp, br0[1] + bdy*u + bdx*amp]);
-      }
-      const T = deathTimer;
-      const part = easeOutCubic(clamp01(T/.18))*7*s;
-      const TA = Math.max(0, T - .1);
-      const fA = paperFlutter(1, TA, pxs*55*s, -25*s, s, h*.55);
-      const fB = paperFlutter(6, TA, -pxs*45*s, -12*s, s, h*.55);
-      const eyeY = trapCubeEyeY(h, s, normalH);
-      const eye = () => drawDyingPlayerEye(ctx, w/2, eyeY, s, eyeTone, t, 1.2);
-      const growBranch = clamp01(T/.3);
-      if(polyB.length >= 3) drawPaperShard(art, x, y, polyB, {dx:-pxs*part + fB.dx, dy:-pys*part + fB.dy, rot:fB.rot, flip:TA > 0 ? fB.flip : 1}, {s, edges:tearEdges.concat(segs(branch, growBranch)), edge:"fiber", onTop:eye});
-      if(polyA.length >= 3) drawPaperShard(art, x, y, polyA, {dx:pxs*part + fA.dx, dy:pys*part + fA.dy, rot:fA.rot, flip:TA > 0 ? fA.flip : 1}, {s, edges:tearEdges, edge:"fiber", onTop:eye});
       const fx = trapDeathArt.fx || (trapDeathArt.fx = {});
-      // paper scraps whirled off the blade
-      const body = cube?.body || "#111111";
-      for(let i=0;i<9;i++){
-        const a = Math.atan2(pys, pxs)*(i % 2 ? 1 : -1) + (trapHash(i*4.4) - .5)*1.8;
-        const sp = (60 + trapHash(i*2.2)*90)*s;
-        const f = paperFlutter(10 + i, T, Math.cos(a)*sp, Math.sin(a)*sp - 30*s, s);
-        ctx.globalAlpha = 1 - Math.max(0, t - .6)*2.5;
-        drawPaperScrap(x + w/2 + f.dx, y + h/2 + f.dy, (1.6 + trapHash(i*7.7)*2.4)*s, f.rot*3, f.flip, body);
+      const T = deathTimer, bite = .05;
+      const eyeY = trapCubeEyeY(h, s, normalH);
+      const eye = () => drawDyingPlayerEye(ctx, w/2, eyeY, s, eyeTone, Math.min(1, t*1.5), 1.2);
+      const bx = (deathImpact.x - p.x)*s, by = (deathImpact.y - p.y)*s;
+      if(!fx.shred){
+        const R = Math.hypot(w, h);
+        const seed = Math.random()*1000;                         // a different shred every death
+        const rnd = (k) => trapHash(seed + k*7.31);
+        const cols = Math.max(3, Math.round(w/(9*s))), rows = Math.max(3, Math.round(h/(9*s)));
+        const pt = [];
+        for(let j=0;j<=rows;j++){
+          const row = [];
+          for(let i=0;i<=cols;i++){
+            const edgeX = i === 0 || i === cols, edgeY = j === 0 || j === rows;
+            const jx = edgeX ? 0 : (rnd(i*31 + j*7) - .5)*w/cols*.8, jy = edgeY ? 0 : (rnd(i*13 + j*29 + 3) - .5)*h/rows*.8;
+            row.push([i*w/cols + jx, j*h/rows + jy]);
+          }
+          pt.push(row);
+        }
+        const polys = [];
+        for(let j=0;j<rows;j++) for(let i=0;i<cols;i++){
+          const q = [pt[j][i], pt[j][i + 1], pt[j + 1][i + 1], pt[j + 1][i]];
+          const r = rnd(i*17 + j*41 + 9);
+          if(r < .35) polys.push([q[0], q[1], q[2]], [q[0], q[2], q[3]]);
+          else if(r < .6) polys.push([q[0], q[1], q[3]], [q[1], q[2], q[3]]);
+          else polys.push(q);
+        }
+        const cx0 = Math.max(0, Math.min(w, bx)), cy0 = Math.max(0, Math.min(h, by));
+        fx.shred = polys.map((poly, k) => {
+          let mx = 0, my = 0; for(const q of poly){mx += q[0]; my += q[1];} mx /= poly.length; my /= poly.length;
+          let a = Math.atan2(my - cy0, mx - cx0) + (rnd(k*5 + 1) - .5)*1.1;
+          const near = clamp01(1 - Math.hypot(mx - cx0, my - cy0)/R);
+          const sp = (110 + 260*near + rnd(k*3 + 2)*150)*s;
+          return {poly, my, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp - (60 + rnd(k*11 + 4)*110)*s,
+            spin:(rnd(k*19 + 6) - .5)*22, delay:near > .7 ? 0 : rnd(k*23 + 8)*.05,
+            floor:h - my + (4 + rnd(k*29 + 5)*26)*s, id:Math.floor(seed) + k};
+        });
+      }
+      const rect = [[0,0],[w,0],[w,h],[0,h]];
+      if(T < bite){
+        // the bite: the sheet jolts away from the blade for an instant before it comes apart
+        const ax = w/2 - bx, ay = h/2 - by, al = Math.hypot(ax, ay) || 1, k = T/bite;
+        drawPaperShard(art, x + ax/al*3*s*k + (trapHash(T*900) - .5)*2*s, y + ay/al*3*s*k, rect, {}, {s, onTop:eye});
+      } else {
+        for(const pc of fx.shred){
+          const TA = Math.max(0, T - bite - pc.delay);
+          const f = paperFlutter(pc.id, TA, pc.vx, pc.vy, s, pc.floor);
+          const spun = pc.spin*(1 - Math.exp(-2.6*TA))/2.6;
+          drawPaperShard(art, x, y, pc.poly, {dx:f.dx, dy:f.dy, rot:f.rot + spun, flip:f.flip}, {s, onTop:eye});
+        }
       }
       ctx.restore();
       return;
