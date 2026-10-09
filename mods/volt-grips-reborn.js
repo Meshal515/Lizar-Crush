@@ -46,7 +46,7 @@ const vgCfg = (o) => {
     retractTime: .28,
     grabTime: vgNum(o.grabTime, .18, .06, 1),
     squeezeTime: vgNum(o.squeezeTime, .3, .05, 2),
-    pullDown: vgNum(o.pullDown, 46, 0, 300),
+    pullDown: vgNum(o.pullDown, 80, 0, 300),
     flingHeight: vgNum(o.flingHeight, 140, 0, 4000),
     flingTime: vgNum(o.flingTime, .45, .12, 3),
     hitThickness: vgNum(o.hitThickness, 12, 4, 40),
@@ -353,7 +353,7 @@ const mod = {
   defaults: {
     side:"both", height:170, fingers:4, gap:34, reach:90,
     restTime:1.45, warnTime:.4, activeTime:1.1,
-    grabTime:.18, squeezeTime:.3, pullDown:46, flingHeight:140, flingTime:.45,
+    grabTime:.18, squeezeTime:.3, pullDown:80, flingHeight:140, flingTime:.45,
     hitThickness:12, cooldown:.5, sparkPower:1, showZone:true
   },
   settings: [
@@ -367,7 +367,7 @@ const mod = {
     {key:"activeTime", label:"Grip Time (s)", type:"number", default:1.1, step:.05, min:.1, max:8},
     {key:"grabTime", label:"Catch Time (s)", type:"number", default:.18, step:.01, min:.06, max:1},
     {key:"squeezeTime", label:"Squeeze Time (s)", type:"number", default:.3, step:.01, min:.05, max:2},
-    {key:"pullDown", label:"Pull Down (before fling)", type:"number", default:46, step:2, min:0, max:300},
+    {key:"pullDown", label:"Pull Down (before fling)", type:"number", default:80, step:2, min:0, max:300},
     {key:"flingHeight", label:"Fling Height", type:"number", default:140, step:10, min:0, max:4000},
     {key:"flingTime", label:"Fling Time (s)", type:"number", default:.45, step:.05, min:.12, max:3},
     {key:"hitThickness", label:"Arm Thickness (hit)", type:"number", default:12, step:1, min:4, max:40},
