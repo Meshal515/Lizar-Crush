@@ -12759,7 +12759,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     return .52;
   }
   function deathDuration(type){
-    if(type === "eyeBoss") return 3.7;
+    if(type === "eyeBoss") return (eyeBoss.fireAt || .42) + 3.7;
     if(type === "modTrap" && deathCulprit){
       const mod = openTrapModForObstacle(deathCulprit) || customTrapModById(deathCulprit.modId);
       const anim = resolveModDeathAnimation(mod, deathCulprit);
@@ -16359,7 +16359,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function planePrewarm(lvl=activeLevel()){
     const list = (lvl?.obstacles || []).filter(o => o && isPlaneTrapType(o.type));
     if(!list.length) return;
-    if(list.some(o => o.type === "eyeBoss")){eyeBossImg("sclera"); eyeBossImg("iris"); eyeBossImg("irisRed"); eyeBossFog(); eyeBossBeamTex(); eyeBossSunTex();}
+    if(list.some(o => o.type === "eyeBoss")){eyeBossImg("sclera"); eyeBossImg("iris"); eyeBossImg("irisRed"); eyeBossFog(); eyeBossBeamTex(); eyeBossSunTex(); eyeBossTunnelTex();}
     if(!planePrewarmCanvas){planePrewarmCanvas = document.createElement("canvas"); planePrewarmCanvas.width = planePrewarmCanvas.height = 1;}
     const old = ctx;
     ctx = planePrewarmCanvas.getContext("2d");
@@ -16657,8 +16657,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     if(name === "warn") return Math.max(.45, c.warn*(1 - .3*d));
     return c.freezeMin + r*(c.freezeMax - c.freezeMin)*(.4 + .6*d);
   }
-  function eyeBossCatch(o, reason){
+  function eyeBossCatch(o, reason, timeUp){
     if(eyeBoss.caughtT > 0) return;
+    // remember how the eye looked this instant, so the execution starts from exactly that frame
+    const ph = eyeBoss.phase, pe = time - eyeBoss.pStart, d = eyeBossDifficulty(eyeBossCfg(o));
+    eyeBoss.r0 = ph === "freeze" ? planeSm(pe/.3) : ph === "warn" ? .35*planeSm(pe/eyeBoss.pLen) : 0;
+    eyeBoss.p0 = ph === "freeze" ? .26 - .04*d : ph === "warn" ? .34 : .4 + .03*Math.sin(time*.8);
+    eyeBoss.fireAt = timeUp ? 1.5 : .42;            // caught moving: almost at once. time up: a calm stare first
     eyeBoss.caughtT = time; eyeBoss.phase = "caught";
     const pr = playerRect();
     try{noiseBurst(0, .05, .02);}catch(_e){}
@@ -16669,10 +16674,12 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       // timed punctuation of the execution (sound + one shake on impact)
       const t = deathTimer, cues = eyeBoss.cues || (eyeBoss.cues = {});
       const cue = (k, at, fn) => {if(!cues[k] && t >= at){cues[k] = 1; try{fn();}catch(_e){}}};
-      cue("charge", 1.05, () => {tone(70, 0, .95, "sawtooth", .05, 420); tone(140, .3, .7, "square", .02, 900);});
-      cue("fire", 2.0, () => {noiseBurst(0, .4, .09); tone(1200, 0, .25, "sawtooth", .05, 180);});
-      cue("hit", 2.06, () => {shake = Math.max(shake, perfShakeAmount(9));});
-      cue("fail", 3.05, () => {tone(110, 0, .7, "sine", .06, 55);});
+      const F = eyeBoss.fireAt || .42;
+      cue("stare", 0, () => {tone(52, 0, F + .2, "sine", .06, 47);});
+      cue("fire", F, () => {noiseBurst(0, .4, .09); tone(1200, 0, .25, "sawtooth", .05, 180);});
+      cue("hit", F + .05, () => {shake = Math.max(shake, perfShakeAmount(9));});
+      cue("come", F + .3, () => {tone(60, 0, 1.6, "sawtooth", .05, 520); noiseBurst(.2, 1.4, .05);});
+      cue("fail", F + 3.05, () => {tone(110, 0, .7, "sine", .06, 55);});
       return;
     }
     if(!isPlayState()) return;
@@ -16702,7 +16709,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       try{tone(220, 0, .6, "sine", .05, 440); tone(330, .15, .7, "sine", .04, 660);}catch(_e){}
       return;
     }
-    if(time - eyeBoss.t0 > c.timeLimit + 1.7){eyeBossCatch(o, "Time is up. The eye decided."); return;}
+    if(time - eyeBoss.t0 > c.timeLimit + 1.7){eyeBossCatch(o, "Time is up. The eye decided.", true); return;}
     const e = time - eyeBoss.pStart;
     if(e >= eyeBoss.pLen){
       const next = eyeBoss.phase === "intro" ? "move" : eyeBoss.phase === "move" ? "warn" : eyeBoss.phase === "warn" ? "freeze" : "move";
@@ -16817,7 +16824,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const out = {x:eyeBoss.gazeX, y:eyeBoss.gazeY}; return out;
   }
   function eyeBossBlink(){
-    // slow blinks only while it lets you move, spaced irregularly
+    return 0;   // the owner: it never blinks; only the pupil moves
     if(eyeBoss.phase !== "move") return 0;
     const ph = (time - eyeBoss.pStart);
     const at = .6 + trapHash(Math.floor(eyeBoss.pStart*10))*1.2;
@@ -16917,14 +16924,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     if(eyeBoss.o !== o){
       // the dark creeps in as you come up to it
-      if(o._eyeBeaten) return;
-      const pr = playerRect(), d = pr.y + pr.h/2 - c.bottom;
-      const B = d > 0 ? .35*(1 - planeSm(d/360)) : 0;
-      if(B <= .005) return;
-      const yb = worldToScreen(0, c.bottom + 100).y;
-      const g = ctx.createLinearGradient(0, yb, 0, yb - H*.55);
-      g.addColorStop(0, "rgba(4,4,6,0)"); g.addColorStop(1, `rgba(4,4,6,${B*2.5})`);
-      ctx.fillStyle = g; ctx.fillRect(0, 0, W, Math.max(0, yb));
       return;
     }
     if(state === "dying" && deathType === "eyeBoss") return;            // the execution draws everything
@@ -16936,26 +16935,25 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // 1) the abyss
     ctx.fillStyle = `rgba(4,4,6,${B})`; ctx.fillRect(0, 0, W, H);
     // 2) the eye, far below, behind the fog
-    const ex = W/2 + Math.sin(time*.23)*W*.01, ey = H*.3 + Math.sin(time*.31)*H*.006;
-    const R = W*.44*(1 + .03*Math.sin(time*.5));
+    const R = W*.44, ex = W/2, eyHome = H*.3;
+    const riseIn = planeSm((time - eyeBoss.t0 - .2)/1.6), sinkOut = eyeBoss.wonT > 0 ? planeSm((time - eyeBoss.wonT)/1.4) : 0;
+    const ey = eyHome + (1 - riseIn)*R*1.15 + sinkOut*R*1.15;
     const focus = ph === "freeze" ? 1 : ph === "warn" ? planeSm((time - pStart)/eyeBoss.pLen) : 0;
     const gz = eyeBossGaze(ex, ey, focus);
     const red = ph === "freeze" ? planeSm((time - pStart)/.3) : ph === "warn" ? .35*planeSm((time - pStart)/eyeBoss.pLen) : 0;
     const pupil = ph === "freeze" ? .26 - .04*d : ph === "warn" ? .34 : .4 + .03*Math.sin(time*.8);
-    const introOpen = ph === "intro" ? planeSm((time - pStart - .6)/1.0) : 1;
-    const wonOpen = eyeBoss.wonT > 0 ? 1 - planeSm((time - eyeBoss.wonT)/.7) : 1;
-    const open = Math.min(introOpen, wonOpen)*(1 - .94*eyeBossBlink());
+    const open = 1;
     const depthDim = .55;                               // seen through deep water/fog
     const halo = ctx.createRadialGradient(ex, ey, R*.6, ex, ey, R*1.6);
     halo.addColorStop(0, rgbA(col, .08*B)); halo.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
-    eyeBossDrawEye(ex, ey, R, gz.x, gz.y, red, pupil, open, B*depthDim);
+    eyeBossDrawEye(ex, ey, R, gz.x, gz.y, red, pupil, open, B*depthDim*riseIn*(1 - sinkOut));
     // 3) fog: three layers drifting at different speeds; they stir when the card moves
     const fog = eyeBossFog();
     const stir = clamp01(Math.abs((eyeBoss.lastY ?? player.baseY) - player.baseY)*.5);
     for(let L=0;L<3;L++){
       const sp = (8 + L*7)*(1 + stir*2), off = ((time*sp + L*170) % W + W) % W;
-      const yy = ey - R*(.9 - L*.55), hh = R*(1.3 + L*.25);
+      const yy = eyHome - R*(.9 - L*.55) + R*.35*(1 - riseIn), hh = R*(1.3 + L*.25 + .5*(1 - riseIn));
       ctx.globalAlpha = B*(.75 - L*.15);
       ctx.drawImage(fog, -off, yy, W, hh); ctx.drawImage(fog, W - off, yy, W, hh);
     }
@@ -17012,138 +17010,203 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
     ctx.restore();
   }
-  // THE EXECUTION (≈3.6s, then the black YOU FAILED card stays under the retry buttons)
+  // the beam seen from inside, head-on: the same stipple and hatching, streaming out of the pupil in
+  // perspective (marks stretch and grow as they come closer). Drawn in zooming layers it flies at you.
+  function eyeBossTunnelTex(){
+    return planeSprite("eb_tunnel", 512, 512, g => {
+      const c = 256;
+      for(let i=0;i<9000;i++){
+        const a = trapHash(i*1.237)*Math.PI*2, d = .04 + .96*Math.pow(trapHash(i*.611), .8), hot = trapHash(i*3.71);
+        const len = (2 + 22*d*d)*(.5 + trapHash(i*2.2)), r0 = Math.min(d*c*.9, c*.95 - len);   // never touches the sprite's edge
+        g.strokeStyle = hot > .82 ? "rgba(255,246,236,.9)" : hot > .5 ? "rgba(255,120,90,.85)" : "rgba(220,20,32,.8)";
+        g.lineWidth = .6 + 1.6*d*d; g.globalAlpha = Math.min(1, (1 - d)/.45);             // thins out toward its rim: no ring
+        g.beginPath(); g.moveTo(c + Math.cos(a)*r0, c + Math.sin(a)*r0); g.lineTo(c + Math.cos(a)*(r0 + len), c + Math.sin(a)*(r0 + len)); g.stroke();
+      }
+      g.globalAlpha = 1;
+      for(let i=0;i<160;i++){
+        const a = trapHash(i*2.93)*Math.PI*2, r0 = c*(.1 + trapHash(i*1.7)*.4), r1 = r0 + c*(.15 + trapHash(i*4.1)*.3);
+        g.strokeStyle = "rgba(200,14,26,.5)"; g.lineWidth = .8;
+        g.beginPath(); g.moveTo(c + Math.cos(a)*r0, c + Math.sin(a)*r0); g.lineTo(c + Math.cos(a)*r1, c + Math.sin(a)*r1); g.stroke();
+      }
+    });
+  }
+  // the engraved beam in perspective: a cone from the pupil (far away) to its near end (cx,cy) of width wn.
+  // The etched texture is laid on with true foreshortening (spacing shrinks toward the eye) and streams
+  // toward the viewer. Same texture, glow, core and edges as before; only the perspective is new.
+  function eyeBossCone(sx, sy, w0, cx, cy, wn, flow, al, k, fadeEnd){
+    const Lc = Math.hypot(cx - sx, cy - sy);
+    if(Lc < 2 || al <= .001) return;
+    const tex = eyeBossBeamTex(), TW = tex.width, TH = tex.height;
+    const dv = w0*Lc/Math.max(1e-3, wn - w0), thN = Math.min(wn*TH/TW, Math.max(W, H)*.8), K = (Lc + dv)*(Lc + dv)/thN;
+    const V = d => K/(Lc + dv) - K/(d + dv) - flow;
+    const wAt = d => w0 + (wn - w0)*d/Lc;
+    ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.atan2(cy - sy, cx - sx) - Math.PI/2);
+    // soft red air around it
+    const along = (rgb, a) => {                       // a colour that fades out over the beam's front when it is moving
+      if(!fadeEnd) return `rgba(${rgb},${a})`;
+      const g = ctx.createLinearGradient(0, 0, 0, Lc); g.addColorStop(0, `rgba(${rgb},${a})`); g.addColorStop(.82, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);
+      return g;
+    };
+    // soft red air around it: an angular falloff around the cone's own vanishing point, so it has no bands
+    const beta = Math.atan2(wn/2, Lc + dv), m = 3.2;
+    if(ctx.createConicGradient && beta < .45){
+      const cg = ctx.createConicGradient(0, 0, -dv), f = beta/(Math.PI*2);
+      cg.addColorStop(0, "rgba(255,20,30,0)"); cg.addColorStop(Math.max(0, .25 - f*m), "rgba(255,20,30,0)");
+      cg.addColorStop(.25 - f*1.6, `rgba(255,20,30,${.12*al})`); cg.addColorStop(.25, `rgba(255,20,30,${.3*al})`);
+      cg.addColorStop(.25 + f*1.6, `rgba(255,20,30,${.12*al})`); cg.addColorStop(Math.min(1, .25 + f*m), "rgba(255,20,30,0)"); cg.addColorStop(1, "rgba(255,20,30,0)");
+      ctx.fillStyle = cg;
+      const band = (da, db, a) => {
+        const wa = w0 + (wn - w0)*da/Lc, wb = w0 + (wn - w0)*db/Lc;
+        ctx.globalAlpha = a; ctx.beginPath(); ctx.moveTo(-wa*m/2, da); ctx.lineTo(-wb*m/2, db); ctx.lineTo(wb*m/2, db); ctx.lineTo(wa*m/2, da); ctx.closePath(); ctx.fill();
+      };
+      if(!fadeEnd) band(0, Lc, 1);
+      else {band(0, Lc*.84, 1); for(let j=0;j<4;j++) band(Lc*(.84 + j*.04), Lc*(.88 + j*.04), .8 - j*.22);}
+      ctx.globalAlpha = 1;
+    } else {
+      for(const [mm, a] of [[3.2, .05], [2.6, .05], [2.0, .06], [1.5, .07], [1.15, .07]]){
+        ctx.fillStyle = along("255,20,30", a*al);
+        ctx.beginPath(); ctx.moveTo(-w0*mm/2, 0); ctx.lineTo(-wn*mm/2, Lc); ctx.lineTo(wn*mm/2, Lc); ctx.lineTo(w0*mm/2, 0); ctx.closePath(); ctx.fill();
+      }
+    }
+    // the etched body, slice by slice
+    ctx.globalAlpha = al;
+    const N = 56;
+    let d1 = 0, v1 = V(0);
+    for(let i=1;i<=N;i++){
+      const d2 = Lc*Math.pow(i/N, 1.4), v2 = V(d2), span = v2 - v1, w = wAt((d1 + d2)/2), hh = d2 - d1 + .7;
+      ctx.globalAlpha = al*(fadeEnd ? Math.min(1, (1 - d1/Lc)/.18) : 1);     // a soft front, never a cut edge
+      if(span >= 1) ctx.drawImage(tex, 0, 0, TW, TH, -w/2, d1, w, hh);
+      else if(span > 1e-5){
+        const a = v1 - Math.floor(v1);
+        if(a + span <= 1) ctx.drawImage(tex, 0, a*TH, TW, Math.max(.5, span*TH), -w/2, d1, w, hh);
+        else {
+          const f = (1 - a)/span, dm = d1 + (d2 - d1)*f;
+          ctx.drawImage(tex, 0, a*TH, TW, Math.max(.5, (1 - a)*TH), -w/2, d1, w, dm - d1 + .7);
+          ctx.drawImage(tex, 0, 0, TW, Math.max(.5, (a + span - 1)*TH), -w/2, dm, w, d2 - dm + .7);
+        }
+      }
+      d1 = d2; v1 = v2;
+    }
+    // etched edges along the true cone
+    ctx.globalAlpha = al; ctx.strokeStyle = along("255,40,50", .7); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-w0*.44, 0); ctx.lineTo(-wn*.44, Lc); ctx.moveTo(w0*.44, 0); ctx.lineTo(wn*.44, Lc); ctx.stroke();
+    // white-hot core: one fine bright etched line that widens with the cone
+    const steps = 22, q = Math.floor(k*24)*7;
+    ctx.fillStyle = along("255,248,240", .95);
+    ctx.beginPath();
+    for(let i=0;i<=steps;i++){const d = Lc*i/steps, w = wAt(d); ctx.lineTo((trapHash(i + q) - .5)*w*.04 - Math.max(.5, w*.0175), d);}
+    for(let i=steps;i>=0;i--){const d = Lc*i/steps, w = wAt(d); ctx.lineTo((trapHash(i + q) - .5)*w*.04 + Math.max(.5, w*.0175), d);}
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  // the whole screen inside the beam: a hot core on the pupil and the etched light streaming past you
+  function eyeBossTunnel(cx, cy, al, k){
+    if(al <= .001) return;
+    const D = Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy))*1.05;
+    ctx.save(); ctx.globalAlpha = al;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, D);
+    g.addColorStop(0, "rgba(255,248,240,1)"); g.addColorStop(.12, "rgba(255,190,150,1)"); g.addColorStop(.35, "rgba(240,60,52,1)"); g.addColorStop(1, "rgba(150,8,18,1)");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    const tex = eyeBossTunnelTex();
+    for(let j=0;j<4;j++){
+      const f = (k*.7 + j/4) % 1, rr = D*(.35 + 1.65*f*f);              // accelerating outward: it is coming at you
+      ctx.globalAlpha = al*Math.min(1, f*4)*(1 - f)*1.3;
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(j*1.9); ctx.drawImage(tex, -rr, -rr, rr*2, rr*2); ctx.restore();
+    }
+    ctx.restore();
+  }
+  // THE EXECUTION. Caught moving: everything else vanishes and it fires almost at once. Time up: it stares,
+  // calm, then fires without warning. The eye never moves, grows or blinks; only the pupil turns. The beam
+  // burns the card, then turns toward the viewer and comes, and comes, until it is all you can see.
   function eyeBossExecution(c){
-    const t = deathTimer, s = worldToScreen(0, 0).s;
+    const t = deathTimer, s = worldToScreen(0, 0).s, F = eyeBoss.fireAt || .4, k = t - F;
     const snap = deathPlayerSnapshot || playerRect();
     const pr = {x:snap.x, y:snap.y, w:snap.w, h:snap.h};
     const p0 = worldToScreen(pr.x, pr.y), pw = pr.w*s, ph = pr.h*s, pcx = p0.x + pw/2, pcy = p0.y + ph/2;
     const red = [255, 38, 44];
     ctx.save();
-    // 1) detection: hard red flash, pupil snaps shut (drawn with the eye below)
-    // 2) reality collapses: the glass floor loses its light and falls away around the card
-    const collapse = clamp01((t - .3)/.9);
-    const voidA = planeSm((t - .25)/.75);
-    ctx.fillStyle = `rgba(4,4,6,${Math.max(voidA, .92)})`; ctx.fillRect(0, 0, W, H);
-    if(collapse < 1){
-      eyeBossFloor(1 - planeSm((t - .2)/.2)*.4, red, 0, .8*(1 - collapse), Math.max(.001, collapse), pcx, pcy);
-    }
-    // 3) the eye rises from beneath the card (it was there all along)
-    const rise = planeSm((t - .9)/1.0);
-    const ex = W/2 + (pcx - W/2)*rise, ey = H*.3 + (pcy + ph*.9 + H*.22 - H*.3)*rise;
-    const R = W*.44*(1 + .55*rise);
-    const charge = planeSm((t - 1.05)/.95);
-    const glowA = .25 + .75*charge;
-    const halo = ctx.createRadialGradient(ex, ey, R*.4, ex, ey, R*1.9);
-    halo.addColorStop(0, `rgba(200,10,20,${.45*glowA})`); halo.addColorStop(1, "rgba(80,0,8,0)");
+    ctx.fillStyle = "rgb(4,4,6)"; ctx.fillRect(0, 0, W, H);
+    // the eye, exactly where it was
+    const R = W*.44, ex = W/2, riseIn = planeSm((time - eyeBoss.t0 - .2)/1.6), ey = H*.3 + (1 - riseIn)*R*1.15;
+    const clear = planeSm(t/.35);                                   // the floor and the fog are gone
+    const redK = 1 - (1 - (eyeBoss.r0 || 0))*(1 - planeSm(t/.45));
+    const halo = ctx.createRadialGradient(ex, ey, R*.6, ex, ey, R*1.6);
+    const stare = k < 0 ? planeSm(t/F) : 1;                          // the calm stare slowly fills with red light
+    halo.addColorStop(0, `rgba(200,10,20,${.08 + .14*redK + .16*stare*(.8 + .2*Math.sin(t*2.6))})`); halo.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
-    const eyeFade = 1 - planeSm((t - 2.6)/.8);
-    const pupil = t < .3 ? .4 - .3*planeSm(t/.12) : .1 + .22*planeSm((t - 1.9)/.12);
-    eyeBossDrawEye(ex, ey, R, 0, -.35*rise, Math.min(1, .6 + charge), pupil, 1, (.55 + .45*rise)*eyeFade);
-    // the fog it was hiding in tears away as it rises
-    const fogA = 1 - planeSm((t - .7)/.9);
-    if(fogA > .01){
+    const gz = eyeBossGaze(ex, ey, 1), turn = planeSm((k - .5)/1.2);
+    const gx = gz.x*(1 - turn), gy = gz.y*(1 - turn);
+    const p0p = eyeBoss.p0 || .3;
+    const pupil = k < 0 ? p0p + (.16 - p0p)*planeSm(t/F) : .16 + .06*planeOut3(k/.08);
+    eyeBossDrawEye(ex, ey, R, gx, gy, redK, pupil, 1, (.55 + .13*clear)*riseIn*(1 - planeSm((k - 2.75)/.5)));
+    const ix = ex + gx*R*.3, iy = ey + gy*R*.3;
+    if(clear < 1){
       const fog = eyeBossFog();
       for(let L=0;L<3;L++){
-        const off = ((time*(40 + L*25) + L*170) % W + W) % W, yy = H*.3 - W*.44*(.9 - L*.55), hh = W*.44*(1.3 + L*.25);
-        ctx.globalAlpha = fogA*(.75 - L*.15);
-        ctx.drawImage(fog, -off, yy - rise*H*.1*(L + 1), W, hh); ctx.drawImage(fog, W - off, yy - rise*H*.1*(L + 1), W, hh);
+        const off = ((time*(8 + L*7) + L*170) % W + W) % W, yy = H*.3 - R*(.9 - L*.55) + R*.35*(1 - riseIn), hh = R*(1.3 + L*.25 + .5*(1 - riseIn));
+        ctx.globalAlpha = (1 - clear)*(.75 - L*.15);
+        ctx.drawImage(fog, -off, yy, W, hh); ctx.drawImage(fog, W - off, yy, W, hh);
       }
       ctx.globalAlpha = 1;
+      eyeBossFloor(1 - clear, red, 0, .8, 0, pcx, pcy);
     }
-    // energy gathering into the pupil
-    if(charge > 0 && t < 2.05){
-      const IRp = R*.475*pupil;
-      for(let k=0;k<4;k++){
-        const u = ((t*1.6 + k*.25) % 1);
-        ctx.strokeStyle = `rgba(255,80,60,${(1 - u)*.6*charge})`; ctx.lineWidth = Math.max(1.5, 3*s*(1 - u));
-        ctx.beginPath(); ctx.arc(ex, ey - R*.35*rise*.3, IRp + (1 - u)*R*.9, 0, Math.PI*2); ctx.stroke();
-      }
-    }
-    // the card, still there in the void, lit red from below
-    const vapor = clamp01((t - 2.05)/.35);
+    // the card, alone in the dark, lit red from below
+    const vapor = clamp01((k - .04)/.32);
     if(vapor < 1){
       ctx.globalAlpha = 1 - vapor;
       const cube = cubeSkin();
       try{drawPaperBody(ctx, p0.x, p0.y, pw, ph, s, cube, player.normalH, {flap:1, wob:0, bend:0});}catch(_e){ctx.fillStyle = cube.body || "#111"; ctx.fillRect(p0.x, p0.y, pw, ph);}
-      const eyeTone = eyeSkin(); ctx.fillStyle = eyeTone.color; ctx.beginPath(); ctx.ellipse(pcx, p0.y + Math.min(ph*.48, 23*s), 7.5*s, 8*s*(t < .3 ? 1.25 : 1), 0, 0, Math.PI*2); ctx.fill();
+      const eyeTone = eyeSkin(); ctx.fillStyle = eyeTone.color; ctx.beginPath(); ctx.ellipse(pcx, p0.y + Math.min(ph*.48, 23*s), 7.5*s, 8*s*(1 + .25*(1 - planeSm(t/.3))), 0, 0, Math.PI*2); ctx.fill();
       ctx.fillStyle = "#111"; ctx.beginPath(); ctx.arc(pcx, p0.y + Math.min(ph*.48, 23*s), 1.4*s, 0, Math.PI*2); ctx.fill();
-      ctx.globalAlpha = (1 - vapor)*(.15 + .55*charge);
+      ctx.globalAlpha = (1 - vapor)*(.2 + .5*redK);
       const lg = ctx.createLinearGradient(0, p0.y + ph, 0, p0.y);
       lg.addColorStop(0, "rgba(255,40,40,.9)"); lg.addColorStop(1, "rgba(255,40,40,0)");
       ctx.fillStyle = lg; ctx.fillRect(p0.x, p0.y, pw, ph);
       ctx.globalAlpha = 1;
     }
-    // 4) the laser from below: an engraved beam, in the same etched language as the eye
-    const beamOn = t >= 1.98 && t < 2.8;
-    if(beamOn){
-      const k = t - 1.98, al = k < .5 ? 1 : 1 - planeSm((k - .5)/.3);
-      const sx = ex, sy = ey - R*.35*rise*.3;
-      const grow = planeOut3(k/.07), thin = 1 - .45*planeSm((k - .35)/.45);
-      const bw = Math.max(10, R*.24)*grow*thin;                       // beam width in px
-      const ang = Math.atan2(pcy - sy, pcx - sx);
-      const len = Math.hypot(W, H)*1.2;                               // runs through the card and off screen
-      ctx.save(); ctx.translate(sx, sy); ctx.rotate(ang - Math.PI/2);
-      // soft red air around it (one wide, faint glow)
-      const gw = bw*3.2, gg = ctx.createLinearGradient(-gw, 0, gw, 0);
-      gg.addColorStop(0, "rgba(255,20,30,0)"); gg.addColorStop(.5, `rgba(255,20,30,${.32*al})`); gg.addColorStop(1, "rgba(255,20,30,0)");
-      ctx.fillStyle = gg; ctx.fillRect(-gw, 0, gw*2, len);
-      // the etched body: stipple + hatching texture streaming outward
-      const tex = eyeBossBeamTex(), th = bw*tex.height/tex.width, flow = (k*2.4*th) % th;
-      ctx.globalAlpha = al;
-      for(let y = -flow; y < len; y += th) ctx.drawImage(tex, -bw/2, y, bw, th);
-      // white-hot core: the texture's dense stipple + one fine bright etched line
-      ctx.strokeStyle = "rgba(255,248,240,.95)"; ctx.lineWidth = Math.max(1, bw*.035);
-      ctx.beginPath(); ctx.moveTo(0, 0);
-      for(let y = 0; y < len; y += 18) ctx.lineTo((trapHash(Math.floor(y/18) + Math.floor(k*24)*7) - .5)*bw*.04, y);
-      ctx.stroke();
-      ctx.restore();
-      // engraved sunbursts at the pupil and where it hits the card
-      const sun = eyeBossSunTex();
-      const sr = bw*(2.4 + .4*Math.sin(k*40))*grow;
-      ctx.globalAlpha = al;
-      ctx.save(); ctx.translate(sx, sy); ctx.rotate(k*.6); ctx.drawImage(sun, -sr, -sr, sr*2, sr*2); ctx.restore();
-      if(k > .06){
-        const hr = bw*(2 + 1.2*planeOut3((k - .06)/.2))*(1 - .5*planeSm((k - .3)/.4));
+    // the laser: full from its first frame, a cone from the pupil to the card, then it turns to you and comes
+    if(k >= 0){
+      const w0 = Math.max(4*s, R*.475*.22*1.5), wc = Math.max(pw*2, w0*2.4);
+      // it comes at you: the cone runs on past the card and opens up as its near end reaches the viewer
+      const come = planeSm((k - .3)/1.4);
+      const L1 = Math.max(1, (H*1.08 - iy)/Math.max(1, pcy - iy));        // far enough to leave the screen
+      const reach = 1 + (L1 - 1)*planeSm((k - .26)/.5), wn = wc*reach*Math.pow(H*3.2/(wc*L1), come);
+      const cx = ix + (pcx - ix)*reach, cy = iy + (pcy - iy)*reach;
+      const al = 1 - planeSm((k - 1.95)/.6);                           // then the light dies down, calmly
+      const inside = planeSm((k - 1.05)/.6);                           // you are inside the beam now
+      eyeBossCone(ix, iy, w0, cx, cy, wn, k*2.4, al*(1 - inside), k, k > .2);
+      eyeBossTunnel(ix, iy, al*inside, k);
+      // engraved sunbursts at the pupil and on the card
+      const sun = eyeBossSunTex(), grow = planeOut3(k/.07);
+      const sr = R*.3*(1 + .08*Math.sin(k*40))*grow;
+      ctx.globalAlpha = al*(1 - .6*come);
+      ctx.save(); ctx.translate(ix, iy); ctx.rotate(k*.6); ctx.drawImage(sun, -sr, -sr, sr*2, sr*2); ctx.restore();
+      const hitA = 1 - planeSm((k - .35)/.35);
+      if(hitA > 0){
+        const hr = wc*(2 + 1.2*planeOut3(k/.2));
+        ctx.globalAlpha = al*hitA;
         ctx.save(); ctx.translate(pcx, pcy); ctx.rotate(-k*.8); ctx.drawImage(sun, -hr, -hr, hr*2, hr*2); ctx.restore();
       }
       ctx.globalAlpha = 1;
-      if(k < .1){ctx.fillStyle = `rgba(255,236,226,${.5*(1 - k/.1)})`; ctx.fillRect(0, 0, W, H);}
-    }
-    // vapor: hot flecks and steam leaving the card
-    if(t >= 2.05 && t < 3.3){
-      const k = t - 2.05;
-      for(let i=0;i<40;i++){
-        const a = -Math.PI/2 + (trapHash(i*3.1) - .5)*2.6, sp = (60 + trapHash(i*1.7)*160)*s;
-        const life = .5 + trapHash(i*2.3)*.7, u = clamp01(k/life);
-        if(u >= 1) continue;
-        const x = pcx + (trapHash(i*5.3) - .5)*pw + Math.cos(a)*sp*k, y = pcy + (trapHash(i*7.1) - .5)*ph + Math.sin(a)*sp*k - k*k*40*s;
-        ctx.globalAlpha = 1 - u;
-        ctx.fillStyle = i % 3 ? "#ffb070" : "#fff1e0";
-        ctx.beginPath(); ctx.arc(x, y, (1 + trapHash(i)*2.2)*s*(1 - u*.5), 0, Math.PI*2); ctx.fill();
+      // paper flecks burning off the card
+      if(k < 1.2){
+        for(let i=0;i<40;i++){
+          const a = -Math.PI/2 + (trapHash(i*3.1) - .5)*2.6, sp = (60 + trapHash(i*1.7)*160)*s;
+          const life = .5 + trapHash(i*2.3)*.6, u = clamp01((k - .04)/life);
+          if(u <= 0 || u >= 1) continue;
+          const kk = k - .04, x = pcx + (trapHash(i*5.3) - .5)*pw + Math.cos(a)*sp*kk, y = pcy + (trapHash(i*7.1) - .5)*ph + Math.sin(a)*sp*kk - kk*kk*40*s;
+          ctx.globalAlpha = (1 - u)*al;
+          ctx.fillStyle = i % 3 ? "#ffb070" : "#fff1e0";
+          ctx.beginPath(); ctx.arc(x, y, (1 + trapHash(i)*2.2)*s*(1 - u*.5), 0, Math.PI*2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
+      if(k < .12){ctx.fillStyle = `rgba(255,236,226,${.55*(1 - k/.12)})`; ctx.fillRect(0, 0, W, H);}
     }
-    // 5) smoke swallows the screen, a last red flash inside, then the black card
-    const sm = planeSm((t - 2.2)/1.0);
-    if(sm > 0){
-      for(let i=0;i<18;i++){
-        const a = trapHash(i*2.7)*Math.PI*2, d = sm*Math.max(W, H)*(.15 + trapHash(i*1.9)*.65);
-        const x = pcx + Math.cos(a)*d, y = pcy + Math.sin(a)*d*.8 - sm*H*.08;
-        const rr = (H*.14 + trapHash(i*4.4)*H*.16)*(.35 + sm*1.5);
-        ctx.globalAlpha = Math.min(1, sm*1.5);
-        const sg = ctx.createRadialGradient(x, y, rr*.15, x, y, rr);
-        sg.addColorStop(0, i % 3 ? "rgba(30,26,30,.95)" : "rgba(60,22,26,.9)"); sg.addColorStop(.6, "rgba(20,18,22,.75)"); sg.addColorStop(1, "rgba(14,12,16,0)");
-        ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI*2); ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-      const flash = t > 2.7 && t < 3.0 ? Math.sin((t - 2.7)/.3*Math.PI) : 0;
-      if(flash > 0){const fg = ctx.createRadialGradient(pcx, pcy, 0, pcx, pcy, H*.5); fg.addColorStop(0, `rgba(255,30,40,${.45*flash})`); fg.addColorStop(1, "rgba(255,30,40,0)"); ctx.fillStyle = fg; ctx.fillRect(0, 0, W, H);}
-    }
-    const black = planeSm((t - 2.9)/.4);
+    const black = planeSm((k - 2.85)/.45);
     if(black > 0){ctx.fillStyle = `rgba(3,3,4,${black})`; ctx.fillRect(0, 0, W, H);}
     // YOU FAILED
-    const tx = clamp01((t - 3.05)/.55);
+    const tx = clamp01((k - 3.05)/.55);
     if(tx > 0){
       const e = planeOut3(tx);
       const fs = Math.round(Math.min(W*.095, 40*s));
@@ -17153,8 +17216,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.globalAlpha = e;
       ctx.fillStyle = "rgba(255,30,40,.18)"; ctx.fillText("YOU FAILED", 0, fs*.06);
       ctx.fillStyle = "#f4f1ea"; ctx.fillText("YOU FAILED", 0, 0);
-      // a thin red light sweeping across the letters
-      const sweep = ((t - 3.05)*.9) % 1.6 - .3;
+      const sweep = ((k - 3.05)*.9) % 1.6 - .3;
       ctx.globalAlpha = e*.8; ctx.fillStyle = "rgba(255,40,50,.85)";
       ctx.fillRect(-W*.4 + sweep*W*.8, fs*.62, W*.1, Math.max(2, 2*s));
       try{ctx.letterSpacing = "0px";}catch(_e){}
