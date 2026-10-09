@@ -13035,6 +13035,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function resetLevel(keepMenu = true){
     resetVoidseamEscapeRuntime();
     exitPlaneMode();
+    exitSplitMode(false);
     planeFoldFx = {active:false};
     planeSmoke = {active:false, t0:0, tSwap:-1};
     const lvl = activeLevel();
@@ -14350,6 +14351,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   mainMenuBtn.addEventListener("click", () => {if(canInput("overlay")){clearStatusCardMode();goMainMenu();}});
 
   function releaseStretch(){
+    if((splitMode.active && splitMode.morphDir > 0) || planeMode.active || planeFoldFx.active){holding = false; return;}   // gem / plane: letting go is not a stretch release
     const releasedUnderWire = !!(wireEffect.active || wireEffect.strength > .12 || pendingWireRelease > 0);
     // A wire-assisted release must stay released until a genuinely NEW input-down.
     // This prevents the old touch/hold state from re-arming after the collapse animation.
@@ -15537,6 +15539,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     return (r ? 1 : 0) - (l ? 1 : 0);
   }
   function enterPlaneMode(opts={}){
+    if(typeof splitMode !== "undefined" && splitMode.active) exitSplitMode(false);
     planeMode = {active:true, bank:0, t:0,
       speed:Math.max(40, Math.min(600, Number(opts.speed) || 135)),
       side:Math.max(40, Math.min(600, Number(opts.side) || 170))};
@@ -16355,6 +16358,239 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     try{for(const o of list){try{PLANE_TRAPS[o.type].draw(o);}catch(_e){}}}
     finally{ctx = old;}
   }
+
+  // =====================================================================================
+  // SPLIT_MODE_V1: the card becomes a cardboard gem (through a Split Door). The gem climbs on
+  // its own. Hold = it splits down the middle and the two halves slide apart (up to the door's
+  // Split Width); let go = they slide back and snap together. Anything that touches a half kills
+  // it, so a spike in the middle must pass BETWEEN the halves, and the halves must be able to
+  // close again: if the spike is still between them when they close, they hit it and you lose.
+  // The plain side walls only stop a half (they never kill).
+  // =====================================================================================
+  let splitMode = {active:false, open:0, target:0, speed:130, gap:80, morph:0, morphDir:0, snapT:-9, wasOpen:false};
+  function splitGemSize(){const out = {w:player.normalW || player.w || 46, h:(player.normalH || 46)*1.12}; return out;}
+  function enterSplitMode(opts={}){
+    if(planeMode.active) exitPlaneMode();
+    splitMode = {active:true, open:0, target:0, morph:splitMode.morph || 0, morphDir:1, snapT:-9, wasOpen:false,
+      speed:planeNum(opts.speed, 130, 50, 400), gap:planeNum(opts.gap, 80, 30, 200), openRate:planeNum(opts.openRate, 1, .4, 3)};
+    holding = false; gameplayStretchPointerId = null;
+    player.shrinkTimer = 0; player.shrinkTotalDuration = 0;
+  }
+  function exitSplitMode(smooth=true){
+    splitMode.target = 0;
+    if(!smooth){splitMode = {active:false, open:0, target:0, speed:130, gap:80, morph:0, morphDir:0, snapT:-9, wasOpen:false}; return;}
+    splitMode.morphDir = -1;   // keeps drawing the gem melting back into the card, then turns off
+  }
+  // how far each half is pushed out from the centre line (world units), walls respected
+  function splitHalfOffset(){
+    const sz = splitGemSize(), hw = sz.w/2;
+    const want = planeSm(splitMode.open)*splitMode.gap/2;
+    const out = {left:Math.min(want, Math.max(0, player.x - hw)), right:Math.min(want, Math.max(0, WORLD_W - player.x - hw))};
+    return out;
+  }
+  function splitPieceRects(){
+    const r = playerRect(), off = splitHalfOffset(), half = r.w/2;
+    const L = {x:r.x - off.left, y:r.y, w:half, h:r.h}, R = {x:r.x + half + off.right, y:r.y, w:half, h:r.h};
+    const out = [L, R];
+    return out;
+  }
+  function splitIsOpen(){return splitMode.active && splitMode.open > 0;}
+  function updateSplit(dt){
+    const m = splitMode;
+    m.target = holding ? 1 : 0;
+    // a fixed-length slide (out .13s, back .15s), eased at both ends where it is drawn/tested
+    const step = dt*(m.openRate || 1)/(m.target > m.open ? .13 : .15);
+    m.open = m.target > m.open ? Math.min(m.target, m.open + step) : Math.max(m.target, m.open - step);
+    if(m.open > .5) m.wasOpen = true;
+    if(m.wasOpen && m.open <= 0){
+      m.wasOpen = false; m.snapT = time;
+      try{tone(900, 0, .05, "triangle", .03, 1300);}catch(_e){}
+    }
+    player.h += (player.normalH - player.h)*Math.min(1, dt*14);
+    player.baseY -= m.speed*dt;
+    clampPlayerToWorld();
+  }
+  function splitStepMorph(dt){
+    const m = splitMode;
+    if(m.morphDir > 0) m.morph = Math.min(1, m.morph + dt/.38);
+    else if(m.morphDir < 0){
+      m.morph = Math.max(0, m.morph - dt/.38);
+      if(m.morph <= 0){splitMode = {active:false, open:0, target:0, speed:130, gap:80, morph:0, morphDir:0, snapT:-9, wasOpen:false};}
+    }
+  }
+  // collisions while split: each half is tested on its own
+  function splitCheckCollisions(){
+    for(const r of splitPieceRects()){
+      checkCollisions(r, r);
+      if(!isPlayState()) return;
+    }
+  }
+  // ---- drawing: a cardboard gem in the player's colours ----
+  // 8 outline points, card -> gem, in units of the box (x: -.5..+.5, y: -.5..+.5)
+  const SPLIT_CARD_PTS = [[-.5,-.5],[0,-.5],[.5,-.5],[.5,0],[.5,.5],[0,.5],[-.5,.5],[-.5,0]];
+  const SPLIT_GEM_PTS = [[-.3,-.44],[0,-.44],[.3,-.44],[.52,-.14],[.26,.18],[0,.52],[-.26,.18],[-.52,-.14]];
+  function splitDrawHalf(cx, cy, W, H, side, m, cut, s, col){
+    // side -1 = left half, +1 = right half; draws the gem facets of that half + the cut face
+    const P = (i) => {const a = SPLIT_CARD_PTS[i], b = SPLIT_GEM_PTS[i]; const out = [cx + (a[0] + (b[0] - a[0])*m)*W, cy + (a[1] + (b[1] - a[1])*m)*H]; return out;};
+    const topY = P(1)[1], botY = P(5)[1];
+    const pts = side < 0 ? [P(1), P(5), P(6), P(7), P(0)] : [P(1), P(2), P(3), P(4), P(5)];
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath();
+    ctx.fillStyle = col.mid; ctx.fill();
+    if(m > .02){
+      // facets: crown (top band) lit, pavilion lower facets shaded; fade in with the morph
+      ctx.globalAlpha = m;
+      const girdleY = P(3)[1];
+      const tbl = side < 0 ? P(0) : P(2), edge = side < 0 ? P(7) : P(3), low = side < 0 ? P(6) : P(4), bot = P(5);
+      const midTop = [cx, topY], midGirdle = [cx + side*W*.16, girdleY];
+      ctx.fillStyle = col.lit;
+      ctx.beginPath(); ctx.moveTo(midTop[0], midTop[1]); ctx.lineTo(tbl[0], tbl[1]); ctx.lineTo(edge[0], edge[1]); ctx.lineTo(midGirdle[0], midGirdle[1]); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = col.top;
+      ctx.beginPath(); ctx.moveTo(midTop[0], midTop[1]); ctx.lineTo(midGirdle[0], midGirdle[1]); ctx.lineTo(cx, girdleY); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = col.shade;
+      ctx.beginPath(); ctx.moveTo(edge[0], edge[1]); ctx.lineTo(low[0], low[1]); ctx.lineTo(bot[0], bot[1]); ctx.lineTo(midGirdle[0], midGirdle[1]); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = col.deep;
+      ctx.beginPath(); ctx.moveTo(midGirdle[0], midGirdle[1]); ctx.lineTo(bot[0], bot[1]); ctx.lineTo(cx, girdleY); ctx.closePath(); ctx.fill();
+      // girdle and facet creases
+      ctx.strokeStyle = col.crease; ctx.lineWidth = Math.max(.8, 1*s);
+      ctx.beginPath(); ctx.moveTo(edge[0], edge[1]); ctx.lineTo(cx, girdleY); ctx.moveTo(midTop[0], midTop[1]); ctx.lineTo(midGirdle[0], midGirdle[1]); ctx.lineTo(bot[0], bot[1]); ctx.stroke();
+      // rim light along the upper edge
+      ctx.strokeStyle = col.rim; ctx.lineWidth = Math.max(1, 1.3*s);
+      ctx.beginPath(); ctx.moveTo(midTop[0], midTop[1] + .6*s); ctx.lineTo(tbl[0], tbl[1] + .6*s); ctx.lineTo(edge[0], edge[1]); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    if(cut > .02){
+      // the cut face: raw cardboard core with corrugation, shown on the inner edge of each half
+      const fw = Math.max(1.5, 3.2*s)*cut;
+      const x0 = side < 0 ? cx - fw : cx;
+      ctx.fillStyle = col.core; ctx.fillRect(x0, topY, fw, botY - topY);
+      ctx.strokeStyle = col.coreLine; ctx.lineWidth = Math.max(.6, .8*s);
+      ctx.beginPath();
+      for(let y = topY + 2*s; y < botY - 2*s; y += 4*s){ctx.moveTo(x0, y); ctx.lineTo(x0 + fw, y + 2*s);}
+      ctx.stroke();
+    }
+  }
+  function splitColors(){
+    const cube = cubeSkin(), body = cube?.body || "#111111", dark = paperIsDark(body);
+    const t = (k) => paperShade(body, dark ? k : -k*.8);
+    const out = {mid:t(0), lit:t(.16), top:t(.28), shade:t(-.16), deep:t(-.3),
+      crease:dark ? "rgba(255,255,255,.18)" : "rgba(0,0,0,.14)", rim:dark ? "rgba(255,255,255,.3)" : "rgba(255,255,255,.55)",
+      core:"#c9a77c", coreLine:"rgba(90,60,30,.35)"};
+    return out;
+  }
+  function drawSplitGem(x, y, w, h, s){
+    const m = planeSm(splitMode.morph), col = splitColors(), eyeTone = eyeSkin();
+    const sz = splitGemSize();
+    const W = (w + (sz.w*s - w)*m), H = (h + (sz.h*s - h)*m);
+    const cx = x + w/2, cy = y + h/2;
+    const off = splitHalfOffset();
+    const open = splitMode.open;
+    // the snap: a short squash when the halves click back together
+    const snap = Math.max(0, 1 - (time - splitMode.snapT)/.16);
+    ctx.save();
+    if(snap > 0){ctx.translate(cx, cy); ctx.scale(1 + .08*snap, 1 - .07*snap); ctx.translate(-cx, -cy);}
+    // soft shadow
+    ctx.fillStyle = "rgba(0,0,0,.14)";
+    ctx.beginPath(); ctx.ellipse(cx + 3*s, cy + H*.42 + 4*s, W*.42 + (off.left + off.right)*s*.5, H*.08, 0, 0, Math.PI*2); ctx.fill();
+    const cut = clamp01(open*3);
+    ctx.save(); ctx.translate(-off.left*s, 0); splitDrawHalf(cx, cy, W, H, -1, m, cut, s, col); ctx.restore();
+    ctx.save(); ctx.translate(off.right*s, 0); splitDrawHalf(cx, cy, W, H, 1, m, cut, s, col); ctx.restore();
+    // the eye rides the cut: each half keeps its half of the eye
+    const ey = cy - H*(.02 + .05*m), erx = 6.6*s, ery = 8.4*s;
+    for(const sd of [-1, 1]){
+      const dx = sd < 0 ? -off.left*s : off.right*s;
+      ctx.save(); ctx.translate(dx, 0);
+      ctx.beginPath();
+      if(sd < 0) ctx.ellipse(cx, ey, erx, ery, 0, Math.PI*.5, Math.PI*1.5, false); else ctx.ellipse(cx, ey, erx, ery, 0, -Math.PI*.5, Math.PI*.5, false);
+      ctx.closePath(); ctx.fillStyle = eyeTone.color; ctx.fill();
+      // pupil: whole when closed, a half on each side when split (looks funny, reads clearly)
+      ctx.fillStyle = eyeTone.pupil || "#111";
+      ctx.beginPath();
+      const pr = 2.1*s;
+      if(sd < 0) ctx.arc(cx, ey - 1*s, pr, Math.PI*.5, Math.PI*1.5, false); else ctx.arc(cx, ey - 1*s, pr, -Math.PI*.5, Math.PI*.5, false);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    // snap sparkle: a few paper flecks pop out of the seam
+    if(snap > 0){
+      ctx.fillStyle = col.rim;
+      for(let i=0;i<6;i++){
+        const a = -Math.PI/2 + (i - 2.5)*.5, d = (1 - snap)*14*s + 4*s;
+        ctx.globalAlpha = snap;
+        ctx.beginPath(); ctx.arc(cx + Math.cos(a)*d*.5, cy - H*.1 + Math.sin(a)*d, 1.6*s, 0, Math.PI*2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+
+  // ---- the Split Door (enter / exit) ----
+  function splitDoorCfg(o){
+    const c = {mode:o.mode === "exit" ? "exit" : "enter", y:Number(o.y) || 700, speed:planeNum(o.speed, 130, 50, 400), gap:planeNum(o.gap, 80, 30, 200), openRate:planeNum(o.openRate, 1, .4, 3)};
+    return c;
+  }
+  function splitDoorsUpdate(prevRect, rect){
+    const lvl = activeLevel();
+    if(!lvl) return;
+    const prevMid = prevRect.y + prevRect.h/2, mid = rect.y + rect.h/2;
+    for(const o of lizarActiveObstacles(lvl)){
+      if(o.type !== "splitDoor" || obstacleDisabledByPower(o)) continue;
+      const c = splitDoorCfg(o);
+      if(!(prevMid >= c.y && mid < c.y)) continue;            // the card's middle crossed the door going up
+      if(c.mode === "enter" && !(splitMode.active && splitMode.morphDir > 0)){
+        enterSplitMode({speed:c.speed, gap:c.gap, openRate:c.openRate}); o._doorT = time;
+        try{noiseBurst(0, .12, .04); tone(520, 0, .1, "triangle", .035, 1040);}catch(_e){}
+      } else if(c.mode === "exit" && splitMode.active && splitMode.morphDir > 0){
+        exitSplitMode(true); o._doorT = time;
+        try{noiseBurst(0, .12, .04); tone(1040, 0, .1, "triangle", .035, 520);}catch(_e){}
+      }
+    }
+  }
+  function drawSplitDoor(o){
+    const c = splitDoorCfg(o), col = planeColors();
+    const p = worldToScreen(0, c.y), s = p.s, x0 = worldToScreen(0, 0).x, x1 = worldToScreen(WORLD_W, 0).x;
+    const flash = Math.max(0, 1 - (time - (Number(o._doorT) || -9))/.5);
+    const key = "sd|" + planeColorKey() + "|" + planeScaleKey(s) + "|" + c.mode;
+    const spr = planeSprite(key, (WORLD_W + 4)*s, 34*s, g => {
+      g.scale(s, s); g.translate(2, 17);
+      // threshold strip of folded paper diamonds (enter) or squares (exit)
+      g.fillStyle = "rgba(0,0,0,.12)"; roundRect(g, 0, -3, WORLD_W, 9, 4); g.fill();
+      g.fillStyle = col.deep; roundRect(g, 0, -5, WORLD_W, 9, 4); g.fill();
+      g.fillStyle = col.mid; roundRect(g, 0, -5, WORLD_W, 6, 3); g.fill();
+      for(let x = 22; x < WORLD_W - 16; x += 18){
+        if(c.mode === "enter"){
+          g.fillStyle = col.edge; g.beginPath(); g.moveTo(x, -6); g.lineTo(x + 5, -1); g.lineTo(x, 5); g.lineTo(x - 5, -1); g.closePath(); g.fill();
+          g.fillStyle = col.lit; g.beginPath(); g.moveTo(x, -6); g.lineTo(x + 5, -1); g.lineTo(x - 5, -1); g.closePath(); g.fill();
+        } else {
+          g.fillStyle = col.edge; roundRect(g, x - 4, -4.5, 8, 8, 1.5); g.fill();
+        }
+      }
+      // cardboard door posts on both walls
+      for(const px of [0, WORLD_W - 12]){
+        g.fillStyle = "rgba(0,0,0,.14)"; roundRect(g, px + 2, -14, 12, 30, 3); g.fill();
+        g.fillStyle = col.shade; roundRect(g, px, -16, 12, 30, 3); g.fill();
+        g.fillStyle = col.lit; roundRect(g, px + 1.5, -14.5, 5, 27, 2); g.fill();
+      }
+    });
+    ctx.drawImage(spr, x0 - 2*s, p.y - 17*s);
+    if(flash > 0){
+      ctx.globalAlpha = flash*.6; ctx.fillStyle = col.edge;
+      ctx.fillRect(x0, p.y - 3*s - flash*10*s, x1 - x0, 6*s + flash*20*s); ctx.globalAlpha = 1;
+    }
+    if(state === "editor"){
+      ctx.fillStyle = col.deep; ctx.font = `900 ${Math.round(9*s)}px Inter, Arial`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText(c.mode === "exit" ? "SPLIT EXIT · back to card" : "SPLIT ENTER · becomes a gem", worldToScreen(WORLD_W/2, 0).x, p.y - 9*s);
+    }
+  }
+  PLANE_TRAPS.splitDoor = {
+    label:"Split Door", help:"ENTER turns the card into a cardboard gem, EXIT turns it back",
+    make:(x,y) => ({_id:newObjectId(), type:"splitDoor", y, mode:"enter", speed:130, gap:80, openRate:1}),
+    bounds:o => {const c = splitDoorCfg(o); return {x:0, y:c.y - 18, w:WORLD_W, h:36};},
+    draw:drawSplitDoor,
+    hit:() => null,
+    inspector:o => fieldHTML("Y", "y", o.y) + selectHTML("Mode", "mode", o.mode || "enter", ["enter","exit"]) + fieldHTML("Climb Speed", "speed", o.speed ?? 130) + fieldHTML("Split Width (30-200)", "gap", o.gap ?? 80) + fieldHTML("Split Speed (x)", "openRate", o.openRate ?? 1, "number", "step='0.1'") + `<p class="inspEmpty">ENTER: crossing the door turns the card into a gem that climbs by itself. Hold to split it in two, let go to snap it back. A spike must pass between the halves, and they must be able to close again. EXIT: crossing turns it back into the card.</p>`,
+    sanitize:o => {const c = splitDoorCfg(o); o.mode = c.mode; o.speed = c.speed; o.gap = c.gap; o.openRate = c.openRate;},
+    drag:() => {}
+  };
 
   // ---- FLINGER_ART_V1: cut-cardstock drawing kit (fill, crescent shade, top rim light, paper
   // grain, dark outline). Every piece goes through flingerShape so they all read as one style.
@@ -18197,7 +18433,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       updatePortalMonsterEffect(worldDt);
       const beforeRect = playerRect();
       const inputFrozenByMod = modPlayerFreezeTimer > 0;
+      if(splitMode.morphDir) splitStepMorph(worldDt);
       if(planeFoldFx.active) planeFoldStep(worldDt);
+      else if(splitMode.active && splitMode.morphDir > 0) updateSplit(worldDt);
       else if(planeMode.active) updatePlane(worldDt);
       else if(holding && !wireEffect.postReleaseLock && !inputFrozenByMod && player.shrinkTimer <= 0 && !voltGripEffect.active && !portalIsBusy()){
         const requestedGrowth = player.stretchSpeed * (wireEffect.stretchMult || 1) * dt;
@@ -18205,7 +18443,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const safeGrowth = Math.max(0, requestedGrowth - upwardWirePull);
         player.h = Math.min(player.maxH, player.h + safeGrowth);
       }
-      if(player.shrinkTimer > 0 && !inputFrozenByMod && !planeMode.active && !planeFoldFx.active){
+      if(player.shrinkTimer > 0 && !inputFrozenByMod && !planeMode.active && !planeFoldFx.active && !(splitMode.active && splitMode.morphDir > 0)){
         const totalShrinkDuration = Math.max(.001, Number(player.shrinkTotalDuration) || player.shrinkDuration);
         player.shrinkTimer = Math.max(0, player.shrinkTimer - dt);
         const t = clamp01(1 - player.shrinkTimer / totalShrinkDuration);
@@ -18229,10 +18467,11 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       updatePowerButtons(currentRect, hitSweep);
       updateModTraps(worldDt, currentRect, hitSweep);
       planeFoldersUpdate(playerRect());
+      splitDoorsUpdate(beforeRect, playerRect());
       currentRect = playerRect();
       hitSweep = sweptRect(beforeRect, currentRect);
       if(!voltGripEffect.active) tryStartVoltGripHit(hitSweep);
-      checkCollisions(hitSweep, currentRect);
+      if(splitIsOpen()) splitCheckCollisions(); else checkCollisions(hitSweep, currentRect);
       captureRunFrame();
     }
     if(state === "dying"){
@@ -24236,6 +24475,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
 
     if(state === "dying" && deathTimer > .22) return;
+    if((splitMode.active || splitMode.morph > 0) && state !== "dying"){drawSplitGem(x, y, w, h, s); return;}
     if(planeMode.active && state !== "dying"){drawPaperPlane(x, y, w, h, s); return;}
     ctx.save();
     const cube = cubeSkin(); const eyeTone = eyeSkin();
@@ -24590,6 +24830,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     {id:"planeSpikeTotem", label:"Spike Totem", icon:"planeTrap", help:"Plane mode: tall spiky totem, fly around it", plane:true},
     {id:"planeDrifter", label:"Drifter", icon:"planeTrap", help:"Plane mode: spiky pod drifting left and right", plane:true},
     {id:"planeSerpent", label:"Serpent", icon:"planeTrap", help:"Plane mode: long spiky serpent swaying in an S", plane:true},
+    {id:"splitDoor", label:"Split Door", icon:"planeTrap", help:"ENTER turns the card into a gem, EXIT turns it back", plane:true},
     {id:"powerButton", label:"Power Button", icon:"powerButton", help:"Red button links to traps"},
     {id:"ink", label:"Rising Ink", icon:"ink", help:"Level chase setting"}
   ];
@@ -26138,7 +26379,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const showImporter = (trapLibraryFilter === "all" || trapLibraryFilter === "mod") && trapLibraryMatches({id:"import mod",label:"Import Mod",help:"Paste JS trap code"}, "mod");
     const importer = showImporter ? `<button class="trapTool modImportCard" data-tool="__importModCode" data-preview-kind="mod" data-preview-label="Import Mod" data-preview-help="Paste JS trap code" data-search="import mod paste js trap code modded"><div class="trapIcon"><span>+</span></div><b>Import Mod</b><small>Paste JS trap code</small></button>` : "";
     const planeHTML = planeTools.map(t => trapPreviewButtonHTML(t, t.id)).join("");
-    const html = (official ? trapSectionHTML("NORMAL TRAPS","Official") + official : "") + (planeHTML ? trapSectionHTML("PLANE TRAPS","Paper plane mode") + planeHTML : "") + (bosses ? trapSectionHTML("BOSS TRAPS","Heavy") + bosses : "") + (mods || importer ? trapSectionHTML("MODDED TRAPS","Imported only") + mods + importer : "");
+    const html = (official ? trapSectionHTML("NORMAL TRAPS","Official") + official : "") + (planeHTML ? trapSectionHTML("PLANE & SPLIT","Paper plane / gem modes") + planeHTML : "") + (bosses ? trapSectionHTML("BOSS TRAPS","Heavy") + bosses : "") + (mods || importer ? trapSectionHTML("MODDED TRAPS","Imported only") + mods + importer : "");
     trapLibraryGrid.innerHTML = html || trapLibraryEmptyHTML();
     updateTrapFilterUI();
     renderTrapQuickShelf();
@@ -27883,8 +28124,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   // than 33 ms still slows the game down instead of skipping, as before.
   const SIM_STEP = 1/120;
   let simAcc = 0, simPrevOk = false;
-  const simPrev = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0, bk:0}, simCur = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0, bk:0};
-  function simCapture(o){o.time = time; o.cameraY = cameraY; o.px = player.x; o.pb = player.baseY; o.ph = player.h; o.pw = player.w; o.bk = planeMode.bank;}
+  const simPrev = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0, bk:0, so:0, sm:0}, simCur = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0, bk:0, so:0, sm:0};
+  function simCapture(o){o.time = time; o.cameraY = cameraY; o.px = player.x; o.pb = player.baseY; o.ph = player.h; o.pw = player.w; o.bk = planeMode.bank; o.so = splitMode.open; o.sm = splitMode.morph;}
   function drawFrameInterpolated(){
     const a = simAcc/SIM_STEP;
     if(!simPrevOk || !(a > .001) || a >= 1){drawBackground(); return;}
@@ -27893,9 +28134,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     // a restart, teleport or camera snap between the two steps: show the new state as is
     if(C.time < P.time || C.time - P.time > SIM_STEP*4 || Math.abs(C.cameraY - P.cameraY) > 160 || Math.abs(C.pb - P.pb) > 160 || Math.abs(C.px - P.px) > 160 || Math.abs(C.ph - P.ph) > 160){drawBackground(); return;}
     time = P.time + (C.time - P.time)*a; cameraY = P.cameraY + (C.cameraY - P.cameraY)*a;
-    player.x = P.px + (C.px - P.px)*a; player.baseY = P.pb + (C.pb - P.pb)*a; player.h = P.ph + (C.ph - P.ph)*a; player.w = P.pw + (C.pw - P.pw)*a; planeMode.bank = P.bk + (C.bk - P.bk)*a;
+    player.x = P.px + (C.px - P.px)*a; player.baseY = P.pb + (C.pb - P.pb)*a; player.h = P.ph + (C.ph - P.ph)*a; player.w = P.pw + (C.pw - P.pw)*a; planeMode.bank = P.bk + (C.bk - P.bk)*a; splitMode.open = P.so + (C.so - P.so)*a; splitMode.morph = P.sm + (C.sm - P.sm)*a;
     try{drawBackground();}
-    finally{time = C.time; cameraY = C.cameraY; player.x = C.px; player.baseY = C.pb; player.h = C.ph; player.w = C.pw; planeMode.bank = C.bk;}
+    finally{time = C.time; cameraY = C.cameraY; player.x = C.px; player.baseY = C.pb; player.h = C.ph; player.w = C.pw; planeMode.bank = C.bk; splitMode.open = C.so; splitMode.morph = C.sm;}
   }
 
   // SHOW_FPS_V1 (Settings > Show FPS): frames actually drawn in the last second (counted from the
