@@ -20257,195 +20257,216 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     ctx.restore();
   }
 
+  // SHOCK_MINE_PUFFER_V1: "the Puffer", a round, spined creature that sleeps until you come close,
+  // then panics: it wakes in terror, puffs up, its spines stand, light bursts through cracks in its
+  // skin (the harmless scare beams), it screams, squeezes, and blows itself apart. Logic untouched;
+  // the warning ring is the real kill radius, and the blast's bolts reach it while it can kill.
+  //   sleeping — eyes shut, slow breathing, spines lying flat
+  //   charging — wakes in panic: eyes fly open, pupils shaking, it inflates and trembles
+  //   scare    — cracks glow, beams of light shoot from them, mouth wide in a scream; at the very
+  //              end it squeezes tight (anticipation)
+  //   blast    — a white frame, a shock ring, a ball of energy, bolts out to the kill radius, shards
+  //              of its skin and spines on real ballistic arcs, smoke that rises and spreads
+  //   after    — embers fall and the smoke thins away
   function drawShockMine(o){
     const c = shockMineConfig(o);
-    const st = state === "editor" ? "editor" : (o._shockSpent ? "spent" : (o._shockState || "idle"));
-    if(st === "spent" && state !== "editor") return;
+    const editorMode = state === "editor";
+    const st = editorMode ? "editor" : (o._shockSpent ? "spent" : (o._shockState || "idle"));
     const p = worldToScreen(c.x, c.y);
     const s = p.s;
     const t = o._shockTimer || 0;
-    const chargeP = st === "charging" ? clamp01(t / c.chargeTime) : 0;
-    const fakeP = st === "fakeBeams" ? clamp01(t / c.fakeBeamDuration) : 0;
-    const boomP = st === "exploding" ? clamp01(t / c.explosionDuration) : 0;
-    const main = trapMain();
-    const accent = trapAccent();
-    const pulse = .5 + .5*Math.sin(time*12 + c.phase);
-    const editorMode = state === "editor";
-    const beamAngles = shockMineBeamAngles(c.fakeBeamCount, c.phase);
-    const activeScale = st === "charging" ? chargeP : (st === "fakeBeams" ? .75 + fakeP*.25 : (st === "exploding" ? 1 : 0));
+    const chargeP = st === "charging" ? clamp01(t/c.chargeTime) : (st === "fakeBeams" || st === "exploding" ? 1 : 0);
+    const fakeP = st === "fakeBeams" ? clamp01(t/c.fakeBeamDuration) : 0;
+    const pal = flingerPalette(trapMain());
+    const E = pal.E;
+    const sm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
+    const fx = editorMode ? null : prismSmokeFor(o);
+    if(fx) prismFxBeginFrame(o);
+    const dt = fx ? (fx.dt || 0) : 0;
+    const heavy = !!(perfSettings?.heavyFx) && perfSettings?.mode !== "battery";
+    // blast clock
+    if(fx){
+      if(st === "exploding" && fx.boomAt == null) fx.boomAt = time - t;
+      if(st === "idle" || st === "charging") fx.boomAt = null;
+    }
+    const boomAge = fx && fx.boomAt != null ? Math.max(0, time - fx.boomAt) : -1;
+    const R = c.explosionRadius*s;
     ctx.save();
     ctx.translate(p.x, p.y);
 
-    const drawBeam = (a, len, width, alpha=1, tint=main, branch=0, start=20*s) => {
-      const x1 = Math.cos(a) * start;
-      const y1 = Math.sin(a) * start;
-      const x2 = Math.cos(a) * len;
-      const y2 = Math.sin(a) * len;
-      ctx.lineCap = "round";
-      ctx.globalAlpha = alpha * .28;
-      ctx.strokeStyle = tint;
-      ctx.lineWidth = Math.max(2, width * 2.7);
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-      ctx.globalAlpha = alpha;
-      ctx.lineWidth = Math.max(1.5, width);
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-      if(branch > 0){
-        const bx = x1 + (x2-x1) * (.48 + Math.sin(time*7 + a)*.09);
-        const by = y1 + (y2-y1) * (.48 + Math.cos(time*6 + a)*.08);
-        const side = (Math.sin(time*10 + a) > 0 ? 1 : -1);
-        const ba = a + side * (.34 + .10*Math.sin(time*9 + a));
-        const bl = len * branch;
-        ctx.globalAlpha = alpha * .78;
-        ctx.lineWidth = Math.max(1, width * .58);
-        ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + Math.cos(ba)*bl, by + Math.sin(ba)*bl); ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-    };
-
     if(editorMode){
-      // Scare beam preview.
-      for(let i=0;i<beamAngles.length;i++){
-        const a = beamAngles[i];
-        drawBeam(a, c.fakeBeamLength*s, Math.max(1.5, c.fakeBeamThickness*s*.52), .16, accent, .14, 17*s);
-        const ex = Math.cos(a) * c.fakeBeamLength*s;
-        const ey = Math.sin(a) * c.fakeBeamLength*s;
-        ctx.fillStyle = rgbaHex(accent, .18);
-        ctx.beginPath(); ctx.arc(ex, ey, Math.max(2.2, 5*s), 0, Math.PI*2); ctx.fill();
-      }
-      // Trigger radius.
-      ctx.fillStyle = rgbaHex(accent, .05);
-      ctx.beginPath(); ctx.arc(0,0,c.triggerRadius*s,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle = rgbaHex(accent, .72);
-      ctx.lineWidth = Math.max(1.5, 2.1*s);
-      ctx.setLineDash([10*s, 7*s]);
-      ctx.beginPath(); ctx.arc(0,0,c.triggerRadius*s,0,Math.PI*2); ctx.stroke();
-      ctx.setLineDash([]);
-      // Explosion / kill radius.
-      ctx.fillStyle = rgbaHex(main, .08);
-      ctx.beginPath(); ctx.arc(0,0,c.explosionRadius*s,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle = rgbaHex(main, .92);
-      ctx.lineWidth = Math.max(2, 2.8*s);
-      ctx.beginPath(); ctx.arc(0,0,c.explosionRadius*s,0,Math.PI*2); ctx.stroke();
+      ctx.strokeStyle = rgbaHex(E[2], .55); ctx.lineWidth = Math.max(1.2, 1.6*s);
+      ctx.setLineDash([8*s, 7*s]); ctx.beginPath(); ctx.arc(0, 0, c.triggerRadius*s, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = rgbaHex(E[2], .9); ctx.lineWidth = Math.max(1.5, 2.2*s);
+      ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI*2); ctx.stroke();
     }
 
-    if(st === "charging"){
-      ctx.globalAlpha = .16 + chargeP*.14 + pulse*.08;
-      ctx.fillStyle = accent;
-      ctx.beginPath(); ctx.arc(0,0,c.triggerRadius*s,0,Math.PI*2); ctx.fill();
-      ctx.globalAlpha = .8;
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = Math.max(1.5, (2 + chargeP*2.6)*s);
-      ctx.setLineDash([6*s,5*s]);
-      ctx.beginPath(); ctx.arc(0,0,c.triggerRadius*s*(.96 + pulse*.04),0,Math.PI*2); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-    }
-
-    if(st === "fakeBeams"){
-      const alpha = .38 + Math.sin(fakeP*Math.PI)*.62;
-      for(let i=0;i<beamAngles.length;i++){
-        const a = beamAngles[i] + Math.sin(time*10+i)*.035;
-        const len = c.fakeBeamLength*s*(.76 + fakeP*.24 + Math.sin(time*9+i)*.04);
-        const width = Math.max(2, c.fakeBeamThickness*s*(.78 + alpha*.34));
-        drawBeam(a, len, width, alpha*(i%2 ? .86 : 1), i%2 ? accent : main, .18 + .06*Math.sin(time*7+i));
-      }
-    }
-
-    if(st === "exploding"){
-      const ring = easeOutCubic(boomP);
-      ctx.globalAlpha = 1 - boomP*.72;
-      ctx.fillStyle = rgbaHex(accent, .24);
-      ctx.beginPath();ctx.arc(0,0,c.explosionRadius*s*(.24 + ring*.92),0,Math.PI*2);ctx.fill();
-      ctx.fillStyle = rgbaHex(main, .14);
-      ctx.beginPath();ctx.arc(0,0,c.explosionRadius*s*(.12 + ring*.56),0,Math.PI*2);ctx.fill();
-      ctx.strokeStyle = main;
-      ctx.lineWidth = Math.max(3, (10 - boomP*6)*s);
-      ctx.beginPath();ctx.arc(0,0,c.explosionRadius*s*ring,0,Math.PI*2);ctx.stroke();
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = Math.max(1.5,3*s);
-      for(let i=0;i<14;i++){
-        const a = i*Math.PI*2/14 + time*3;
-        const r1 = c.explosionRadius*s*(.18 + boomP*.22);
-        const r2 = c.explosionRadius*s*(.70 + Math.sin(time*18+i)*.05);
-        ctx.beginPath();ctx.moveTo(Math.cos(a)*r1,Math.sin(a)*r1);ctx.lineTo(Math.cos(a+.10)*r2,Math.sin(a+.10)*r2);ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-    }
-
-    const bodyR = (18 + activeScale*6 + pulse*(st === "charging" ? 2.5 : .9))*s;
-    const finOuter = bodyR + 9*s + activeScale*3*s;
-    const finInner = bodyR + 2.5*s;
-    // Spiky shell.
-    ctx.fillStyle = st === "idle" || st === "editor" ? trapIdle() : main;
-    ctx.beginPath();
-    for(let i=0;i<16;i++){
-      const a = (-Math.PI/2) + i*(Math.PI*2/16);
-      const r = i%2===0 ? finOuter : finInner;
-      const x = Math.cos(a)*r;
-      const y = Math.sin(a)*r;
-      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = rgbaHex(accent, st === "idle" || st === "editor" ? .42 : .92);
-    ctx.lineWidth = Math.max(1.4, 2.2*s);
-    ctx.stroke();
-
-    // Main bomb body.
-    ctx.fillStyle = st === "idle" || st === "editor" ? trapIdle() : main;
-    ctx.beginPath();ctx.arc(0,0,bodyR,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = Math.max(2, 3.2*s);
-    ctx.globalAlpha = st === "idle" || st === "editor" ? .7 : 1;
-    ctx.beginPath();ctx.arc(0,0,Math.max(5, bodyR-5.5*s),0,Math.PI*2);ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    // Fuse and horn.
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = Math.max(1.8,2.4*s);
-    ctx.beginPath();ctx.moveTo(-2*s,-bodyR*.88);ctx.quadraticCurveTo(8*s,-bodyR-12*s,2*s,-bodyR-19*s);ctx.stroke();
-    ctx.fillStyle = accent;
-    ctx.beginPath();ctx.arc(2*s,-bodyR-19*s,3.8*s + pulse*.8*s,0,Math.PI*2);ctx.fill();
-
-    // Evil electric core.
-    const coreR = Math.max(6.5*s, bodyR*.38);
-    ctx.fillStyle = rgbaHex(accent, st === "charging" || st === "fakeBeams" || st === "exploding" ? .96 : .74);
-    ctx.beginPath();ctx.arc(0,0,coreR,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle = main;
-    ctx.lineWidth = Math.max(1.2,1.6*s);
-    ctx.beginPath();ctx.arc(0,0,coreR*.54,0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle = main;
-    ctx.beginPath();
-    ctx.moveTo(-coreR*.85,-1.2*s);
-    ctx.lineTo(-coreR*.18,-coreR*.42);
-    ctx.lineTo(-coreR*.18,coreR*.05);
-    ctx.lineTo(coreR*.18,coreR*.05);
-    ctx.lineTo(coreR*.18,-coreR*.42);
-    ctx.lineTo(coreR*.85,-1.2*s);
-    ctx.lineTo(coreR*.10,coreR*.95);
-    ctx.lineTo(coreR*.10,coreR*.28);
-    ctx.lineTo(-coreR*.10,coreR*.28);
-    ctx.lineTo(-coreR*.10,coreR*.95);
-    ctx.closePath();
-    ctx.fill();
-
+    // ---- warning ring = the real kill radius, tightening its tick marks as the blast nears ----
     if(st === "charging" || st === "fakeBeams"){
-      ctx.globalAlpha = .42 + pulse*.42;
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = Math.max(1,1.6*s);
-      ctx.beginPath();ctx.arc(0,0,(bodyR+10*s+chargeP*16*s+fakeP*6*s),0,Math.PI*2);ctx.stroke();
-      for(let i=0;i<4;i++){
-        const a = time*7 + i*Math.PI/2;
-        const r1 = bodyR + 2*s;
-        const r2 = bodyR + 10*s + Math.sin(time*16+i)*4*s;
-        ctx.beginPath();ctx.moveTo(Math.cos(a)*r1,Math.sin(a)*r1);ctx.lineTo(Math.cos(a+.14)*r2,Math.sin(a+.14)*r2);ctx.stroke();
+      const urgency = st === "charging" ? .35*chargeP : .35 + .65*fakeP;
+      const beat = .5 + .5*Math.sin(time*(8 + 22*urgency));
+      ctx.strokeStyle = rgbaHex(E[2], .25 + .45*urgency + .15*beat);
+      ctx.lineWidth = Math.max(1, (1.2 + 1.6*urgency)*s);
+      ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI*2); ctx.stroke();
+      for(let k=0;k<16;k++){
+        const a = k/16*Math.PI*2 + time*.6;
+        ctx.beginPath(); ctx.moveTo(Math.cos(a)*R, Math.sin(a)*R); ctx.lineTo(Math.cos(a)*(R - (5 + 7*urgency)*s), Math.sin(a)*(R - (5 + 7*urgency)*s)); ctx.stroke();
       }
-      ctx.globalAlpha = 1;
     }
 
-    ctx.restore();
-  }
+    // ---- the creature (until it bursts) ----
+    if(st !== "exploding" && st !== "spent"){
+      const breathe = Math.sin(time*1.6 + c.phase);
+      const inflate = st === "idle" || st === "editor" ? 0 : sm(chargeP);
+      const squeeze = st === "fakeBeams" ? sm((fakeP - .82)/.18) : 0;      // tightens just before it blows
+      const tremble = st === "charging" || st === "fakeBeams" ? (.6 + 1.6*fakeP)*s : 0;
+      const jx = tremble*(trapHash(Math.floor(time*45) + 1) - .5)*2, jy = tremble*(trapHash(Math.floor(time*45) + 7) - .5)*2;
+      const bodyR = (19 + 1.2*breathe*(1 - inflate) + 8*inflate)*s*(1 - .18*squeeze);
+      ctx.save(); ctx.translate(jx, jy);
+      ctx.scale(1 + .08*squeeze, 1 - .12*squeeze);
+      // scare beams out of the cracks (harmless light)
+      const beamAngles = shockMineBeamAngles(c.fakeBeamCount, c.phase);
+      if(st === "fakeBeams"){
+        const on = sm(fakeP/.12)*(1 - .5*squeeze);
+        for(let i=0;i<beamAngles.length;i++){
+          const a = beamAngles[i] + Math.sin(time*9 + i)*.03;
+          const len = c.fakeBeamLength*s*(.7 + .3*sm(fakeP/.3));
+          const w = Math.max(2, c.fakeBeamThickness*s*.55)*(.75 + .25*Math.sin(time*40 + i*2));
+          const x0 = Math.cos(a)*bodyR, y0 = Math.sin(a)*bodyR, x1 = Math.cos(a)*len, y1 = Math.sin(a)*len;
+          const g = ctx.createLinearGradient(x0, y0, x1, y1);
+          g.addColorStop(0, rgbaHex(E[0], .95*on)); g.addColorStop(.25, rgbaHex(E[1], .7*on)); g.addColorStop(1, rgbaHex(E[2], 0));
+          ctx.strokeStyle = g; ctx.lineCap = "round";
+          ctx.lineWidth = w*2.2; ctx.globalAlpha = .35; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+          ctx.lineWidth = w; ctx.globalAlpha = 1; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+        }
+      }
+      // spines: lying flat while it sleeps, standing straight up as it puffs
+      const N = 14;
+      for(let k=0;k<N;k++){
+        const a = k/N*Math.PI*2 + .2;
+        const stand = inflate;
+        const dirA = a + (1 - stand)*.85;                                   // flat = swept back along the skin
+        const L = bodyR*(.42 + .26*stand);
+        const bx0 = Math.cos(a)*bodyR*.92, by0 = Math.sin(a)*bodyR*.92;
+        const tipx = bx0 + Math.cos(dirA)*L, tipy = by0 + Math.sin(dirA)*L;
+        const nx = -Math.sin(dirA)*bodyR*.11, ny = Math.cos(dirA)*bodyR*.11;
+        flingerShape(() => {ctx.beginPath(); ctx.moveTo(bx0 + nx, by0 + ny); ctx.lineTo(tipx, tipy); ctx.lineTo(bx0 - nx, by0 - ny); ctx.closePath();}, pal.deep, pal, s, {noHi:true, shadeDepth:.6, lw:1.1});
+      }
+      // body
+      flingerShape(() => {ctx.beginPath(); ctx.arc(0, 0, bodyR, 0, Math.PI*2);}, pal.base, pal, s, {shadeDepth:3.4});
+      // belly glow through the skin as it charges
+      if(inflate > .02){
+        const g = ctx.createRadialGradient(0, bodyR*.2, 0, 0, bodyR*.2, bodyR);
+        g.addColorStop(0, rgbaHex(E[1], .55*inflate)); g.addColorStop(1, rgbaHex(E[1], 0));
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, bodyR, 0, Math.PI*2); ctx.fill();
+      }
+      // cracks that glow (and let the beams out)
+      if(st === "fakeBeams"){
+        ctx.strokeStyle = E[0]; ctx.lineWidth = Math.max(1, 1.4*s); ctx.lineCap = "round";
+        for(let i=0;i<beamAngles.length;i++){
+          const a = beamAngles[i];
+          const pts = trapBolt(Math.cos(a)*bodyR*.35, Math.sin(a)*bodyR*.35, Math.cos(a)*bodyR, Math.sin(a)*bodyR, bodyR*.12, 4, i*5.3);
+          ctx.beginPath(); pts.forEach((q, j) => j ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
+        }
+      }
+      // face: two eyes and a little mouth
+      const awake = st === "idle" || st === "editor" ? 0 : 1;
+      const panic = st === "fakeBeams" ? 1 : chargeP;
+      const shakeLook = {x:(trapHash(Math.floor(time*24)) - .5)*1.4*panic, y:(trapHash(Math.floor(time*24) + 3) - .5)*1.2*panic};
+      const eyeOpen = editorMode ? .9 : (awake ? Math.min(1, .3 + 1.4*sm(chargeP/.25)) : .04);
+      for(const sd of [-1, 1]){
+        drawGuardianEye(sd*bodyR*.36, -bodyR*.16, bodyR*.27, bodyR*.33, s, pal.base, Math.max(.04, eyeOpen*(1 - .7*squeeze)), squeeze*.6, (sd < 0 ? -1 : 1)*.25*panic, .45 - .3*panic, shakeLook);
+        // worried brows
+        if(awake){
+          ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1.2, 1.6*s); ctx.lineCap = "round";
+          const ex = sd*bodyR*.36, by2 = -bodyR*.56;
+          ctx.beginPath(); ctx.moveTo(ex - sd*bodyR*.22, by2 + bodyR*.02); ctx.lineTo(ex + sd*bodyR*.2, by2 - bodyR*.12*panic); ctx.stroke();
+        }
+      }
+      // mouth: a sleepy dash, a trembling "o", then a scream
+      const mOpen = st === "fakeBeams" ? .6 + .4*Math.abs(Math.sin(time*30))*(1 - squeeze) : (awake ? .35 + .1*Math.sin(time*40) : 0);
+      if(mOpen < .05){
+        ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.4*s);
+        ctx.beginPath(); ctx.moveTo(-bodyR*.12, bodyR*.42); ctx.lineTo(bodyR*.12, bodyR*.42); ctx.stroke();
+      } else {
+        flingerShape(() => {ctx.beginPath(); ctx.ellipse(0, bodyR*.44, bodyR*(.12 + .12*mOpen), bodyR*(.08 + .2*mOpen), 0, 0, Math.PI*2);}, pal.throat, pal, s, {noHi:true, noShade:true, lw:1.3});
+      }
+      // sweat drops while panicking
+      if(awake && !editorMode){
+        for(let k=0;k<2;k++){
+          const u = (time*1.4 + k*.5) % 1, sx = (k ? 1 : -1)*bodyR*.75, sy = -bodyR*.55 + u*bodyR*.6;
+          ctx.globalAlpha = .9*(1 - u)*panic;
+          flingerShape(() => {ctx.beginPath(); ctx.moveTo(sx, sy - 3*s); ctx.quadraticCurveTo(sx + 2.4*s, sy + 1*s, sx, sy + 2.2*s); ctx.quadraticCurveTo(sx - 2.4*s, sy + 1*s, sx, sy - 3*s); ctx.closePath();}, pal.E[0], pal, s, {noHi:true, noShade:true, lw:1});
+          ctx.globalAlpha = 1;
+        }
+      }
+      // sleeping Zs
+      if(st === "idle" && !editorMode){
+        const u = (time*.45 + c.phase) % 1;
+        ctx.globalAlpha = Math.sin(u*Math.PI)*.8;
+        ctx.fillStyle = pal.line; ctx.font = `700 ${Math.round((6 + 4*u)*s)}px Inter, sans-serif`;
+        ctx.fillText("z", bodyR*.8 + u*6*s, -bodyR*.9 - u*12*s);
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
 
+    // ---- the blast ----
+    if(boomAge >= 0 && boomAge < 1.8){
+      const A = boomAge;
+      // white impact frame
+      if(A < .05){ctx.fillStyle = rgbaHex(E[0], 1 - A/.05); ctx.beginPath(); ctx.arc(0, 0, R*.85, 0, Math.PI*2); ctx.fill();}
+      // shock ring: reaches the kill radius in ~.1s, then overshoots a little and fades
+      const ringK = easeOutCubic(clamp01(A/.12));
+      const ringR = R*(ringK + .3*clamp01((A - .12)/.4));
+      const ringA = clamp01(1 - (A - .05)/.45);
+      if(ringA > 0){
+        ctx.strokeStyle = rgbaHex(E[2], ringA); ctx.lineWidth = Math.max(1.5, (9*(1 - ringK) + 2.5)*s);
+        ctx.beginPath(); ctx.arc(0, 0, ringR, 0, Math.PI*2); ctx.stroke();
+        ctx.strokeStyle = rgbaHex(E[0], ringA*.8); ctx.lineWidth = Math.max(1, 1.4*s);
+        ctx.beginPath(); ctx.arc(0, 0, ringR*.94, 0, Math.PI*2); ctx.stroke();
+      }
+      // bolts out to the kill radius while it can kill
+      if(st === "exploding"){
+        const tick = Math.floor(time*30);
+        for(let k=0;k<7;k++){
+          const a = k/7*Math.PI*2 + trapHash(k + tick)*.5;
+          const len = R*(.85 + .2*trapHash(k*3 + tick));
+          trapDrawBolt(trapBolt(0, 0, Math.cos(a)*len, Math.sin(a)*len, R*.12, 8, k*7 + tick), Math.max(1.4, 2.2*s), E, 1 - A/.3);
+        }
+      }
+      // ball of energy: swells fast, then cools into smoke and shrinks
+      const ballK = clamp01(A/.5);
+      if(ballK < 1){
+        const br = R*(.25 + .4*easeOutCubic(clamp01(A/.14)))*(1 - .6*ballK);
+        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, br);
+        g.addColorStop(0, rgbaHex(E[0], 1 - ballK)); g.addColorStop(.45, rgbaHex(E[1], .9*(1 - ballK))); g.addColorStop(1, rgbaHex(E[2], 0));
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, br, 0, Math.PI*2); ctx.fill();
+      }
+      // shards of its skin and spines on real ballistic arcs (computed from time: smooth at any fps)
+      for(let k=0;k<18;k++){
+        const h1 = trapHash(k*3.7 + c.x*.01), h2 = trapHash(k*5.1 + 2), h3 = trapHash(k*1.3 + 9);
+        const ang = h1*Math.PI*2, sp = (160 + 260*h2)*s;
+        const drag = 1.6, tt = (1 - Math.exp(-drag*A))/drag;
+        const x = Math.cos(ang)*sp*tt, y = Math.sin(ang)*sp*tt + 420*s*A*A*.5;
+        const life = clamp01(1 - A/(.9 + .6*h3));
+        if(life <= 0) continue;
+        const rot = A*(6 + 10*h3)*(h2 > .5 ? 1 : -1), size = (3 + 4*h3)*s;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.globalAlpha = Math.min(1, life*1.5);
+        if(k % 3 === 0) flingerShape(() => {ctx.beginPath(); ctx.moveTo(-size*.3, -size); ctx.lineTo(size*.3, -size); ctx.lineTo(0, size*1.2); ctx.closePath();}, pal.deep, pal, s, {noHi:true, shadeDepth:.6, lw:1});
+        else flingerShape(() => {ctx.beginPath(); ctx.moveTo(-size, -size*.4); ctx.lineTo(size*.6, -size*.7); ctx.lineTo(size, size*.5); ctx.lineTo(-size*.3, size*.7); ctx.closePath();}, pal.base, pal, s, {shadeDepth:1, lw:1});
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+      if(fx){
+        if(!fx.smoked){fx.smoked = true; prismSmokeEmit(o, c.x, c.y, 0, heavy ? 18 : 9, 1); if(heavy) trapSparkBurst(o, c.x, c.y, 26, "hot", 1.1);}
+        if(A < .9) prismSmokeEmitRate(o, c.x, c.y - 4, 0, heavy ? 14 : 6, .8);
+      }
+    }
+    if(fx && boomAge < 0) fx.smoked = false;
+    ctx.restore();
+    if(fx){prismSmokeUpdateDraw(o); prismSparksUpdateDraw(o);}
+  }
 
   // PRISM_SMOKE_V1: physical particle smoke for hot surfaces.
   // Each puff lives in world space with its own velocity: buoyancy lifts it, air drag slows it,
