@@ -52,6 +52,7 @@ public class MainActivity extends ComponentActivity {
         webView.setBackgroundColor(0xFFF3F3EE);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         setContentView(webView);
+        requestHighFrameRateForView();
         hideSystemBars();
 
         WebSettings ws = webView.getSettings();
@@ -150,6 +151,17 @@ public class MainActivity extends ComponentActivity {
         }
     }
 
+    /**
+     * Android 15+ picks the display rate from what each view asks for; a WebView that asks nothing
+     * can be held at 60 Hz even when the window prefers 120. Ask for the high category explicitly.
+     */
+    private void requestHighFrameRateForView() {
+        if (Build.VERSION.SDK_INT < 35 || webView == null) return;
+        try {
+            webView.setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_HIGH);
+        } catch (Throwable ignored) { }
+    }
+
     private void hideSystemBars() {
         WindowInsetsControllerCompat c = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         c.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
@@ -174,6 +186,8 @@ public class MainActivity extends ComponentActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        requestHighRefreshRate();   // some devices drop the requested mode while the app is away
+        requestHighFrameRateForView();
         webView.onResume();
         updateBridge.onResume();
     }
