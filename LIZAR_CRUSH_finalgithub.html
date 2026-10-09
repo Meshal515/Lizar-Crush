@@ -14733,6 +14733,40 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const lipOpts = {pout, puff, smack, lick, lickU, spin:-time*(1.2 + 2.5*suck)};
     drawGulperLips(mp.x, mp.y, hw, hh, lip, s, lipOpts);
     if(fx) fx.lips = swallowing && phase === "suck" ? {x:mp.x, y:mp.y, hw, hh, lip, s, opts:lipOpts} : null;
+    // two angry eyes sitting above the upper lip. They glare at you, widen when it opens to feed,
+    // squeeze shut while it gulps, and roll up after you if you got past.
+    {
+      const pal = flingerPalette(main);
+      const topLip = mp.y - hh*.95 - lip*(1.2 + .3*pout + .55*puff);
+      const eRX = Math.max(5*s, lip*.8), eRY = Math.max(6.5*s, lip*1.05);
+      const r = playerRect(), pcx = r.x + r.w/2, pcy = r.y + r.h/2;
+      let lookX = Math.max(-1, Math.min(1, (pcx - c.x)/120)), lookY = Math.max(-1, Math.min(1, (pcy - c.y)/160));
+      let open = .8, squint = .12, pupil = .5, anger = .55;
+      if(live){open = .8 + .2*suck; pupil = .5 - .2*suck; anger = .4;}
+      if(swallowing){
+        if(phase === "suck"){open = 1; pupil = .3; anger = .2;}
+        else if(phase === "tunnel"){open = .06; squint = .8; anger = .6;}
+        else {open = .5; squint = .3; anger = .7;}
+      }
+      if(passK > .01){open += (.75 - open)*passK; lookY += (-1 - lookY)*passK; anger += (.8 - anger)*passK;}
+      if(fx){
+        const se = fx.eyes || (fx.eyes = {});
+        const fresh = !se.ready || dt > .2;
+        const f2 = (k, v, rate) => {if(fresh || !(k in se)){se[k] = v; return v;} se[k] += (v - se[k])*(1 - Math.exp(-dt*rate)); return se[k];};
+        open = f2("open", open, 14); squint = f2("squint", squint, 12); pupil = f2("pupil", pupil, 10); anger = f2("anger", anger, 8);
+        lookX = f2("lx", lookX, 9); lookY = f2("ly", lookY, 9);
+        se.ready = true;
+      }
+      const blink = ((time*.29 + c.x*.003) % 1) < .03 ? .06 : 1;
+      for(const sd of [-1, 1]){
+        const ex = mp.x + sd*Math.max(eRX*1.3, hw*.4), ey = topLip - eRY*1.2;
+        drawGuardianEye(ex, ey, eRX, eRY, s, pal.base, Math.min(open, blink), squint, (sd < 0 ? 1 : -1)*anger*.5, pupil, {x:lookX, y:lookY});
+        // a hard brow line over each eye, tilted down toward the middle
+        ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1.4, 2*s); ctx.lineCap = "round";
+        const by = ey - eRY*(1.05 - .25*(1 - open)), tilt = eRY*.5*anger;
+        ctx.beginPath(); ctx.moveTo(ex - sd*eRX*1.05, by - tilt); ctx.lineTo(ex + sd*eRX*1.1, by + tilt*.9); ctx.stroke();
+      }
+    }
     // sulking: little puffs of air from the corner
     if(passK > .3){
       const u = (time*.6) % 1;
@@ -14789,17 +14823,69 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       ctx.globalAlpha = 1;
     }
     if(fx.phase === "eject" && fx.exit){
-      // the same lips appear at the exit and spit you out, then pucker shut and vanish
+      // The second mouth SPITS you out:
+      //   gather (0-.18)  — it pops in with a springy overshoot, lips pursed and swollen (holding it)
+      //   spit   (.18-.45)— it bursts open, kicks back down (recoil, squash), a spray of drops and
+      //                     speed streaks shoots up with you
+      //   smack  (.45-.75)— it snaps shut on a spring wobble
+      //   gone   (.75-1)  — it shrinks away
       const ex = fx.exitCfg || portalExitConfig(fx.exit);
       const p = worldToScreen(ex.x,ex.y);
       const s=p.s;
       const t=clamp01(fx.timer/Math.max(.001,(fx.cfg?.ejectTime||.42)));
-      const openIn = easeOutCubic(clamp01(t/.25));
-      const shut = clamp01((t - .55)/.3);
-      const vanish = clamp01((t - .8)/.2);
-      ctx.globalAlpha = 1 - vanish;
-      drawGulperLips(p.x, p.y, 24*s*(1 - .4*shut), 11*s*openIn*(1 - shut), 7*s, s, {pout:shut, spin:time*4});
-      ctx.globalAlpha = 1;
+      const sm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
+      const pal = flingerPalette(trapMain());
+      const pop = t < .18 ? easeOutBack(t/.18) : 1;
+      const burst = sm((t - .16)/.12) * (1 - sm((t - .45)/.18));       // fast, but over several frames
+      const wobble = t > .45 ? Math.exp(-(t - .45)*9)*Math.sin((t - .45)*42) : 0;
+      const gone = sm((t - .75)/.25);
+      const scale = Math.max(0, pop*(1 - gone));
+      const recoil = burst*9*s;                                  // kicked down, opposite to the spit
+      const cx = p.x, cy = p.y + recoil + wobble*2*s;
+      const hw = 30*s*(1 + .1*burst - .35*(1 - sm((t - .14)/.12)) + .08*wobble)*scale;
+      const hh = 21*s*burst*scale;                               // a tall O when it fires
+      const pout = .9*(1 - sm((t - .14)/.12)) + .5*sm((t - .52)/.2);
+      const puff = .8*(1 - sm((t - .16)/.14));
+      // shock ring the instant it fires
+      const ring = clamp01((t - .17)/.22);
+      if(ring > 0 && ring < 1){
+        ctx.strokeStyle = pal.line; ctx.globalAlpha = (1 - ring)*.8; ctx.lineWidth = Math.max(1, 3.5*s*(1 - ring));
+        ctx.beginPath(); ctx.ellipse(cx, cy - 4*s, (30 + 70*easeOutCubic(ring))*s, (14 + 34*easeOutCubic(ring))*s, 0, 0, Math.PI*2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      // speed streaks shooting up from the mouth
+      if(burst > .05){
+        ctx.strokeStyle = pal.line; ctx.lineCap = "round";
+        for(let i=0;i<7;i++){
+          const u = clamp01((t - .18)/.35), lx = cx + (i - 3)*7*s + Math.sin(i*2.3)*3*s;
+          const y0 = cy - 10*s - u*70*s - i%3*8*s, len = (18 + i%4*6)*s*(1 - u);
+          ctx.globalAlpha = .5*burst*(1 - u); ctx.lineWidth = Math.max(1, 1.6*s);
+          ctx.beginPath(); ctx.moveTo(lx, y0); ctx.lineTo(lx + (i - 3)*1.5*s, y0 - len); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      // spray: drops on ballistic arcs (computed from time, so they are smooth at any frame rate)
+      if(t > .18){
+        const tt = (t - .18)*(fx.cfg?.ejectTime || .42);
+        for(let i=0;i<16;i++){
+          const h1 = trapHash(i*3.1 + 7), h2 = trapHash(i*5.7 + 1), h3 = trapHash(i*1.9 + 4);
+          const ang = -Math.PI/2 + (h1 - .5)*1.6, sp = (320 + 330*h2)*s;
+          const x = cx + Math.cos(ang)*sp*tt, y = cy - 6*s + Math.sin(ang)*sp*tt + 900*s*tt*tt;
+          const life = clamp01(1 - tt/(.28 + .25*h3));
+          if(life <= 0) continue;
+          const r = (2 + 3.2*h3)*s*(.5 + .5*life);
+          ctx.globalAlpha = life;
+          ctx.fillStyle = i % 3 ? pal.tongue : pal.E[0];
+          ctx.beginPath(); ctx.ellipse(x, y, r*.8, r*1.2, ang + Math.PI/2, 0, Math.PI*2); ctx.fill();
+          ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(.7, .9*s); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      if(scale > .06){
+        ctx.save(); ctx.globalAlpha = sm((scale - .06)/.25); ctx.translate(cx, cy); ctx.scale(1 + .12*burst, 1 - .1*burst + .06*wobble); ctx.translate(-cx, -cy);
+        drawGulperLips(cx, cy, hw, hh, 9*s*scale, s, {pout, puff, spin:time*4});
+        ctx.restore();
+      }
     }
     ctx.restore();
   }
