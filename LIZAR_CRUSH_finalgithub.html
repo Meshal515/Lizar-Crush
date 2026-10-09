@@ -3911,6 +3911,11 @@
       font-size:clamp(26px,7.2vh,48px)!important;
     }
   }
+  /* PERF_NO_HIDDEN_BLUR_V1: the menu and the result overlay stay in the page (transparent) while
+     playing; a backdrop filter on them, even blur(0), can make the browser re-filter the whole screen
+     behind them on every frame. They are invisible then, so nothing visible changes. */
+  body.playing #menu#menu, body.countdown #menu#menu, body.replay #menu#menu,
+  body.playing #statusOverlay#statusOverlay, body.countdown #statusOverlay#statusOverlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 </style>
 </head>
 <body class="lcBootActive">
@@ -4207,7 +4212,7 @@
 <label class="settingsRow" style="border-color: rgba(46, 36, 20, 0.15);"><span><b style="color: rgb(46, 36, 20);">Particles</b><small style="color: rgb(115, 100, 78);">Death dust, sparks, and explosion debris.</small></span><select id="perfParticlesSelect" data-lc-select="true"><option value="full">Full</option><option value="reduced">Reduced</option><option value="off">Off</option></select></label>
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Screen Shake</span><input id="perfShakeToggle" type="checkbox" checked=""></label>
 <label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Heavy FX</span><input id="perfFxToggle" type="checkbox" checked=""></label>
-<label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Death Replay</span><input id="replayToggle" type="checkbox" checked=""></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">FPS Meter</span><input id="fpsMeterToggle" type="checkbox"></label>
+<label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Death Replay</span><input id="replayToggle" type="checkbox" checked=""></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">FPS Meter</span><input id="fpsMeterToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">Frame Trace</span><input id="frameTraceToggle" type="checkbox"></label><label class="settingsToggle" style="border-color: rgba(46, 36, 20, 0.15);"><span style="color: rgb(46, 36, 20);">GPU Probe (slows frames)</span><input id="gpuProbeToggle" type="checkbox"></label><div class="settingsControlBox" id="frameTraceBox"><button id="frameTraceReportBtn" type="button">LAST RUN FRAME TRACE</button><small>Frame Trace records every frame of the run: frame gaps (P50/P95/P99/worst), logic, drawing per trap, and the time spent outside the game code. GPU Probe waits for the GPU each frame to time it exactly; it lowers fps while on.</small></div>
 <div class="settingsControlBox" style="border-color: rgba(46, 36, 20, 0.15);"><button id="touchControlCustomizeBtn" type="button">CUSTOM CONTROL</button><small style="color: rgb(115, 100, 78);">Change gameplay hold/release: Button, Full Screen, or Custom touch area.</small></div>
 <div class="settingsControlBox" id="appUpdateBox" style="display:none;"><button id="appUpdateCheckBtn" type="button">CHECK FOR UPDATE</button><small id="appUpdateVersion">App version</small></div>
 <div class="settingsDangerBox" style="border-color: rgba(46, 36, 20, 0.15);">
@@ -4498,6 +4503,8 @@
   const perfFxToggle = document.getElementById("perfFxToggle");
   const replayToggle = document.getElementById("replayToggle");
   const fpsMeterToggle = document.getElementById("fpsMeterToggle");
+  const frameTraceToggle = document.getElementById("frameTraceToggle");
+  const gpuProbeToggle = document.getElementById("gpuProbeToggle");
   const settingsCloseBtn = document.getElementById("settingsCloseBtn");
   const touchHoldButton = document.getElementById("touchHoldButton");
   const touchControlIntro = document.getElementById("touchControlIntro");
@@ -5218,6 +5225,8 @@
     if(perfFxToggle) perfFxToggle.checked = !!perfSettings.heavyFx;
     if(replayToggle) replayToggle.checked = perfSettings.replay !== false;
     if(fpsMeterToggle) fpsMeterToggle.checked = !!perfSettings.fpsMeter;
+    if(frameTraceToggle) frameTraceToggle.checked = !!perfSettings.frameTrace;
+    if(gpuProbeToggle) gpuProbeToggle.checked = !!perfSettings.gpuProbe;
     syncLcGameSelects();
   }
   function applyPerformanceSettings({resizeCanvas=false}={}){
@@ -5238,7 +5247,9 @@
       shake:!!perfShakeToggle?.checked,
       heavyFx:!!perfFxToggle?.checked,
       replay:!!replayToggle?.checked,
-      fpsMeter:!!fpsMeterToggle?.checked
+      fpsMeter:!!fpsMeterToggle?.checked,
+      frameTrace:!!frameTraceToggle?.checked,
+      gpuProbe:!!gpuProbeToggle?.checked
     };
     savePerformanceSettings();
     applyPerformanceSettings({resizeCanvas:true});
@@ -11794,7 +11805,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   function formatRunTime(sec){sec = Math.max(0, Number(sec)||0); const m = Math.floor(sec/60); const s = sec - m*60; return m ? `${m}:${s.toFixed(2).padStart(5,"0")}` : `${s.toFixed(2)}s`;}
   function currentRecordLabel(){const label = activeLevelLabel().replace(/^TEST —\s*/i, "");return friendPlayLevel ? "Friend · " + label : label;}
   function markRunStart(){if(editorTesting) return; currentRunDeaths = 0; const s = ensurePlayStats(); s.totalPlays += 1; savePlayRecords(); renderRecordsPanel();}
-  function startRunCapture(){runFrames = []; lastRunFrameAt = -99; lastReplayWorldAt = -99; replayPruneIdx = 0; deathReplayShown = false; updateRunTimer();}
+  function startRunCapture(){simAcc = 0; simPrevOk = false; frameTraceNewSession(); runFrames = []; lastRunFrameAt = -99; lastReplayWorldAt = -99; replayPruneIdx = 0; deathReplayShown = false; updateRunTimer();}
   function safeReplayClone(value){
     try{return JSON.parse(JSON.stringify(value));}
     catch(err){return null;}
@@ -13860,7 +13871,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
   });
   friendLevelsList?.addEventListener("click", ev => {if(!canInput("menu")) return; const btn = ev.target.closest(".friendMiniBtn"); if(!btn) return; const item = btn.closest(".friendLevelItem"); const id = item?.dataset.id; const entry = friendLevels.find(x => x.id === id); if(!entry) return; const action = btn.dataset.action; if(action === "play") selectFriendLevel(id, true); else if(action === "copy"){const code = encodeFriendLevelCode(entry.level, entry.title, entry.author); copyTextToClipboard(code).catch(()=>{}); prompt("Copy friend level code:", code);} else if(action === "delete"){if(confirm("Delete this friend level from this phone?")){friendLevels = friendLevels.filter(x => x.id !== id); if(friendPlayId === id){friendPlayId=null;friendPlayLevel=null;} if(lastImportedFriendId === id) lastImportedFriendId=null; persistFriendLevels(); renderFriendLevelsPanel(); updateLabels();}}});
   setupLcGameSelects(settingsPanel || document);
-  [perfModeSelect, perfFpsCapSelect, perfRenderDistanceSelect, perfParticlesSelect, perfShakeToggle, perfFxToggle, replayToggle, fpsMeterToggle].forEach(el => el?.addEventListener("change", updatePerformanceSettingFromUI));
+  [perfModeSelect, perfFpsCapSelect, perfRenderDistanceSelect, perfParticlesSelect, perfShakeToggle, perfFxToggle, replayToggle, fpsMeterToggle, frameTraceToggle, gpuProbeToggle].forEach(el => el?.addEventListener("change", updatePerformanceSettingFromUI));
   settingsCloseBtn?.addEventListener("click", () => {MenuScreenController.back("main");});
   touchControlCustomizeBtn?.addEventListener("click", ev => {ev.preventDefault();ev.stopPropagation();openTouchCustomize();});
   touchControlIntro?.addEventListener("pointerdown", ev => {ev.preventDefault();ev.stopPropagation();}, {passive:false});
@@ -17229,10 +17240,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       updateDeathVisualBuiltinTraps(worldDt);
       deathTimer += dt;
       if(deathType === "ink"){
-        if(deathTimer < 1.25 && Math.random() < .72) spawnInkDeathParticles();
+        if(deathTimer < 1.25 && Math.random() < 1 - Math.pow(1 - .72, dt*60)) spawnInkDeathParticles();   // same rate as at 60 updates/s
         if(deathTimer > deathDuration(deathType)) showLose();
       } else {
-        if(deathTimer < .28 && Math.random() < .38) spawnDeathParticles(deathType);
+        if(deathTimer < .28 && Math.random() < 1 - Math.pow(1 - .38, dt*60)) spawnDeathParticles(deathType);
         if(deathTimer > deathDuration(deathType)) showLose();
       }
     }
@@ -21831,7 +21842,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     }
   }
   function drawObstaclesSafe(lvl){
-    for(const o of lizarRenderObstacles(lvl)) drawObstacleSafe(o);
+    const list = lizarRenderObstacles(lvl);
+    if(frameTrace.on){
+      for(const o of list){const t0 = performance.now(); drawObstacleSafe(o); frameTraceType(o.type || "?", performance.now() - t0);}
+      frameTraceMark("traps");
+      return;
+    }
+    for(const o of list) drawObstacleSafe(o);
   }
 
   function deathRenderRect(){
@@ -26775,10 +26792,19 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const shakePower = perfShakeAmount(shake);const shakeX = shakePower ? (Math.random()-.5)*shakePower : 0;const shakeY = shakePower ? (Math.random()-.5)*shakePower : 0;
     drawGrid();
     drawWalls();
+    if(frameTrace.on) frameTraceMark("bg");
     ctx.save();ctx.translate(shakeX, shakeY);
-    drawGoal(lvl);drawStart(lvl);drawChase(lvl);drawChallengeGhost();drawObstaclesSafe(lvl);drawWireGrasperFx();drawVoltGripFx();drawPortalFx();drawSlowTimeWorldOverlay();drawPlayer();drawPortalLipOverlay();drawWireStatusBadge();drawCrusherDeathOverlay();drawVoidseamEscapeOverlay();drawVoidseamReturnFx();drawAshParticles();
+    drawGoal(lvl);drawStart(lvl);drawChase(lvl);drawChallengeGhost();
+    if(frameTrace.on) frameTraceMark("world");
+    drawObstaclesSafe(lvl);
+    drawWireGrasperFx();drawVoltGripFx();drawPortalFx();drawSlowTimeWorldOverlay();
+    if(frameTrace.on) frameTraceMark("fx");
+    drawPlayer();drawPortalLipOverlay();
+    if(frameTrace.on) frameTraceMark("player");
+    drawWireStatusBadge();drawCrusherDeathOverlay();drawVoidseamEscapeOverlay();drawVoidseamReturnFx();drawAshParticles();
     ctx.restore();
     drawChallengeHudOverlay();
+    if(frameTrace.on) frameTraceMark("over");
   }
 
   // PERF_PACING_V1: a cap used to skip frames by wall-clock time, which on 90/120/144 Hz screens shows
@@ -26814,21 +26840,226 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     return pacingSkip !== 0;
   }
 
+  // SIM_FIXED_STEP_V1: the game logic (movement, traps, collisions, camera) advances in fixed steps of
+  // 1/120 s, however fast the screen refreshes; drawing happens once per display frame and shows the
+  // state between the last two steps (interpolated by the leftover time), so motion is even on
+  // 60/90/120/144 Hz screens alike. Logic per second is the same at any frame rate; a frame later
+  // than 33 ms still slows the game down instead of skipping, as before.
+  const SIM_STEP = 1/120;
+  let simAcc = 0, simPrevOk = false;
+  const simPrev = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0}, simCur = {time:0, cameraY:0, px:0, pb:0, ph:0, pw:0};
+  function simCapture(o){o.time = time; o.cameraY = cameraY; o.px = player.x; o.pb = player.baseY; o.ph = player.h; o.pw = player.w;}
+  function drawFrameInterpolated(){
+    const a = simAcc/SIM_STEP;
+    if(!simPrevOk || !(a > .001) || a >= 1){drawBackground(); return;}
+    simCapture(simCur);
+    const P = simPrev, C = simCur;
+    // a restart, teleport or camera snap between the two steps: show the new state as is
+    if(C.time < P.time || C.time - P.time > SIM_STEP*4 || Math.abs(C.cameraY - P.cameraY) > 160 || Math.abs(C.pb - P.pb) > 160 || Math.abs(C.px - P.px) > 160 || Math.abs(C.ph - P.ph) > 160){drawBackground(); return;}
+    time = P.time + (C.time - P.time)*a; cameraY = P.cameraY + (C.cameraY - P.cameraY)*a;
+    player.x = P.px + (C.px - P.px)*a; player.baseY = P.pb + (C.pb - P.pb)*a; player.h = P.ph + (C.ph - P.ph)*a; player.w = P.pw + (C.pw - P.pw)*a;
+    try{drawBackground();}
+    finally{time = C.time; cameraY = C.cameraY; player.x = C.px; player.baseY = C.pb; player.h = C.ph; player.w = C.pw;}
+  }
+
   function loop(now){
     if(shouldThrottleGameFrame(now)){requestAnimationFrame(loop); return;}
+    const cbStart = performance.now();
+    const gapMs = now - last;
     const dt = Math.min(.033, (now - last) / 1000);last = now;
     try{
       if(state === "editor"){time += dt; clampEditorCamera(); updateEditorChips(); drawBackground(); requestAnimationFrame(loop); return;}
       if(state === "replay"){updateDeathReplay(dt);drawBackground();requestAnimationFrame(loop);return;}
       updateGamepadStretchInput();
+      frameTraceBegin();
       const tA = performance.now();
-      update(dt);
+      let steps = 0;
+      simAcc += dt;
+      while(simAcc >= SIM_STEP - 1e-9 && steps < 8){simCapture(simPrev); simPrevOk = true; update(SIM_STEP); simAcc -= SIM_STEP; steps++;}
+      if(simAcc >= SIM_STEP) simAcc = SIM_STEP*.999;          // never carry a backlog into the next frame
+      if(simAcc < 0) simAcc = 0;
       const tB = performance.now();
-      if(!shouldSkipWorldDraw()) drawBackground();
-      if(perfSettings.fpsMeter) fpsMeterFrame(now, tB - tA, performance.now() - tB);
+      if(frameTrace.on) frameTrace.lastMark = tB;
+      if(!shouldSkipWorldDraw()) drawFrameInterpolated();
+      const tC = performance.now();
+      let gpuMs = -1;
+      if(frameTrace.on && perfSettings.gpuProbe){
+        // GPU Probe: reading one pixel back waits until the GPU has finished this frame's drawing,
+        // so this is the real GPU time of the frame (it stops the GPU from overlapping frames)
+        try{ctx.getImageData(0, 0, 1, 1);}catch(_err){}
+        gpuMs = performance.now() - tC;
+      }
+      if(perfSettings.fpsMeter) fpsMeterFrame(now, tB - tA, tC - tB);
+      frameTraceEnd(now, gapMs, cbStart - now, tB - tA, steps, tC - tB, gpuMs, performance.now() - cbStart);
     }catch(err){reportRuntimeError("main loop", err);}
     requestAnimationFrame(loop);
   }
+
+  // FRAME_TRACE_V1 (Settings > Frame Trace): every frame of the current run is recorded and the
+  // last run can be read in full (Settings > LAST RUN FRAME TRACE, with a Copy button).
+  //   gap      time between this frame's start and the previous one (rAF timestamps, vsync-aligned):
+  //            this is what the player sees. A 120 Hz screen should show 8.33 ms gaps.
+  //   logic    fixed-step simulation time this frame (steps of 1/120 s)
+  //   draw     the canvas drawing commands, split into bg / world / traps (per trap type) / fx /
+  //            player / overlays
+  //   outside  gap minus the time our own frame code ran in the previous frame: what the browser,
+  //            compositor, GPU wait and garbage collection took. High outside with low logic+draw
+  //            means the limit is not the game code.
+  //   gpu      (GPU Probe on) time to finish this frame's drawing on the GPU, measured by a 1-pixel
+  //            read-back. It removes CPU/GPU overlap, so fps is lower while it is on.
+  const FT_MAX = 40000;
+  const frameTrace = {on:false, rec:null, last:null, cur:null, lastMark:0};
+  const FT_FIELDS = ["ts","gap","late","logic","steps","draw","gpu","cb","bg","world","traps","fx","player","over"];
+  function frameTraceNewSession(){
+    if(frameTrace.rec && frameTrace.rec.n >= 30) frameTrace.last = frameTrace.rec;
+    frameTrace.rec = null;
+  }
+  function frameTraceAlloc(){
+    const r = {n:0, startedAt:Date.now(), level:(typeof activeLevelLabel === "function" ? activeLevelLabel() : ""), types:new Map(), prevCb:0};
+    for(const f of FT_FIELDS) r[f] = new Float32Array(FT_MAX);
+    return r;
+  }
+  function frameTraceBegin(){
+    frameTrace.on = !!perfSettings.frameTrace && (state === "playing" || state === "dying");
+    if(!frameTrace.on) return;
+    if(!frameTrace.rec) frameTrace.rec = frameTraceAlloc();
+    const r = frameTrace.rec;
+    if(r.n >= FT_MAX){frameTrace.on = false; return;}
+    frameTrace.cur = r.n;
+    for(const f of ["bg","world","traps","fx","player","over"]) r[f][r.n] = 0;
+  }
+  function frameTraceMark(name){
+    const r = frameTrace.rec; if(!r) return;
+    const t = performance.now();
+    r[name][frameTrace.cur] += t - frameTrace.lastMark;
+    frameTrace.lastMark = t;
+  }
+  function frameTraceType(type, ms){
+    const r = frameTrace.rec; if(!r) return;
+    let arr = r.types.get(type);
+    if(!arr){arr = new Float32Array(FT_MAX); r.types.set(type, arr);}
+    arr[frameTrace.cur] += ms;
+  }
+  function frameTraceEnd(ts, gap, late, logic, steps, draw, gpu, cb){
+    if(!frameTrace.on || !frameTrace.rec) return;
+    const r = frameTrace.rec, i = r.n;
+    r.ts[i] = ts; r.gap[i] = i ? gap : 0; r.late[i] = late; r.logic[i] = logic; r.steps[i] = steps; r.draw[i] = draw; r.gpu[i] = gpu; r.cb[i] = cb;
+    r.n++;
+    frameTrace.on = false;
+  }
+  function ftPct(arr, n, q, from=1){
+    const a = Array.from(arr.subarray(from, n)).sort((x, y) => x - y);
+    if(!a.length) return 0;
+    return a[Math.min(a.length - 1, Math.floor(q*(a.length - 1) + .5))];
+  }
+  function frameTraceReport(r){
+    const n = r.n;
+    if(n < 3) return "Not enough frames recorded yet. Turn on Frame Trace, play a level, then open this again.";
+    const refresh = pacingRefreshMs, hz = 1000/refresh;
+    const dur = (r.ts[n - 1] - r.ts[0])/1000;
+    const f1 = (v) => v.toFixed(1), f2 = (v) => v.toFixed(2);
+    const row = (name, arr, from=1) => `${name.padEnd(8)} p50 ${f2(ftPct(arr, n, .5, from))}  p95 ${f2(ftPct(arr, n, .95, from))}  p99 ${f2(ftPct(arr, n, .99, from))}  max ${f2(ftPct(arr, n, 1, from))}`;
+    // A late frame (gap over 1.25x the refresh) is caused by what ran since the previous frame:
+    //   code  our previous frame's own work (logic + drawing) was already near or over the budget
+    //   main  this frame's callback started late: the main thread was busy before it (garbage
+    //         collection, input or other page work)
+    //   gpu   our code finished in time and started on time: the GPU / compositor could not
+    //         present the frame (raster, fill, layers); GPU Probe confirms it
+    let missed = 0, late = 0, cCode = 0, cMain = 0, cGpu = 0;
+    const cause = new Array(n).fill("");
+    for(let i=1;i<n;i++){
+      const g = r.gap[i];
+      missed += Math.max(0, Math.round(g/refresh) - 1);
+      if(g <= refresh*1.25) continue;
+      late++;
+      if(r.cb[i - 1] > refresh*.85){cCode++; cause[i] = "code";}
+      else if(r.late[i] > Math.max(2, refresh*.25)){cMain++; cause[i] = "main";}
+      else {cGpu++; cause[i] = "gpu";}
+    }
+    const head = new Float32Array(n); for(let i=0;i<n;i++) head[i] = refresh - r.cb[i];
+    const lines = [];
+    lines.push(`LIZAR CRUSH frame trace  ${new Date(r.startedAt).toISOString()}`);
+    lines.push(`level: ${r.level}`);
+    lines.push(`device: ${navigator.userAgent}`);
+    lines.push(`screen ${W}x${H} css px, canvas ${canvas.width}x${canvas.height} (x${DPR.toFixed(2)}), refresh ${hz.toFixed(0)} Hz (${f2(refresh)} ms), fps cap ${perfSettings.fpsCap || "auto"}, mode ${perfSettings.mode}, heavy fx ${perfSettings.heavyFx ? "on" : "off"}, gpu probe ${perfSettings.gpuProbe ? "ON (it lowers fps while on)" : "off"}`);
+    lines.push(`frames ${n} in ${f2(dur)} s = ${f1((n - 1)/Math.max(.001, dur))} fps average (target ${hz.toFixed(0)})`);
+    lines.push(`late frames (gap > 1.25x refresh): ${late} of ${n - 1} (${f1(100*late/(n - 1))}%), refreshes missed in total: ${missed}`);
+    lines.push(`late frames caused by: game code ${cCode}, main thread busy before the frame ${cMain}, GPU/compositor ${cGpu}`);
+    lines.push("");
+    lines.push("per frame, ms:");
+    lines.push(row("gap", r.gap));
+    lines.push(row("code", r.cb, 0) + "   (all our frame work)");
+    lines.push(row("logic", r.logic, 0));
+    lines.push(row("draw", r.draw, 0));
+    lines.push(row("late", r.late, 0) + "   (frame start -> our callback)");
+    lines.push(row("headroom", head, 0) + "   (budget minus code; negative = over)");
+    if(ftPct(r.gpu, n, 1, 0) >= 0) lines.push(row("gpu", r.gpu, 0) + "   (GPU Probe)");
+    lines.push(`logic steps per frame p50 ${ftPct(r.steps, n, .5, 0)} max ${ftPct(r.steps, n, 1, 0)}`);
+    lines.push("");
+    lines.push("draw split, ms:");
+    for(const f of ["bg","world","traps","fx","player","over"]) lines.push("  " + row(f, r[f], 0));
+    lines.push("");
+    lines.push("traps by type (ms per frame, all of that type on screen together):");
+    const types = [...r.types.entries()].map(([k, arr]) => {let sum = 0; for(let i=0;i<n;i++) sum += arr[i]; return [k, arr, sum/n];}).sort((a, b) => b[2] - a[2]);
+    for(const [k, arr, mean] of types) lines.push(`  ${k.padEnd(18)} mean ${f2(mean)}  p95 ${f2(ftPct(arr, n, .95, 0))}  p99 ${f2(ftPct(arr, n, .99, 0))}  max ${f2(ftPct(arr, n, 1, 0))}`);
+    lines.push("");
+    lines.push("worst 12 gaps, with the work that ran just before each (previous frame's logic / draw / code, this frame's late start):");
+    const idx = []; for(let i=1;i<n;i++) idx.push(i);
+    idx.sort((a, b) => r.gap[b] - r.gap[a]);
+    for(const i of idx.slice(0, 12)){
+      const j = i - 1;
+      const tops = types.map(([k, arr]) => [k, arr[j]]).filter(t => t[1] > .05).sort((a, b) => b[1] - a[1]).slice(0, 3).map(t => `${t[0]} ${f2(t[1])}`).join(", ");
+      lines.push(`  #${i} at ${f2((r.ts[i] - r.ts[0])/1000)}s gap ${f1(r.gap[i])}: logic ${f2(r.logic[j])} draw ${f2(r.draw[j])} code ${f2(r.cb[j])} late ${f2(r.late[i])}${r.gpu[j] >= 0 ? " gpu " + f2(r.gpu[j]) : ""} [${cause[i] || "ok"}] ${tops}`);
+    }
+    lines.push("");
+    if(late === 0) lines.push(`reading: every frame met the ${f2(refresh)} ms budget.`);
+    else if(cGpu >= cCode && cGpu >= cMain) lines.push("reading: most late frames had our code finished on time: the limit is the GPU/compositor. Turn on GPU Probe and run again to get its time per frame.");
+    else if(cCode >= cMain) lines.push("reading: most late frames come from our own frame work; the trap table shows where.");
+    else lines.push("reading: most late frames started late: the main thread was busy before them (garbage collection or other page work).");
+    return lines.join("\n");
+  }
+  function frameTraceGraph(c, r){
+    const g = c.getContext("2d"), w = c.width, h = c.height, n = r.n;
+    g.fillStyle = "#111"; g.fillRect(0, 0, w, h);
+    const maxMs = 40, y = (ms) => h - Math.min(1, ms/maxMs)*h;
+    const lineAt = (ms, col, label) => {g.strokeStyle = col; g.lineWidth = 1; g.beginPath(); g.moveTo(0, y(ms) + .5); g.lineTo(w, y(ms) + .5); g.stroke(); g.fillStyle = col; g.font = "10px sans-serif"; g.fillText(label, 4, y(ms) - 2);};
+    for(let x=0;x<w;x++){
+      const a = Math.floor(x/w*n), b = Math.max(a + 1, Math.floor((x + 1)/w*n));
+      let mx = 0, md = 0; for(let i=Math.max(1, a);i<b && i<n;i++){mx = Math.max(mx, r.gap[i]); md = Math.max(md, r.cb[i]);}
+      g.fillStyle = mx > pacingRefreshMs*1.5 ? "#ff4d4d" : (mx > pacingRefreshMs*1.25 ? "#ffb02e" : "#3ddc84");
+      g.fillRect(x, y(mx), 1, h - y(mx));
+      g.fillStyle = "rgba(90,160,255,.9)"; g.fillRect(x, y(md), 1, 1.5);
+    }
+    lineAt(1000/144, "#9cf", "144 Hz 6.94");
+    lineAt(1000/120, "#fff", "120 Hz 8.33");
+    lineAt(1000/60, "#f99", "60 Hz 16.7");
+  }
+  function showFrameTraceReport(){
+    const r = (frameTrace.rec && frameTrace.rec.n >= 3) ? frameTrace.rec : frameTrace.last;
+    let panel = document.getElementById("frameTracePanel");
+    if(!panel){
+      panel = document.createElement("div");
+      panel.id = "frameTracePanel";
+      panel.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(10,10,10,.96);color:#eee;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top) + 10px) 10px calc(env(safe-area-inset-bottom) + 10px);gap:8px;font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;";
+      panel.innerHTML = '<div style="display:flex;gap:8px"><button id="ftCopy" style="flex:1;padding:10px;border-radius:10px;border:0;font-weight:800">COPY REPORT</button><button id="ftClose" style="flex:1;padding:10px;border-radius:10px;border:0;font-weight:800">CLOSE</button></div><canvas id="ftGraph" style="width:100%;height:140px;border-radius:8px"></canvas><pre id="ftText" style="flex:1;overflow:auto;margin:0;white-space:pre-wrap;user-select:text;-webkit-user-select:text"></pre>';
+      document.body.appendChild(panel);
+      panel.querySelector("#ftClose").addEventListener("click", () => {panel.style.display = "none";});
+      panel.querySelector("#ftCopy").addEventListener("click", () => {
+        const txt = panel.querySelector("#ftText").textContent;
+        const done = () => {const b = panel.querySelector("#ftCopy"); b.textContent = "COPIED"; setTimeout(() => {b.textContent = "COPY REPORT";}, 1200);};
+        try{navigator.clipboard.writeText(txt).then(done, () => {const sel = getSelection(); const rg = document.createRange(); rg.selectNodeContents(panel.querySelector("#ftText")); sel.removeAllRanges(); sel.addRange(rg);});}
+        catch(_err){}
+      });
+    }
+    panel.style.display = "flex";
+    const text = r ? frameTraceReport(r) : "No run recorded yet. Turn on Frame Trace, play a level, then open this again.";
+    panel.querySelector("#ftText").textContent = text;
+    const c = panel.querySelector("#ftGraph");
+    c.width = Math.max(200, Math.floor(c.clientWidth*(window.devicePixelRatio || 1))); c.height = Math.floor(140*(window.devicePixelRatio || 1));
+    if(r) frameTraceGraph(c, r);
+  }
+  document.getElementById("frameTraceReportBtn")?.addEventListener("click", showFrameTraceReport);
+
   // FPS_METER_V1 (Settings > FPS Meter): what the phone really delivers. fps over the last second,
   // the worst frame gap in the last two seconds, and how long game logic and drawing took (CPU side;
   // the GPU work shows up as a long frame gap with short logic and draw times).
