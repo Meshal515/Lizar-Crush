@@ -20277,8 +20277,24 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const t = o._shockTimer || 0;
     const chargeP = st === "charging" ? clamp01(t/c.chargeTime) : (st === "fakeBeams" || st === "exploding" ? 1 : 0);
     const fakeP = st === "fakeBeams" ? clamp01(t/c.fakeBeamDuration) : 0;
-    const pal = flingerPalette(trapMain());
-    const E = pal.E;
+    // Same family as Electric Link / Laser Beam: the body is the theme colour itself with a soft
+    // glossy light and shade (no heavy outline, no paper grain); its electricity is the blue spark
+    // palette like Electric Link's.
+    const main = trapMain(), mineDark = paperIsDark(main);
+    const E = TRAP_SPARK_PALETTES.electric;
+    const pal = {...flingerPalette(main), E, base:main, shade:paperShade(main, -.28), deep:paperShade(main, -.55), line:paperShade(main, -.6), hi:paperShade(main, .4), tooth:"#f6f3ea", toothShade:"#d8d2c6", throat:"#1a0510"};
+    const mineShape = (path, fill, _pal, _s, opt={}) => {
+      path(); ctx.fillStyle = fill; ctx.fill();
+      if(!opt.noShade){
+        ctx.save(); path(); ctx.clip();
+        const bb = opt.r || 20*s;
+        const g = ctx.createRadialGradient(-bb*.35, -bb*.45, bb*.1, 0, 0, bb*1.2);
+        g.addColorStop(0, `rgba(255,255,255,${mineDark ? .22 : .35})`); g.addColorStop(.6, "rgba(255,255,255,0)"); g.addColorStop(1, `rgba(0,0,0,${mineDark ? .35 : .16})`);
+        ctx.fillStyle = g; ctx.fillRect(-bb*3, -bb*3, bb*6, bb*6);
+        ctx.restore();
+      }
+      if(opt.edge){path(); ctx.strokeStyle = rgbaHex(paperShadeHex(main, -.5), .55); ctx.lineWidth = Math.max(.8, 1*s); ctx.stroke();}
+    };
     const sm = (u) => {u = clamp01(u); return u*u*(3 - 2*u);};
     const fx = editorMode ? null : prismSmokeFor(o);
     if(fx) prismFxBeginFrame(o);
@@ -20350,10 +20366,10 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         const bx0 = Math.cos(a)*bodyR*.92, by0 = Math.sin(a)*bodyR*.92;
         const tipx = bx0 + Math.cos(dirA)*L, tipy = by0 + Math.sin(dirA)*L;
         const nx = -Math.sin(dirA)*bodyR*.11, ny = Math.cos(dirA)*bodyR*.11;
-        flingerShape(() => {ctx.beginPath(); ctx.moveTo(bx0 + nx, by0 + ny); ctx.lineTo(tipx, tipy); ctx.lineTo(bx0 - nx, by0 - ny); ctx.closePath();}, pal.deep, pal, s, {noHi:true, shadeDepth:.6, lw:1.1});
+        mineShape(() => {ctx.beginPath(); ctx.moveTo(bx0 + nx, by0 + ny); ctx.lineTo(tipx, tipy); ctx.lineTo(bx0 - nx, by0 - ny); ctx.closePath();}, pal.deep, pal, s, {noHi:true, shadeDepth:.6, lw:1.1});
       }
       // body
-      flingerShape(() => {ctx.beginPath(); ctx.arc(0, 0, bodyR, 0, Math.PI*2);}, pal.base, pal, s, {shadeDepth:3.4});
+      mineShape(() => {ctx.beginPath(); ctx.arc(0, 0, bodyR, 0, Math.PI*2);}, pal.base, pal, s, {r:bodyR});
       // belly glow through the skin as it charges
       if(inflate > .02){
         const g = ctx.createRadialGradient(0, bodyR*.2, 0, 0, bodyR*.2, bodyR);
@@ -20389,14 +20405,14 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         ctx.strokeStyle = pal.line; ctx.lineWidth = Math.max(1, 1.4*s);
         ctx.beginPath(); ctx.moveTo(-bodyR*.12, bodyR*.42); ctx.lineTo(bodyR*.12, bodyR*.42); ctx.stroke();
       } else {
-        flingerShape(() => {ctx.beginPath(); ctx.ellipse(0, bodyR*.44, bodyR*(.12 + .12*mOpen), bodyR*(.08 + .2*mOpen), 0, 0, Math.PI*2);}, pal.throat, pal, s, {noHi:true, noShade:true, lw:1.3});
+        mineShape(() => {ctx.beginPath(); ctx.ellipse(0, bodyR*.44, bodyR*(.12 + .12*mOpen), bodyR*(.08 + .2*mOpen), 0, 0, Math.PI*2);}, pal.throat, pal, s, {noHi:true, noShade:true, lw:1.3});
       }
       // sweat drops while panicking
       if(awake && !editorMode){
         for(let k=0;k<2;k++){
           const u = (time*1.4 + k*.5) % 1, sx = (k ? 1 : -1)*bodyR*.75, sy = -bodyR*.55 + u*bodyR*.6;
           ctx.globalAlpha = .9*(1 - u)*panic;
-          flingerShape(() => {ctx.beginPath(); ctx.moveTo(sx, sy - 3*s); ctx.quadraticCurveTo(sx + 2.4*s, sy + 1*s, sx, sy + 2.2*s); ctx.quadraticCurveTo(sx - 2.4*s, sy + 1*s, sx, sy - 3*s); ctx.closePath();}, pal.E[0], pal, s, {noHi:true, noShade:true, lw:1});
+          mineShape(() => {ctx.beginPath(); ctx.moveTo(sx, sy - 3*s); ctx.quadraticCurveTo(sx + 2.4*s, sy + 1*s, sx, sy + 2.2*s); ctx.quadraticCurveTo(sx - 2.4*s, sy + 1*s, sx, sy - 3*s); ctx.closePath();}, pal.E[0], pal, s, {noHi:true, noShade:true, lw:1});
           ctx.globalAlpha = 1;
         }
       }
@@ -20453,8 +20469,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
         if(life <= 0) continue;
         const rot = A*(6 + 10*h3)*(h2 > .5 ? 1 : -1), size = (3 + 4*h3)*s;
         ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.globalAlpha = Math.min(1, life*1.5);
-        if(k % 3 === 0) flingerShape(() => {ctx.beginPath(); ctx.moveTo(-size*.3, -size); ctx.lineTo(size*.3, -size); ctx.lineTo(0, size*1.2); ctx.closePath();}, pal.deep, pal, s, {noHi:true, shadeDepth:.6, lw:1});
-        else flingerShape(() => {ctx.beginPath(); ctx.moveTo(-size, -size*.4); ctx.lineTo(size*.6, -size*.7); ctx.lineTo(size, size*.5); ctx.lineTo(-size*.3, size*.7); ctx.closePath();}, pal.base, pal, s, {shadeDepth:1, lw:1});
+        if(k % 3 === 0) mineShape(() => {ctx.beginPath(); ctx.moveTo(-size*.3, -size); ctx.lineTo(size*.3, -size); ctx.lineTo(0, size*1.2); ctx.closePath();}, pal.deep, pal, s, {noHi:true, shadeDepth:.6, lw:1});
+        else mineShape(() => {ctx.beginPath(); ctx.moveTo(-size, -size*.4); ctx.lineTo(size*.6, -size*.7); ctx.lineTo(size, size*.5); ctx.lineTo(-size*.3, size*.7); ctx.closePath();}, pal.base, pal, s, {shadeDepth:1, lw:1});
         ctx.restore();
       }
       ctx.globalAlpha = 1;
