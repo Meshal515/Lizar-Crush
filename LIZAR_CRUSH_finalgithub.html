@@ -4845,9 +4845,6 @@
   }catch(_err){}
 
   let W = 0, H = 0, DPR = 1;
-  // dynamic resolution state (see DYN_RES_V1 by the main loop); declared early because resize() reads it
-  let dynRes = 1, dynResLastChange = 0, dynResUpWait = 5000, dynResLastUp = -1e9;
-  const dynResWin = [];
 
   let trapPreviewWorldToScreenOverride = null;
   const WORLD_W = 390;
@@ -4968,7 +4965,7 @@
   const PERF_SETTINGS_KEY = "lizar_crush_perf_settings_v1";
   const PERF_PRESETS = {
     // V2.38: Presets affect visual workload only. FPS is controlled exclusively by FPS Cap.
-    quality:{label:"Quality", dprCap:2, particleScale:1, maxParticles:220, drawEvery:1, shakeScale:1, fxScale:1, frameSkip:1, previewFps:120},
+    quality:{label:"Quality", dprCap:8, particleScale:1, maxParticles:220, drawEvery:1, shakeScale:1, fxScale:1, frameSkip:1, previewFps:120},
     balanced:{label:"Balanced", dprCap:1.5, particleScale:.48, maxParticles:90, drawEvery:1, shakeScale:.55, fxScale:.66, frameSkip:1, previewFps:30},
     battery:{label:"Battery Saver", dprCap:1, particleScale:.18, maxParticles:32, drawEvery:2, shakeScale:0, fxScale:.28, frameSkip:2, previewFps:12}
   };
@@ -5950,7 +5947,7 @@
   }
 
   function resize(){
-    DPR = Math.max(1, dynResBaseDPR()*dynRes);
+    DPR = Math.max(1, Math.min(perfProfile().dprCap || 1.5, window.devicePixelRatio || 1));
     const vp = stableViewportSize();
     W = vp.w;
     H = vp.h;
@@ -26817,36 +26814,8 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     return pacingSkip !== 0;
   }
 
-  // DYN_RES_V1: when the phone keeps missing frames while playing, the canvas renders at a slightly
-  // lower resolution (steps of 15%, never under 60% of the setting nor under 1 pixel per point), and
-  // climbs back once frames are steady again. Every trap and effect is still drawn in full; only the
-  // pixel count changes, which is what the GPU pays for. A step back up that brings misses back
-  // waits longer before the next try, so it settles instead of flickering between two sizes.
-  function dynResBaseDPR(){return Math.max(1, Math.min(perfProfile().dprCap || 1.5, window.devicePixelRatio || 1));}
-  function dynResFrame(now, gap){
-    if(document.hidden || (state !== "playing" && state !== "dying")){dynResWin.length = 0; return;}
-    const cap = perfGameFpsCap();
-    const expected = Number.isFinite(cap) && cap > 0 ? Math.max(pacingRefreshMs, 1000/cap) : pacingRefreshMs;
-    dynResWin.push(gap > expected*1.5 ? 1 : 0);
-    if(dynResWin.length > 90) dynResWin.shift();
-    if(dynResWin.length < 60 || now - dynResLastChange < 1500) return;
-    let miss = 0; for(const v of dynResWin) miss += v;
-    const ratio = miss/dynResWin.length;
-    const base = dynResBaseDPR();
-    const minRes = Math.min(1, Math.max(1, base*.6)/base);
-    let next = dynRes;
-    if(ratio > .15 && dynRes > minRes + .001){
-      next = Math.max(minRes, dynRes - .15);
-      if(now - dynResLastUp < 4000) dynResUpWait = Math.min(40000, dynResUpWait*2);   // that climb was too early
-    } else if(ratio < .02 && dynRes < 1 && now - dynResLastChange > dynResUpWait){
-      next = Math.min(1, dynRes + .1); dynResLastUp = now;
-    }
-    if(next !== dynRes){dynRes = next; dynResLastChange = now; dynResWin.length = 0; resize();}
-  }
-
   function loop(now){
     if(shouldThrottleGameFrame(now)){requestAnimationFrame(loop); return;}
-    const frameGap = now - last;
     const dt = Math.min(.033, (now - last) / 1000);last = now;
     try{
       if(state === "editor"){time += dt; clampEditorCamera(); updateEditorChips(); drawBackground(); requestAnimationFrame(loop); return;}
@@ -26857,7 +26826,6 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const tB = performance.now();
       if(!shouldSkipWorldDraw()) drawBackground();
       if(perfSettings.fpsMeter) fpsMeterFrame(now, tB - tA, performance.now() - tB);
-      dynResFrame(now, frameGap);
     }catch(err){reportRuntimeError("main loop", err);}
     requestAnimationFrame(loop);
   }
