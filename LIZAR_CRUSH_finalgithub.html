@@ -14578,7 +14578,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     const gap = Math.max(0, hh);
     // a full mouth: the lips themselves swell (wider and thicker) while it holds you inside
     // throat: dark, with nested paper rings sinking away
-    if(gap > .4){
+    if(gap > .4 && opts.only !== "upper"){
       ctx.save(); gulperHolePath(cx, cy, hw, gap); ctx.clip();
       ctx.fillStyle = "#0e0b10"; ctx.fillRect(cx - hw - 2, cy - gap - 2, hw*2 + 4, gap*2 + 4);
       for(let i=1;i<=4;i++){
@@ -14639,6 +14639,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       for(let k=N;k>=0;k--){const q = gulperSE(cx, cy, hw, gap, k/N*Math.PI); ctx.lineTo(q[0], q[1]);}
       ctx.closePath();
     };
+    if(opts.only === "upper"){flingerShape(upper, pal.base, pal, s, {shadeDepth:2.4}); return;}
     flingerShape(lower, pal.base, pal, s, {shadeDepth:3});
     flingerShape(upper, pal.base, pal, s, {shadeDepth:2.4});
     // a soft dimple at each corner, inside the lips' reach
@@ -14730,7 +14731,9 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       }
       ctx.globalAlpha = 1;
     }
-    drawGulperLips(mp.x, mp.y, hw, hh, lip, s, {pout, puff, smack, lick, lickU, spin:-time*(1.2 + 2.5*suck)});
+    const lipOpts = {pout, puff, smack, lick, lickU, spin:-time*(1.2 + 2.5*suck)};
+    drawGulperLips(mp.x, mp.y, hw, hh, lip, s, lipOpts);
+    if(fx) fx.lips = swallowing && phase === "suck" ? {x:mp.x, y:mp.y, hw, hh, lip, s, opts:lipOpts} : null;
     // sulking: little puffs of air from the corner
     if(passK > .3){
       const u = (time*.6) % 1;
@@ -14741,6 +14744,13 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
       const mr2 = portalMonsterMouthRect(o);const mp2=worldToScreen(mr2.x,mr2.y);ctx.setLineDash([5*s,5*s]);ctx.strokeStyle=rgbaHex(accent,.70);ctx.lineWidth=Math.max(1,1.2*s);roundRect(ctx,mp2.x,mp2.y,mr2.w*s,mr2.h*s,12*s);ctx.stroke();ctx.setLineDash([]);
     }
     ctx.restore();
+  }
+  // While it sucks you in, its upper lip closes OVER you (the player is drawn after the traps).
+  function drawPortalLipOverlay(){
+    if(!portalEffect.active || portalEffect.phase !== "suck" || !portalEffect.trap) return;
+    const L = prismSmokeFor(portalEffect.trap).lips;
+    if(!L) return;
+    ctx.save(); drawGulperLips(L.x, L.y, L.hw, L.hh, L.lip, L.s, {...L.opts, only:"upper"}); ctx.restore();
   }
   function drawPortalExit(o){
     if(state !== "editor") return;
@@ -26142,7 +26152,7 @@ Import required mod${newMods.length===1?"":"s"} and save this level?`);
     drawGrid();
     drawWalls();
     ctx.save();ctx.translate(shakeX, shakeY);
-    drawGoal(lvl);drawStart(lvl);drawChase(lvl);drawChallengeGhost();drawObstaclesSafe(lvl);drawWireGrasperFx();drawVoltGripFx();drawPortalFx();drawSlowTimeWorldOverlay();drawPlayer();drawWireStatusBadge();drawCrusherDeathOverlay();drawVoidseamEscapeOverlay();drawVoidseamReturnFx();drawAshParticles();
+    drawGoal(lvl);drawStart(lvl);drawChase(lvl);drawChallengeGhost();drawObstaclesSafe(lvl);drawWireGrasperFx();drawVoltGripFx();drawPortalFx();drawSlowTimeWorldOverlay();drawPlayer();drawPortalLipOverlay();drawWireStatusBadge();drawCrusherDeathOverlay();drawVoidseamEscapeOverlay();drawVoidseamReturnFx();drawAshParticles();
     ctx.restore();
     drawChallengeHudOverlay();
   }
